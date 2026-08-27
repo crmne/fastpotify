@@ -33,6 +33,9 @@ pub struct Settings {
     /// 96, 160, or 320 kbps.
     pub bitrate: u16,
     pub normalisation: bool,
+    /// Extra gain on top of ReplayGain normalisation, in dB. librespot's
+    /// default is 0; Spotify's desktop client applies +11 dB by default.
+    pub normalisation_pregain_db: f64,
     pub autoplay: bool,
     pub gapless: bool,
     /// librespot backend name; `None` picks the platform default.
@@ -64,6 +67,7 @@ impl Default for Settings {
             device_name: "Fastpotify".to_string(),
             bitrate: 320,
             normalisation: false,
+            normalisation_pregain_db: 0.0,
             autoplay: true,
             gapless: true,
             audio_backend: None,
@@ -139,6 +143,12 @@ impl Settings {
 #[serde(default)]
 pub struct SessionState {
     pub last_page: Option<String>,
+    /// Last window inner size, so the app reopens the way it was closed.
+    pub window_size: Option<[f32; 2]>,
+    /// Last window outer position, where supported.
+    pub window_pos: Option<[f32; 2]>,
+    /// Whether the queue side panel was open.
+    pub show_queue_panel: bool,
 }
 
 impl SessionState {

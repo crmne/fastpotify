@@ -211,6 +211,21 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 });
             },
         );
+        if let Some(quality) = app
+            .now_playing()
+            .as_ref()
+            .and_then(|now| now.quality.clone())
+        {
+            widgets::setting_row(
+                ui,
+                &palette,
+                "Now playing",
+                "The stream this track is actually getting.",
+                |ui| {
+                    theme::text(ui, quality, theme::medium(13.5), palette.text);
+                },
+            );
+        }
         widgets::setting_row(
             ui,
             &palette,
@@ -221,6 +236,30 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     changed = true;
                     playback_dirty = true;
                 }
+            },
+        );
+        widgets::setting_row(
+            ui,
+            &palette,
+            "Normalisation gain",
+            "Extra loudness on top of normalisation. 0 dB is neutral, +11 dB matches the Spotify desktop app.",
+            |ui| {
+                let mut pregain = app.settings.normalisation_pregain_db as f32;
+                let response = ui.add(
+                    egui::Slider::new(&mut pregain, -12.0..=12.0)
+                        .step_by(0.5)
+                        .suffix(" dB")
+                        .custom_formatter(|value, _| format!("{value:+.1}")),
+                );
+                let rounded = (pregain as f64 * 2.0).round() / 2.0;
+                if response.changed() && (app.settings.normalisation_pregain_db - rounded).abs() > 1e-6
+                {
+                    app.settings.normalisation_pregain_db = rounded;
+                    changed = true;
+                    playback_dirty = true;
+                }
+                ui.add_space(12.0);
+                theme::subtle(ui, &palette, "Applies when normalisation is on.");
             },
         );
         widgets::setting_row(

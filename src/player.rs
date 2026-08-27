@@ -22,7 +22,7 @@ use librespot_core::{
     config::{DeviceType, SessionConfig},
     session::Session,
 };
-use librespot_metadata::audio::{AudioItem, UniqueFields};
+use librespot_metadata::audio::{AudioFileFormat, AudioItem, UniqueFields};
 use librespot_playback::{
     audio_backend,
     config::{AudioFormat, Bitrate, NormalisationType, PlayerConfig},
@@ -36,6 +36,7 @@ pub struct EngineConfig {
     pub device_name: String,
     pub bitrate_kbps: u16,
     pub normalisation: bool,
+    pub normalisation_pregain_db: f64,
     pub autoplay: bool,
     pub gapless: bool,
     pub backend: Option<String>,
@@ -135,6 +136,10 @@ pub struct LocalTrack {
     pub art_small_url: Option<String>,
     pub duration_ms: u32,
     pub is_episode: bool,
+    /// The Ogg Vorbis / MP3 file the player actually streams for this item,
+    /// which can fall below the configured bitrate (podcasts, unavailable
+    /// higher formats). `None` for local files.
+    pub stream_format: Option<AudioFileFormat>,
 }
 
 impl LocalTrack {
@@ -239,6 +244,7 @@ impl Engine {
             bitrate: config.bitrate(),
             gapless: config.gapless,
             normalisation: config.normalisation,
+            normalisation_pregain_db: config.normalisation_pregain_db,
             normalisation_type: NormalisationType::Auto,
             position_update_interval: Some(Duration::from_secs(1)),
             ..PlayerConfig::default()
@@ -483,8 +489,7 @@ fn apply_event(state: &mut LocalState, event: PlayerEvent) -> bool {
             let mut changed = set(&mut state.track, Some(local_track(&audio_item)));
             changed |= set(&mut state.error, None);
             changed
-        }
-        PlayerEvent::Unavailable { track_id, .. } => set(
+        }        PlayerEvent::Unavailable { track_id, .. } => set(
             &mut state.error,
             Some(format!(
                 "This item isn't available: {}",
@@ -550,6 +555,18 @@ fn local_track(item: &AudioItem) -> LocalTrack {
         .find(|cover| cover.width >= 64)
         .or(covers.last())
         .map(|cover| cover.url.clone());
+    // The first file librespot's own format list would pick for the
+    // configured bitrate: the best Ogg Vorbis / MP3 this item offers.
+    // The 2026 client asks Spotify for these formats; episodes stream at
+    // 96 kbps, so this shows the real quality, not the configured one.
+    let stream_format = if matches!(item.unique_fields, UniqueFields::Local { .. }) {
+        None
+    } else {
+        item.files
+            .keys()
+            .max_by_key(|format| stream_quality_rank(**format))
+            .copied()
+    };
     LocalTrack {
         uri: item.uri.clone(),
         title: item.name.clone(),
@@ -559,7 +576,55 @@ fn local_track(item: &AudioItem) -> LocalTrack {
         art_small_url,
         duration_ms: item.duration_ms,
         is_episode,
+        stream_format,
     }
+}
+
+/// Orders [`AudioFileFormat`]s by streaming quality so the best available
+/// one for the current bitrate can be shown. Mirrors the preference list in
+/// librespot's player.
+fn stream_quality_rank(format: AudioFileFormat) -> u8 {
+    use AudioFileFormat::*;
+    match format {
+        FLAC_FLAC | FLAC_FLAC_24BIT => 60,
+        OGG_VORBIS_320 | MP3_320 => 50,
+        MP3_256 => 45,
+        OGG_VORBIS_160 | MP3_160 | AAC_160 => 40,
+        MP3_160_ENC => 35,
+        MP4_128 | AAC_320 => 30,
+        OGG_VORBIS_96 | MP3_96 => 20,
+        AAC_48 => 15,
+        AAC_24 => 10,
+        XHE_AAC_24 | XHE_AAC_16 | XHE_AAC_12 => 5,
+        OTHER5 => 1,
+    }
+}
+
+/// Human-readable quality for a streaming format, e.g. "320 kbps OGG".
+pub fn format_quality_label(format: AudioFileFormat) -> String {
+    use AudioFileFormat::*;
+    let (codec, kbps) = match format {
+        OGG_VORBIS_320 => ("OGG", 320),
+        OGG_VORBIS_160 => ("OGG", 160),
+        OGG_VORBIS_96 => ("OGG", 96),
+        MP3_320 => ("MP3", 320),
+        MP3_256 => ("MP3", 256),
+        MP3_160 => ("MP3", 160),
+        MP3_96 => ("MP3", 96),
+        MP3_160_ENC => ("MP3", 160),
+        AAC_320 => ("AAC", 320),
+        AAC_160 => ("AAC", 160),
+        AAC_48 => ("AAC", 48),
+        AAC_24 => ("AAC", 24),
+        XHE_AAC_24 => ("xHE-AAC", 24),
+        XHE_AAC_16 => ("xHE-AAC", 16),
+        XHE_AAC_12 => ("xHE-AAC", 12),
+        MP4_128 => ("M4A", 128),
+        FLAC_FLAC => ("FLAC", 900),
+        FLAC_FLAC_24BIT => ("FLAC 24-bit", 900),
+        OTHER5 => ("Other", 0),
+    };
+    format!("{kbps} kbps {codec}")
 }
 
 #[cfg(test)]
@@ -615,6 +680,7 @@ mod tests {
             device_name: "Fastpotify".into(),
             bitrate_kbps: 320,
             normalisation: false,
+            normalisation_pregain_db: 0.0,
             autoplay: true,
             gapless: true,
             backend: None,
