@@ -12,7 +12,7 @@ use super::widgets::{SliderEvent, thin_slider};
 
 pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
-    let tint = app.now_playing_tint();
+    let tint = app.eased_tint(ui.ctx(), app.now_playing_tint());
     let fill = match tint {
         Some(tint) => super::blend(palette.panel, tint, 0.12),
         None => palette.panel,
@@ -129,21 +129,35 @@ fn now_playing_block(app: &mut App, ui: &mut egui::Ui, region: Rect, now: Option
     );
     text_ui.set_clip_rect(text_rect.intersect(ui.clip_rect()));
     text_ui.spacing_mut().item_spacing.y = 2.0;
-    if theme::link(&mut text_ui, &now.title, theme::medium(14.0), palette.text).clicked() {
-        if let Some(id) = &now.album_id {
-            app.actions.push(Action::Open(Page::Album(id.clone())));
-        } else if let Some(id) = &now.show_id {
-            app.actions.push(Action::Open(Page::Show(id.clone())));
+    text_ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 6.0;
+        ui.set_max_width(text_width);
+        if theme::link(&mut *ui, &now.title, theme::medium(14.0), palette.text).clicked() {
+            if let Some(id) = &now.album_id {
+                app.actions.push(Action::Open(Page::Album(id.clone())));
+            } else if let Some(id) = &now.show_id {
+                app.actions.push(Action::Open(Page::Show(id.clone())));
+            }
         }
-    }
-    if theme::link(
+        if let Some(quality) = &now.quality {
+            theme::text(
+                ui,
+                quality,
+                theme::regular(10.0),
+                palette.accent,
+            );
+        }
+    });
+    let subtitle_response = theme::link(
         &mut text_ui,
         &now.subtitle,
         theme::regular(12.0),
         palette.secondary,
-    )
-    .clicked()
-    {
+    );
+    if let Some(quality) = &now.quality {
+        subtitle_response.clone().on_hover_text(format!("Streaming at {quality}"));
+    }
+    if subtitle_response.clicked() {
         if let Some(id) = now.artists.first().and_then(|artist| artist.id.clone()) {
             app.actions.push(Action::Open(Page::Artist(id)));
         } else if let Some(id) = &now.show_id {
@@ -479,4 +493,70 @@ fn extras(app: &mut App, ui: &mut egui::Ui, now: Option<&NowPlaying>) {
     {
         app.actions.push(Action::ToggleQueuePanel);
     }
+    if theme::icon_button(
+        ui,
+        Icon::Minimize2,
+        18.0,
+        palette.secondary,
+        palette.text,
+        "Mini-player (Ctrl+M)",
+    )
+    .clicked()
+    {
+        app.actions.push(Action::ToggleMiniPlayer);
+    }
+    sleep_timer_button(app, ui, now);
+}
+
+fn sleep_timer_button(app: &mut App, ui: &mut egui::Ui, now: Option<&NowPlaying>) {
+    let palette = app.palette;
+    let active = app.sleep_timer_end.is_some();
+    let tooltip = match app.sleep_timer_left() {
+        Some(left) => format!(
+            "Sleep timer: {} remaining — click to change",
+            util::format_duration_ms((left.as_secs() * 1000) as u32)
+        ),
+        None => "Sleep timer — pause playback after a while".into(),
+    };
+    let button = theme::icon_button(
+        ui,
+        Icon::Moon,
+        18.0,
+        if active {
+            palette.accent
+        } else {
+            palette.secondary
+        },
+        palette.text,
+        &tooltip,
+    );
+    egui::Popup::menu(&button)
+        .frame(super::widgets::menu_frame(&palette))
+        .show(|ui| {
+            ui.set_min_width(200.0);
+            ui.add_space(4.0);
+            theme::text(ui, "Sleep timer", theme::semibold(14.0), palette.text);
+            ui.add_space(2.0);
+            for minutes in [15u64, 30, 60, 90] {
+                let label = match minutes {
+                    60 => "1 hour".to_string(),
+                    _ => format!("{minutes} minutes"),
+                };
+                if super::widgets::menu_item(ui, &palette, None, &label) {
+                    app.set_sleep_timer(minutes);
+                    app.toast(format!("Sleep timer: {label}."));
+                }
+            }
+            super::widgets::menu_separator(ui, &palette);
+            if super::widgets::menu_item_enabled(
+                ui,
+                &palette,
+                Some(Icon::X),
+                "Cancel sleep timer",
+                active,
+            ) {
+                app.cancel_sleep_timer();
+            }
+        });
+    let _ = now;
 }

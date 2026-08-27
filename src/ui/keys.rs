@@ -17,6 +17,7 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
         key(Modifiers::COMMAND, Key::F, Action::FocusSearch);
         key(Modifiers::COMMAND, Key::Comma, Action::Open(Page::Settings));
         key(Modifiers::COMMAND, Key::Q, Action::Quit);
+        key(Modifiers::COMMAND, Key::M, Action::ToggleMiniPlayer);
         key(Modifiers::COMMAND, Key::H, Action::Open(Page::Home));
         key(Modifiers::COMMAND, Key::L, Action::Open(Page::LikedSongs));
         key(
@@ -80,7 +81,9 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
         }
     }
     if ctx.input(|input| input.key_pressed(Key::Escape)) {
-        if app.dialog.is_some() {
+        if app.mini_player {
+            app.actions.push(Action::ToggleMiniPlayer);
+        } else if app.dialog.is_some() {
             app.actions.push(Action::CloseDialog);
         } else if app.show_devices {
             app.show_devices = false;
@@ -101,6 +104,7 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("Alt+←  /  Alt+→", "Back or forward"),
     ("Ctrl+H", "Home"),
     ("Ctrl+L", "Liked Songs"),
+    ("Ctrl+M", "Mini-player"),
     ("Ctrl+Shift+A", "Go to the playing artist"),
     ("Ctrl+Shift+B", "Go to the playing album"),
     ("Ctrl+,", "Settings"),

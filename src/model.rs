@@ -491,6 +491,7 @@ pub enum Action {
     SignOut,
     ToggleQueuePanel,
     ToggleDevicesPopup,
+    ToggleMiniPlayer,
     SettingsChanged,
     RestartEngine,
     EnablePlayback,
