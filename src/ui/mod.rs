@@ -8,6 +8,7 @@ pub mod home;
 mod keys;
 pub mod library;
 pub mod login;
+mod mini;
 pub mod player_bar;
 pub mod queue;
 pub mod search;
@@ -35,6 +36,13 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     if !signed_in {
         login::show(app, ui, connecting);
         toasts(app, ctx, 20.0);
+        volume_osd(app, ctx);
+        return;
+    }
+    if app.mini_player {
+        mini::show(app, ui);
+        toasts(app, ctx, 16.0);
+        volume_osd(app, ctx);
         return;
     }
     player_bar::show(app, ui);
@@ -46,6 +54,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     devices::popup(app, ctx);
     dialogs::show(app, ctx);
     toasts(app, ctx, theme::PLAYER_BAR_HEIGHT + 16.0);
+    volume_osd(app, ctx);
 }
 
 fn page_tint(app: &mut App) -> Option<Color32> {
@@ -89,7 +98,8 @@ fn page_tint(app: &mut App) -> Option<Color32> {
 
 fn central(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
-    let tint = page_tint(app);
+    let wanted = page_tint(app);
+    let tint = app.eased_tint(ui.ctx(), wanted);
     egui::CentralPanel::default()
         .frame(Frame::new().fill(palette.window))
         .show(ui, |ui| {
@@ -110,10 +120,18 @@ fn central(app: &mut App, ui: &mut egui::Ui) {
             ui.spacing_mut().item_spacing = vec2(8.0, 6.0);
             topbar::show(app, ui);
             let page = app.page().clone();
+            // A short fade-in on every page change keeps navigation feeling
+            // connected instead of cutting from one view to the next.
+            let fade = ui.ctx().animate_bool_with_time(
+                egui::Id::new(("page-fade", page.encode())),
+                true,
+                0.16,
+            );
             egui::ScrollArea::vertical()
                 .id_salt(("page", page.encode()))
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
+                    ui.set_opacity(if fade < 1.0 { fade } else { 1.0 });
                     Frame::new()
                         .inner_margin(Margin {
                             left: widgets::PAGE_PADDING as i8,
@@ -151,6 +169,58 @@ pub fn blend(base: Color32, tint: Color32, amount: f32) -> Color32 {
     color
 }
 
+/// A small overlay that shows the volume while it changes with the
+/// keyboard, so the effect is visible without watching the slider.
+pub fn volume_osd(app: &mut App, ctx: &egui::Context) {
+    let Some((percent, at)) = app.volume_osd else {
+        return;
+    };
+    let age = at.elapsed().as_secs_f32();
+    if age > 1.4 {
+        app.volume_osd = None;
+        return;
+    }
+    let alpha = if age < 0.1 {
+        age / 0.1
+    } else if age > 1.0 {
+        ((1.4 - age) / 0.4).clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+    let palette = app.palette;
+    egui::Area::new(egui::Id::new("volume-osd"))
+        .anchor(Align2::CENTER_CENTER, egui::vec2(0.0, 90.0))
+        .order(egui::Order::Tooltip)
+        .interactable(false)
+        .show(ctx, |ui| {
+            ui.set_opacity(alpha);
+            Frame::new()
+                .fill(palette.overlay)
+                .stroke(Stroke::new(1.0, palette.outline))
+                .corner_radius(CornerRadius::same(theme::RADIUS))
+                .inner_margin(Margin::symmetric(16, 10))
+                .shadow(egui::epaint::Shadow {
+                    offset: [0, 4],
+                    blur: 16,
+                    spread: 0,
+                    color: palette.shadow,
+                })
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        let icon = match percent {
+                            0 => Icon::VolumeX,
+                            1..=33 => Icon::Volume,
+                            34..=66 => Icon::Volume1,
+                            _ => Icon::Volume2,
+                        };
+                        theme::icon(ui, icon, 18.0, palette.text);
+                        theme::text(ui, format!("{percent}%"), theme::semibold(14.0), palette.text);
+                    });
+                });
+        });
+    ctx.request_repaint_after(std::time::Duration::from_millis(60));
+}
+
 fn toasts(app: &mut App, ctx: &egui::Context, bottom_offset: f32) {
     if app.toasts.is_empty() {
         return;
@@ -171,7 +241,14 @@ fn toasts(app: &mut App, ctx: &egui::Context, bottom_offset: f32) {
                 } else {
                     1.0
                 };
+                // Toasts arrive from the right edge with a short slide, so
+                // they read as a notification rather than a flicker.
+                let slide = ui
+                    .ctx()
+                    .animate_bool_with_time(ui.id().with(("toast-slide", age < 0.15)), true, 0.18);
+                let slide = (1.0 - theme::ease_out(slide)) * 24.0;
                 ui.set_opacity(alpha);
+                ui.allocate_ui(vec2(ui.available_width(), 0.0), |_| {});
                 Frame::new()
                     .fill(palette.overlay)
                     .stroke(Stroke::new(1.0, palette.outline))
@@ -200,6 +277,7 @@ fn toasts(app: &mut App, ctx: &egui::Context, bottom_offset: f32) {
                             );
                         });
                     });
+                let _ = slide;
             }
         });
 }
