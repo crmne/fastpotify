@@ -67,6 +67,8 @@ pub struct NowPlaying {
     pub volume_percent: u8,
     pub can_control: bool,
     pub is_episode: bool,
+    /// Streaming quality of the local player, e.g. "320 kbps OGG".
+    pub quality: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -158,6 +160,9 @@ pub struct App {
     pub dialog: Option<Dialog>,
     pub show_queue_panel: bool,
     pub show_devices: bool,
+    /// A single-line now-playing strip instead of the full interface,
+    /// opened and closed with a shortcut or a button in the player bar.
+    pub mini_player: bool,
     pub toasts: Vec<Toast>,
     pub actions: Vec<Action>,
     volume_before_mute: Option<u8>,
@@ -175,6 +180,22 @@ pub struct App {
     remote_recheck_at: Option<Instant>,
     pub seek_preview: Option<f32>,
     pub volume_preview: Option<f32>,
+    /// When playback should pause automatically, or `None` without a timer.
+    pub sleep_timer_end: Option<Instant>,
+    /// A volume change just happened through the keyboard; show an overlay
+    /// with the new level until `Instant` passes.
+    pub volume_osd: Option<(u8, Instant)>,
+    /// Restored window geometry to apply on the next attach, taken from the
+    /// session file.
+    session_window_size: Option<[f32; 2]>,
+    session_window_pos: Option<[f32; 2]>,
+    /// The album-art tint currently on screen, eased toward the latest
+    /// requested colour so changing tracks or pages crossfades instead of
+    /// snapping.
+    pub tint_current: Option<Color32>,
+    /// Last observed window geometry, saved to the session on close.
+    last_window_size: Option<[f32; 2]>,
+    last_window_pos: Option<[f32; 2]>,
     last_eviction: Instant,
     pub sign_in_url: Option<String>,
     pending_remote_position: Option<(u32, Instant)>,
@@ -211,6 +232,9 @@ impl App {
             .and_then(Page::decode)
             .filter(|page| !matches!(page, Page::Settings | Page::Queue))
             .unwrap_or(Page::Home);
+        let session_window_size = session.window_size;
+        let session_window_pos = session.window_pos;
+        let session_queue_panel = session.show_queue_panel;
 
         let mut app = Self {
             dirs,
@@ -260,8 +284,9 @@ impl App {
             accents: HashMap::new(),
             accent_pending: HashSet::new(),
             dialog: None,
-            show_queue_panel: false,
+            show_queue_panel: session_queue_panel,
             show_devices: false,
+            mini_player: false,
             toasts: Vec::new(),
             actions: Vec::new(),
             volume_before_mute: None,
@@ -272,6 +297,13 @@ impl App {
             remote_recheck_at: None,
             seek_preview: None,
             volume_preview: None,
+            sleep_timer_end: None,
+            volume_osd: None,
+            session_window_size: None,
+            session_window_pos: None,
+            tint_current: None,
+            last_window_size: None,
+            last_window_pos: None,
             last_eviction: Instant::now(),
             sign_in_url: None,
             pending_remote_position: None,
@@ -282,6 +314,8 @@ impl App {
             quit_requested: false,
         };
         app.local.volume = app.settings.volume;
+        app.session_window_size = session_window_size;
+        app.session_window_pos = session_window_pos;
         app
     }
 
@@ -304,6 +338,12 @@ impl App {
         self.window_hidden = false;
         self.hide_intent = false;
         self.wants_show = false;
+        if let Some(size) = self.session_window_size.take() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(size[0], size[1])));
+        }
+        if let Some(pos) = self.session_window_pos.take() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(pos[0], pos[1])));
+        }
     }
 
     // ---- derived state -----------------------------------------------------
@@ -408,6 +448,9 @@ impl App {
                 volume_percent: volume_to_percent(self.local.volume),
                 can_control: true,
                 is_episode: track.is_episode,
+                quality: track
+                    .stream_format
+                    .map(crate::player::format_quality_label),
             });
         }
         let remote = self.remote_fresh()?;
@@ -481,6 +524,7 @@ impl App {
             volume_percent: volume,
             can_control: device.is_none_or(|device| !device.is_restricted),
             is_episode,
+            quality: None,
         })
     }
 
@@ -534,6 +578,87 @@ impl App {
             });
         }
         None
+    }
+
+    /// Arms the sleep timer for `minutes` from now. A paused track stays
+    /// paused; the timer pauses whatever is playing when it expires.
+    pub fn set_sleep_timer(&mut self, minutes: u64) {
+        self.sleep_timer_end = Some(Instant::now() + Duration::from_secs(minutes * 60));
+    }
+
+    pub fn cancel_sleep_timer(&mut self) {
+        self.sleep_timer_end = None;
+    }
+
+    /// Toggles the compact single-line player. When it opens, the window is
+    /// resized to just fit it; leaving restores the previous size.
+    pub fn toggle_mini_player(&mut self, ctx: &egui::Context) {
+        self.mini_player = !self.mini_player;
+        let size = if self.mini_player {
+            egui::vec2(520.0, 96.0)
+        } else {
+            egui::vec2(1240.0, 800.0)
+        };
+        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
+    }
+
+    /// Remaining sleep-timer time, or `None` when no timer is armed.
+    pub fn sleep_timer_left(&self) -> Option<Duration> {
+        self.sleep_timer_end
+            .map(|end| end.saturating_duration_since(Instant::now()))
+    }
+
+    /// Pauses playback when the sleep timer expires. Called once per frame.
+    pub fn tick_sleep_timer(&mut self) {
+        if self.sleep_timer_end.is_none() {
+            return;
+        }
+        let expired = self
+            .sleep_timer_end
+            .is_some_and(|end| Instant::now() >= end);
+        if !expired {
+            return;
+        }
+        self.sleep_timer_end = None;
+        let was_playing = self.now_playing().is_some_and(|now| now.playing);
+        if was_playing {
+            self.actions.push(Action::TogglePlay);
+        }
+        self.toast("Sleep timer: playback paused.");
+    }
+
+    /// Eases `tint_current` toward the tint the interface wants this frame.
+    /// Returns what should be drawn, crossfading over a few frames so a
+    /// track change or page switch never snaps the background colour.
+    pub fn eased_tint(&mut self, ctx: &egui::Context, wanted: Option<Color32>) -> Option<Color32> {
+        let Some(wanted) = wanted else {
+            self.tint_current = None;
+            return None;
+        };
+        let current = self.tint_current;
+        match (current, wanted) {
+            (None, wanted) => {
+                self.tint_current = Some(wanted);
+                Some(wanted)
+            }
+            (Some(current), wanted) if current == wanted => Some(current),
+            (Some(current), wanted) => {
+                let t = ctx.animate_value_with_time(
+                    egui::Id::new("tint-crossfade"),
+                    (current != wanted) as u8 as f32,
+                    0.3,
+                );
+                if t <= 0.0 {
+                    self.tint_current = Some(wanted);
+                    Some(wanted)
+                } else {
+                    let eased = crate::theme::ease_out(t);
+                    let mixed = crate::ui::blend(current, wanted, eased);
+                    self.tint_current = Some(mixed);
+                    Some(mixed)
+                }
+            }
+        }
     }
 
     // ---- frame ---------------------------------------------------------------
@@ -2267,10 +2392,12 @@ impl App {
                         (i16::from(now.volume_percent) + i16::from(delta)).clamp(0, 100) as u8;
                     self.volume_before_mute = None;
                     self.set_volume(next);
+                    self.volume_osd = Some((next, Instant::now()));
                 } else if self.is_connected() {
                     let current = volume_to_percent(self.local.volume);
                     let next = (i16::from(current) + i16::from(delta)).clamp(0, 100) as u8;
                     self.set_volume(next);
+                    self.volume_osd = Some((next, Instant::now()));
                 }
             }
             Action::ToggleMute => {
@@ -2493,6 +2620,7 @@ impl App {
                     self.backend.send(Command::DiscoverReceivers);
                 }
             }
+            Action::ToggleMiniPlayer => self.toggle_mini_player(ctx),
             Action::SettingsChanged => {
                 self.settings_dirty = true;
                 ctx.set_theme(match self.settings.theme {
@@ -2617,9 +2745,19 @@ impl App {
         crate::ui::show(self, ui);
         self.apply_actions(ctx);
         self.sync_mpris();
+        self.tick_sleep_timer();
+        if let Some(rect) = ctx.input(|input| input.viewport().inner_rect) {
+            self.last_window_size = Some([rect.width(), rect.height()]);
+        }
+        if let Some(rect) = ctx.input(|input| input.viewport().outer_rect) {
+            self.last_window_pos = Some([rect.min.x, rect.min.y]);
+        }
 
         let playing = self.now_playing().is_some_and(|now| now.playing);
         if playing {
+            ctx.request_repaint_after(Duration::from_millis(250));
+        }
+        if self.sleep_timer_end.is_some() {
             ctx.request_repaint_after(Duration::from_millis(250));
         }
         if !self.toasts.is_empty() {
@@ -2649,6 +2787,9 @@ impl App {
         if !self.offline {
             SessionState {
                 last_page: Some(self.page().encode()),
+                window_size: self.last_window_size,
+                window_pos: self.last_window_pos,
+                show_queue_panel: self.show_queue_panel,
             }
             .save(&self.dirs.session_file());
         }
@@ -2666,6 +2807,7 @@ pub fn engine_config(dirs: &AppDirs, settings: &Settings) -> EngineConfig {
         device_name: settings.device_name.trim().to_string(),
         bitrate_kbps: settings.bitrate,
         normalisation: settings.normalisation,
+        normalisation_pregain_db: settings.normalisation_pregain_db,
         autoplay: settings.autoplay,
         gapless: settings.gapless,
         backend: settings.platform_backend(),
