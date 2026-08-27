@@ -382,13 +382,41 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
                     ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::click());
                 if ui.is_rect_visible(rect) {
                     if active {
+                        // The active row's pill sits 10px above the row and
+                        // runs 10px short of the panel edge, matching the
+                        // frame's inner margin.
+                        let pill = Rect::from_min_max(
+                            pos2(rect.left(), rect.top() + 8.0),
+                            pos2(rect.right() - 4.0, rect.bottom() - 8.0),
+                        );
                         ui.painter()
-                            .rect_filled(rect, CornerRadius::same(6), palette.surface);
-                    } else if response.hovered() {
+                            .rect_filled(pill, CornerRadius::same(6), palette.surface);
+                        // A soft accent edge on the active row.
                         ui.painter().rect_filled(
-                            rect,
+                            Rect::from_min_size(
+                                pos2(rect.left(), pill.top() + 6.0),
+                                vec2(3.0, pill.height() - 12.0),
+                            ),
+                            CornerRadius::same(1),
+                            palette.accent.gamma_multiply(0.55),
+                        );
+                    } else if response.hovered() {
+                        let hover_t = ui.ctx().animate_bool_with_time(
+                            ui.id().with("sidebar-row-hover"),
+                            true,
+                            0.12,
+                        );
+                        let pill = Rect::from_min_max(
+                            pos2(rect.left(), rect.top() + 8.0),
+                            pos2(rect.right() - 4.0, rect.bottom() - 8.0),
+                        );
+                        ui.painter().rect_filled(
+                            pill,
                             CornerRadius::same(6),
-                            palette.surface_hover.gamma_multiply(0.6),
+                            palette
+                                .surface_hover
+                                .gamma_multiply(0.6)
+                                .gamma_multiply(hover_t * 0.6 + 0.4),
                         );
                     }
                     let cover_rect = Rect::from_center_size(

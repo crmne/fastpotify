@@ -85,7 +85,24 @@ pub fn paint_shadow(ui: &Ui, palette: &Palette, rect: Rect, radius: f32) {
         .add(shadow.as_shape(rect, CornerRadius::same(radius as u8)));
 }
 
-/// Fills `rect` with a vertical gradient from `top` to `bottom`.
+/// A soft drop shadow that deepens with `lift`, a 0..=1 hover progress.
+pub fn paint_shadow_lift(ui: &Ui, palette: &Palette, rect: Rect, radius: f32, lift: f32) {
+    if !palette.dark || lift <= 0.0 {
+        return;
+    }
+    let alpha = (120.0 + 90.0 * lift).min(200.0);
+    let blur = 28.0 + 14.0 * lift;
+    let offset_y = 10.0 + 8.0 * lift;
+    let shadow = egui::epaint::Shadow {
+        offset: [0, offset_y as i8],
+        blur: blur as u8,
+        spread: 0,
+        color: Color32::from_black_alpha(alpha as u8),
+    };
+    ui.painter()
+        .add(shadow.as_shape(rect, CornerRadius::same(radius as u8)));
+}
+
 pub fn paint_vertical_gradient(ui: &Ui, rect: Rect, top: Color32, bottom: Color32) {
     let mut mesh = egui::Mesh::default();
     mesh.colored_vertex(rect.left_top(), top);
@@ -507,6 +524,21 @@ pub fn track_row(ui: &mut Ui, app: &mut App, row: TrackRow<'_>) {
                 .gamma_multiply(if palette.dark { 0.7 } else { 1.0 }),
         );
     }
+    // The hover background fades in and out instead of snapping, so long
+    // lists feel calm while the cursor moves.
+    let hover_t = ui
+        .ctx()
+        .animate_bool_with_time(ui.id().with("row-hover"), hovered, 0.12);
+    if hover_t > 0.0 {
+        let fill = palette
+            .surface_hover
+            .gamma_multiply(if palette.dark { 0.7 } else { 1.0 });
+        ui.painter().rect_filled(
+            rect,
+            CornerRadius::same(6),
+            egui::Color32::from(egui::Rgba::from(fill) * hover_t),
+        );
+    }
     let cols = columns(width, &row);
     let painter = ui.painter().clone();
     let mut x = rect.left() + 8.0;
@@ -893,18 +925,35 @@ pub fn card(
     let mut play = false;
     if ui.is_rect_visible(rect) {
         let hovered = ui.rect_contains_pointer(rect);
-        if hovered {
+        // The whole card lifts gently: background fade, cover grows a
+        // little, the shadow deepens, and the play button fades in and
+        // springs up. All driven by one animated hover value, so every
+        // element moves together.
+        let hover_t = ui
+            .ctx()
+            .animate_bool_with_time(
+                ui.id().with("card-hover"),
+                hovered,
+                0.16,
+            );
+        let lift = theme::ease_out(hover_t);
+        if lift > 0.0 {
             ui.painter().rect_filled(
                 rect,
                 CornerRadius::same(theme::RADIUS),
                 palette
                     .surface_hover
-                    .gamma_multiply(if palette.dark { 0.8 } else { 1.0 }),
+                    .gamma_multiply(if palette.dark { 0.8 } else { 1.0 })
+                    .gamma_multiply(0.4 + 0.6 * lift),
             );
         }
-        let image_rect = Rect::from_min_size(rect.min + vec2(12.0, 12.0), Vec2::splat(image_size));
+        let grow = 1.0 + 0.035 * lift;
+        let image_rect = Rect::from_center_size(
+            rect.min + vec2(12.0, 12.0) + Vec2::splat(image_size / 2.0),
+            Vec2::splat(image_size * grow),
+        );
         let radius = if round { image_size / 2.0 } else { 6.0 };
-        paint_shadow(ui, &palette, image_rect, radius);
+        paint_shadow_lift(ui, &palette, image_rect, radius, lift);
         paint_cover(
             ui,
             &palette,
@@ -944,20 +993,25 @@ pub fn card(
         ui.painter()
             .galley(subtitle_rect.min, subtitle_galley, palette.secondary);
 
-        if playable && hovered {
+        if playable {
             let button_rect = Rect::from_center_size(
                 pos2(image_rect.right() - 26.0, image_rect.bottom() - 26.0),
                 Vec2::splat(44.0),
             );
+            let opacity = if lift < 1.0 { lift } else { 1.0 };
+            let entrance = 1.0 - 0.2 * lift;
+            let button_rect = button_rect.translate(Vec2::new(0.0, 8.0 * (1.0 - lift)));
             let mut child = ui.new_child(
                 UiBuilder::new()
                     .max_rect(button_rect)
                     .layout(Layout::centered_and_justified(egui::Direction::LeftToRight)),
             );
+            child.set_opacity(opacity);
+            // The button springs up from behind the cover's bottom corner.
             play = theme::circle_button(
                 &mut child,
                 Icon::PlayFilled,
-                44.0,
+                44.0 * entrance,
                 palette.accent,
                 palette.accent_hover,
                 palette.on_accent,
@@ -1082,6 +1136,11 @@ pub fn thin_slider(
     };
     if ui.is_rect_visible(rect) {
         let active = response.hovered() || response.dragged() || dragging_value.is_some();
+        // The fill colour eases between idle and active so the bar breathes
+        // instead of flipping.
+        let fill_t = ui
+            .ctx()
+            .animate_bool_with_time(id.with("fill"), active, 0.12);
         let bar = Rect::from_center_size(rect.center(), vec2(rect.width(), 4.0));
         let track_color = if palette.dark {
             Color32::from_white_alpha(50)
@@ -1093,11 +1152,17 @@ pub fn thin_slider(
             bar.min,
             pos2(bar.left() + bar.width() * shown.clamp(0.0, 1.0), bar.max.y),
         );
-        let fill = if active { accent } else { palette.text };
+        let idle = theme::lerp_color(palette.text, accent, 0.0);
+        let fill = theme::lerp_color(idle, accent, fill_t);
         ui.painter().rect_filled(filled, 2.0, fill);
         if active {
+            // A soft glow around the handle so the thumb feels lit while
+            // the bar is being touched.
+            let handle = pos2(filled.right(), bar.center().y);
             ui.painter()
-                .circle_filled(pos2(filled.right(), bar.center().y), 6.0, palette.text);
+                .circle_filled(handle, 10.0, accent.gamma_multiply(0.25));
+            ui.painter()
+                .circle_filled(handle, 6.0, palette.text);
         }
     }
     event
