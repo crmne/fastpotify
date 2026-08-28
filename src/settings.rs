@@ -60,6 +60,12 @@ pub struct Settings {
     pub check_for_updates: bool,
     /// Context URIs pinned to the top of the sidebar, in pin order.
     pub pinned_contexts: Vec<String>,
+    /// The Google language code the lyrics panel translates into.
+    pub lyrics_language: String,
+    /// Show a line under each lyric line, in the reader's language.
+    pub lyrics_show_translation: bool,
+    /// Rewrite lyric lines in Latin letters, to sing along.
+    pub lyrics_romanize: bool,
 }
 
 impl Default for Settings {
@@ -85,6 +91,9 @@ impl Default for Settings {
             keep_playing_in_background: true,
             check_for_updates: true,
             pinned_contexts: Vec::new(),
+            lyrics_language: "en".to_string(),
+            lyrics_show_translation: false,
+            lyrics_romanize: false,
         }
     }
 }
@@ -138,6 +147,58 @@ impl Settings {
         self.search_history.insert(0, query.to_string());
         self.search_history.truncate(12);
     }
+}
+
+/// Languages the lyrics panel can translate into: Google code, English name.
+pub const LANGUAGES: &[(&str, &str)] = &[
+    ("ar", "Arabic"),
+    ("bn", "Bengali"),
+    ("zh-CN", "Chinese (Simplified)"),
+    ("zh-TW", "Chinese (Traditional)"),
+    ("cs", "Czech"),
+    ("da", "Danish"),
+    ("nl", "Dutch"),
+    ("en", "English"),
+    ("fil", "Filipino"),
+    ("fi", "Finnish"),
+    ("fr", "French"),
+    ("de", "German"),
+    ("el", "Greek"),
+    ("he", "Hebrew"),
+    ("hi", "Hindi"),
+    ("id", "Indonesian"),
+    ("it", "Italian"),
+    ("ja", "Japanese"),
+    ("ko", "Korean"),
+    ("ms", "Malay"),
+    ("ml", "Malayalam"),
+    ("mr", "Marathi"),
+    ("ne", "Nepali"),
+    ("no", "Norwegian"),
+    ("fa", "Persian"),
+    ("pl", "Polish"),
+    ("pt", "Portuguese"),
+    ("pa", "Punjabi"),
+    ("ro", "Romanian"),
+    ("ru", "Russian"),
+    ("si", "Sinhala"),
+    ("es", "Spanish"),
+    ("sv", "Swedish"),
+    ("ta", "Tamil"),
+    ("te", "Telugu"),
+    ("th", "Thai"),
+    ("tr", "Turkish"),
+    ("uk", "Ukrainian"),
+    ("ur", "Urdu"),
+    ("vi", "Vietnamese"),
+];
+
+/// The name shown for a language code, or the code itself when unknown.
+pub fn language_label(code: &str) -> &str {
+    LANGUAGES
+        .iter()
+        .find(|(known, _)| *known == code)
+        .map_or(code, |(_, name)| *name)
 }
 
 /// Restorable UI session: what was open when the app last closed.

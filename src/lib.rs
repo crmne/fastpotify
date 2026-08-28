@@ -25,6 +25,7 @@ pub mod single_instance;
 pub mod sink;
 pub mod system_fonts;
 pub mod theme;
+pub mod translate;
 #[cfg(target_os = "linux")]
 pub mod tray;
 #[cfg(not(target_os = "linux"))]

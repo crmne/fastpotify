@@ -382,6 +382,8 @@ pub enum Command {
     CheckForUpdates,
     /// The words of a track, from LRCLIB.
     Lyrics(Box<LyricsRequest>),
+    /// The words of a track in another script and tongue, from Google Translate.
+    Translate(Box<TranslateRequest>),
     /// Sign in again with another Web API application (`None` for the
     /// shared one). Local playback keeps its own grant.
     SwitchWebApp(Option<String>),
@@ -403,6 +405,15 @@ pub struct LyricsRequest {
     /// The track the answer is for, so a stale one is ignored.
     pub uri: String,
     pub query: crate::lyrics::Query,
+}
+
+pub struct TranslateRequest {
+    /// The track the answer is for, so a stale one is ignored.
+    pub uri: String,
+    /// The lyric lines, in order.
+    pub lines: Vec<String>,
+    /// The Google language code to translate into.
+    pub target: String,
 }
 
 pub enum Event {
@@ -441,6 +452,13 @@ pub enum Event {
     UserName {
         id: String,
         name: Option<String>,
+    },
+    /// The words of a track in another script and tongue, or `None` when
+    /// there is nothing to add.
+    Translate {
+        uri: String,
+        target: String,
+        result: Result<Option<crate::translate::Translation>, String>,
     },
     /// The Web API application the current sign-in belongs to.
     WebApp {
@@ -708,6 +726,7 @@ impl Worker {
                     items,
                 } => self.store_playlist_cache(id, snapshot, items),
                 Command::UserNames(ids) => self.fetch_user_names(ids),
+                Command::Translate(request) => self.fetch_translation(*request),
                 Command::SwitchWebApp(client_id) => self.switch_web_app(client_id),
             }
         }
@@ -1159,6 +1178,25 @@ impl Worker {
                 id,
                 snapshot: cached.snapshot,
                 items: cached.items,
+            });
+            waker.wake();
+        });
+    }
+
+    fn fetch_translation(&self, request: TranslateRequest) {
+        let http = self.http.clone();
+        let events = self.events.clone();
+        let waker = self.waker.clone();
+        let cache_dir = self.dirs.translations_cache_dir();
+        tokio::spawn(async move {
+            let lines: Vec<&str> = request.lines.iter().map(String::as_str).collect();
+            let result = crate::translate::fetch(&http, &cache_dir, &lines, &request.target)
+                .await
+                .map_err(|error| format!("{error:#}"));
+            let _ = events.send(Event::Translate {
+                uri: request.uri,
+                target: request.target,
+                result,
             });
             waker.wake();
         });
