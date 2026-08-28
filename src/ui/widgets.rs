@@ -163,7 +163,7 @@ pub fn menu_item_enabled(
     label: &str,
     enabled: bool,
 ) -> bool {
-    let width = ui.available_width().max(200.0);
+    let width = ui.available_width();
     let (rect, response) = ui.allocate_exact_size(
         vec2(width, 28.0),
         if enabled {
