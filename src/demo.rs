@@ -555,6 +555,35 @@ fn sample_lyrics() -> crate::lyrics::Lyrics {
     }
 }
 
+/// Spanish words for the sample lyrics, one per line, so the translation
+/// line and its toggles have something to show.
+fn sample_translation() -> crate::translate::Translation {
+    let translated = [
+        "Farolas parpadeando por el camino del río",
+        "Cada ventana guarda una tarde ajena",
+        "Dejo la radio baja para que duermas",
+        "Contando los hitos como un rosario",
+        "Salimos de la ciudad con el tanque medio lleno",
+        "Y un mapa que solo enseña el camino de vuelta",
+        "Pero la noche es ancha y el camino es largo",
+        "Y no hay lugar donde prefiera estar",
+        "El café se enfría en el portavasos",
+        "Tu mano dormida sobre la palanca",
+        "En algún lugar tras el límite del condado",
+        "Las estrellas salen a acompañarnos",
+        "Y aun la noche es ancha y el camino es largo",
+        "Y no hay lugar donde prefiera estar",
+    ];
+    crate::translate::Translation {
+        // An English demo has nothing to romanize.
+        romanized: vec![None; translated.len()],
+        translated: translated
+            .iter()
+            .map(|line| Some((*line).to_string()))
+            .collect(),
+    }
+}
+
 /// Applies `--demo-page` and `--demo-show`.
 #[cfg(feature = "demo")]
 pub fn apply_flags(app: &mut App, page: Option<&str>, show: Option<&str>) {
@@ -582,6 +611,8 @@ pub fn apply_flags(app: &mut App, page: Option<&str>, show: Option<&str>) {
                 app.lyrics = Loadable::Loaded(Some(sample_lyrics()));
                 app.lyrics_following = true;
                 app.show_lyrics_panel = true;
+                app.settings.lyrics_show_translation = true;
+                app.translation = Loadable::Loaded(Some(sample_translation()));
             }
             // Titles in scripts the interface font does not cover.
             "scripts" => {
@@ -728,6 +759,17 @@ mod tests {
         app.show_queue_panel = true;
         app.show_devices = true;
         frame(&ctx, &mut app);
+        // The lyrics panel, with both toggles on; Romanization finds
+        // nothing to rewrite in the English sample and quietly shows it.
+        app.show_queue_panel = false;
+        app.show_lyrics_panel = true;
+        app.lyrics_uri = app.now_playing().map(|now| now.uri);
+        app.lyrics = Loadable::Loaded(Some(sample_lyrics()));
+        app.translation = Loadable::Loaded(Some(sample_translation()));
+        app.settings.lyrics_romanize = true;
+        app.settings.lyrics_show_translation = true;
+        frame(&ctx, &mut app);
+        app.show_lyrics_panel = false;
         for dialog in [
             Dialog::Shortcuts,
             Dialog::CreatePlaylist {

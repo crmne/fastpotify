@@ -444,6 +444,59 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         );
     });
 
+    section(ui, &palette, "Lyrics", |ui| {
+        widgets::setting_row(
+            ui,
+            &palette,
+            "Translate lyrics",
+            "Show a line under each lyric line, in your language.",
+            |ui| {
+                if widgets::switch(ui, &palette, &mut app.settings.lyrics_show_translation)
+                    .changed()
+                {
+                    changed = true;
+                }
+            },
+        );
+        widgets::setting_row(
+            ui,
+            &palette,
+            "Romanize lyrics",
+            "Write the lines in Latin letters, to sing along.",
+            |ui| {
+                if widgets::switch(ui, &palette, &mut app.settings.lyrics_romanize).changed() {
+                    changed = true;
+                }
+            },
+        );
+        widgets::setting_row(
+            ui,
+            &palette,
+            "Translate into",
+            "The language the translation line uses.",
+            |ui| {
+                let old = app.settings.lyrics_language.clone();
+                egui::ComboBox::from_id_salt("lyrics-language")
+                    .selected_text(crate::settings::language_label(
+                        &app.settings.lyrics_language,
+                    ))
+                    .show_ui(ui, |ui| {
+                        for (code, name) in crate::settings::LANGUAGES {
+                            ui.selectable_value(
+                                &mut app.settings.lyrics_language,
+                                (*code).to_string(),
+                                *name,
+                            );
+                        }
+                    });
+                if app.settings.lyrics_language != old {
+                    changed = true;
+                    app.request_translation();
+                }
+            },
+        );
+    });
+
     section(ui, &palette, "Storage", |ui| {
         widgets::setting_row(
             ui,
