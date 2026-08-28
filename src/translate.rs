@@ -169,41 +169,56 @@ fn same_language(source: &str, target: &str) -> bool {
 // ---- romanization ------------------------------------------------------------
 
 /// Romanizations for every line, in order. Lines already written in plain
-/// ASCII letters have nothing to spell; a line whose request fails keeps
-/// `None` too, for one stubborn line must not cost the whole song its
-/// spelling.
+/// ASCII letters have nothing to spell, and a chorus sings its lines again,
+/// so each distinct line is asked for once, a few at a time. A line whose
+/// request fails keeps `None`, for one stubborn line must not cost the
+/// whole song its spelling.
 async fn romanize(http: &reqwest::Client, lines: &[&str], target: &str) -> Vec<Option<String>> {
-    let permits = Arc::new(Semaphore::new(ROMANIZE_AT_ONCE));
-    let mut tasks = JoinSet::new();
-    for (index, line) in lines.iter().enumerate() {
-        // An empty line has no letters, and ASCII letters need no spelling.
-        if line.chars().all(|c| c.is_ascii()) {
+    let mut distinct: Vec<&str> = Vec::new();
+    for line in lines {
+        if line.chars().all(|c| c.is_ascii()) || distinct.contains(line) {
             continue;
         }
+        distinct.push(line);
+    }
+    let permits = Arc::new(Semaphore::new(ROMANIZE_AT_ONCE));
+    let mut tasks = JoinSet::new();
+    for line in &distinct {
         let permits = Arc::clone(&permits);
         let http = http.clone();
         let target = target.to_string();
         let line = (*line).to_string();
         tasks.spawn(async move {
             let _permit = permits.acquire_owned().await.ok();
-            let found = match romanize_line(&http, &target, &line).await {
+            let spelled = match romanize_line(&http, &target, &line).await {
                 Ok(spelled) => Some(spelled),
                 Err(error) => {
                     log::debug!("no romanization for a line: {error:#}");
                     None
                 }
             };
-            (index, found)
+            (line, spelled)
         });
     }
-    let mut romanized: Vec<Option<String>> = vec![None; lines.len()];
+    let mut found: Vec<(String, Option<String>)> = Vec::new();
     while let Some(finished) = tasks.join_next().await {
         match finished {
-            Ok((index, found)) => romanized[index] = kept(lines[index], found),
+            Ok((line, spelled)) => {
+                let spelling = kept(&line, spelled);
+                found.push((line, spelling));
+            }
             Err(error) => log::debug!("a romanization request died: {error}"),
         }
     }
-    romanized
+    lines
+        .iter()
+        .map(|line| {
+            found
+                .iter()
+                .find(|(text, _)| text == *line)
+                .and_then(|(_, spelling)| spelling.clone())
+        })
+        .collect()
 }
 
 /// The spelling to keep for a line: `None` when Google had nothing, or
