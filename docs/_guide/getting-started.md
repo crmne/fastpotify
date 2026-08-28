@@ -30,6 +30,12 @@ On Debian or Ubuntu:
 sudo apt install libasound2-dev libpulse-dev libxkbcommon-dev libwayland-dev libgl1-mesa-dev
 ```
 
+Chinese and Japanese titles are drawn with a font found on the system;
+Fastpotify does not bundle one. macOS and Windows already have a suitable
+face, and on Linux `noto-fonts-cjk` (Arch) or `fonts-noto-cjk` (Debian or
+Ubuntu) turns empty boxes back into characters. Noto CJK covers Korean too,
+which the faces macOS and Windows ship do not.
+
 A desktop entry ships in `packaging/applications/fastpotify.desktop`.
 
 ## Sign in

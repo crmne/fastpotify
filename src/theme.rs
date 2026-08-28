@@ -105,6 +105,7 @@ pub const TOP_BAR_HEIGHT: f32 = 56.0;
 const INTER_MEDIUM: &str = "inter-medium";
 const INTER_SEMIBOLD: &str = "inter-semibold";
 const INTER_BOLD: &str = "inter-bold";
+const CJK: &str = "cjk";
 
 pub fn regular(size: f32) -> egui::FontId {
     egui::FontId::new(size, egui::FontFamily::Proportional)
@@ -269,7 +270,183 @@ fn install_fonts(ctx: &egui::Context) {
         family.extend(fallbacks.iter().cloned());
         fonts.families.insert(FontFamily::Name(name.into()), family);
     }
+
+    // Inter covers no CJK, and neither do the faces egui bundles, so Chinese,
+    // Japanese, and Korean titles arrive as rows of tofu boxes. Shipping a CJK
+    // face would add more than ten megabytes to a binary that is a couple, and
+    // every desktop that displays those scripts already carries one: borrow it
+    // and append it to each family, after Inter so Latin text keeps its shape
+    // and after the emoji faces so emoji keep their colour.
+    if let Some(data) = system_cjk_font() {
+        fonts.font_data.insert(CJK.to_owned(), Arc::new(data));
+        for family in fonts.families.values_mut() {
+            family.push(CJK.to_owned());
+        }
+    }
+
     ctx.set_fonts(fonts);
+}
+
+/// Font files that cover CJK, best first, each with the face to open inside it.
+///
+/// Names are matched case-insensitively against file names, so only one
+/// platform's entries can ever match. Faces cut for Simplified Chinese come
+/// first: the pan-CJK collections open on their Japanese face, which draws a
+/// handful of shared characters (直, 骨, 令) in shapes a Chinese reader sees as
+/// wrong rather than missing.
+const CJK_FONT_FILES: &[(&str, u32)] = &[
+    // Linux, in package-manager order of likelihood.
+    ("notosanssc-regular.otf", 0),
+    ("notosanssc-regular.ttf", 0),
+    ("notosanssc-vf.ttf", 0),
+    ("notosanscjksc-regular.otf", 0),
+    ("sourcehansanssc-regular.otf", 0),
+    // Noto Sans CJK collections hold JP, KR, SC, TC, HK in that order.
+    ("notosanscjk-regular.ttc", 2),
+    ("notosanscjk-vf.otf.ttc", 2),
+    ("notosanscjk-vf.ttf.ttc", 2),
+    ("sourcehansans-regular.ttc", 2),
+    ("wqy-microhei.ttc", 0),
+    ("wqy-zenhei.ttc", 0),
+    ("droidsansfallbackfull.ttf", 0),
+    ("droidsansfallback.ttf", 0),
+    // macOS.
+    ("pingfang.ttc", 0),
+    ("hiragino sans gb.ttc", 0),
+    ("stheiti light.ttc", 0),
+    // Windows.
+    ("msyh.ttc", 0),
+    ("msyh.ttf", 0),
+    ("simhei.ttf", 0),
+    ("simsun.ttc", 0),
+];
+
+/// How deep to walk each font directory. Distributions nest a level or two
+/// (`/usr/share/fonts/truetype/noto`); nothing legitimate goes deeper, and the
+/// bound also ends any symlink loop.
+const FONT_SCAN_DEPTH: usize = 4;
+
+/// The best CJK font installed on this machine, ready to use as a fallback.
+///
+/// Returns `None` when the system has no CJK font at all, which is the normal
+/// state of a desktop that never displays those scripts; text that needs one
+/// then renders exactly as it did before.
+///
+/// The search and the read happen once per process. [`install`] runs again
+/// for every window the app creates, and a Noto CJK collection is twenty
+/// megabytes to walk to and read.
+fn system_cjk_font() -> Option<egui::FontData> {
+    static FONT: std::sync::OnceLock<Option<(Vec<u8>, u32)>> = std::sync::OnceLock::new();
+    let (bytes, index) = FONT.get_or_init(read_system_cjk_font).as_ref()?;
+    // Lending epaint the cached bytes rather than handing it owned ones saves
+    // a twenty-megabyte copy into its own blob, paid again every time it
+    // rebuilds the glyph atlas -- which CJK text, filling the atlas fast, is
+    // exactly what provokes.
+    let mut data = egui::FontData::from_static(bytes);
+    data.index = *index;
+    Some(data)
+}
+
+/// Reads the best-ranked font of [`CJK_FONT_FILES`] found on disk, with the
+/// face to open inside it.
+fn read_system_cjk_font() -> Option<(Vec<u8>, u32)> {
+    let (rank, path) = font_dirs()
+        .iter()
+        .filter_map(|dir| scan_fonts(dir, 0))
+        .min_by_key(|(rank, _)| *rank)?;
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            log::warn!("cannot read CJK font {}: {error}", path.display());
+            return None;
+        }
+    };
+    // A collection that ships fewer faces than expected still covers CJK on
+    // its first one, and asking for a face that is not there would panic.
+    let wanted = CJK_FONT_FILES[rank].1;
+    let index = if wanted < face_count(&bytes) {
+        wanted
+    } else {
+        0
+    };
+    log::debug!("CJK fallback font: {} (face {index})", path.display());
+    Some((bytes, index))
+}
+
+/// Where the platform keeps installed fonts.
+fn font_dirs() -> Vec<std::path::PathBuf> {
+    use std::path::{Path, PathBuf};
+
+    let user = directories::UserDirs::new();
+    let mut dirs = Vec::new();
+    if cfg!(target_os = "macos") {
+        dirs.push(PathBuf::from("/System/Library/Fonts"));
+        dirs.push(PathBuf::from("/Library/Fonts"));
+    } else if cfg!(target_os = "windows") {
+        dirs.push(
+            std::env::var_os("SystemRoot")
+                .map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from)
+                .join("Fonts"),
+        );
+        dirs.extend(
+            std::env::var_os("LOCALAPPDATA")
+                .map(|local| PathBuf::from(local).join(r"Microsoft\Windows\Fonts")),
+        );
+    } else {
+        dirs.push(PathBuf::from("/usr/share/fonts"));
+        dirs.push(PathBuf::from("/usr/local/share/fonts"));
+        // What a Flatpak sees of the host's fonts.
+        dirs.push(PathBuf::from("/run/host/fonts"));
+        // The pre-XDG per-user directory, which fontconfig still honours.
+        dirs.extend(user.as_ref().map(|user| user.home_dir().join(".fonts")));
+    }
+    // `~/Library/Fonts` on macOS and `$XDG_DATA_HOME/fonts` on Linux: where a
+    // font the user installed by hand lands. Windows keeps none, and its
+    // per-user store is the `LOCALAPPDATA` path above.
+    dirs.extend(
+        user.as_ref()
+            .and_then(|user| user.font_dir())
+            .map(Path::to_path_buf),
+    );
+    dirs
+}
+
+/// The best-ranked entry of [`CJK_FONT_FILES`] below `dir`. Directories that
+/// cannot be read are simply skipped.
+fn scan_fonts(dir: &std::path::Path, depth: usize) -> Option<(usize, std::path::PathBuf)> {
+    if depth >= FONT_SCAN_DEPTH {
+        return None;
+    }
+    std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .filter_map(|entry| {
+            // The kind comes back with the directory listing, so only a
+            // symlink (Debian nests its font tree behind them, as does a
+            // Flatpak's `/run/host/fonts`) costs a look at the target.
+            let kind = entry.file_type().ok()?;
+            if kind.is_dir() || (kind.is_symlink() && entry.path().is_dir()) {
+                return scan_fonts(&entry.path(), depth + 1);
+            }
+            let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+            let rank = CJK_FONT_FILES
+                .iter()
+                .position(|(file, _)| *file == name.as_str())?;
+            Some((rank, entry.path()))
+        })
+        .min_by_key(|(rank, _)| *rank)
+}
+
+/// How many faces a font file holds: collections start with `ttcf` and a
+/// count, everything else is a single face.
+fn face_count(bytes: &[u8]) -> u32 {
+    if !bytes.starts_with(b"ttcf") {
+        return 1;
+    }
+    bytes
+        .get(8..12)
+        .and_then(|count| count.try_into().ok())
+        .map_or(1, u32::from_be_bytes)
 }
 
 macro_rules! icons {
@@ -724,4 +901,37 @@ pub fn section_title(ui: &mut egui::Ui, palette: &Palette, label: &str) -> Respo
 
 pub fn subtle(ui: &mut egui::Ui, palette: &Palette, label: &str) -> Response {
     text(ui, label, regular(13.0), palette.secondary)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn face_count_reads_collection_headers() {
+        assert_eq!(face_count(b"OTTO"), 1);
+        assert_eq!(face_count(b""), 1);
+        assert_eq!(face_count(b"ttcf"), 1, "a truncated header is not a count");
+        let mut collection = b"ttcf".to_vec();
+        collection.extend_from_slice(&[0, 1, 0, 0]);
+        collection.extend_from_slice(&5u32.to_be_bytes());
+        assert_eq!(face_count(&collection), 5);
+    }
+
+    #[test]
+    fn scan_finds_the_best_ranked_font_below_a_directory() {
+        let root = std::env::temp_dir().join(format!("fastpotify-fonts-{}", std::process::id()));
+        let nested = root.join("truetype/noto");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(root.join("InterVariable.ttf"), b"").unwrap();
+        std::fs::write(nested.join("wqy-microhei.ttc"), b"").unwrap();
+        std::fs::write(nested.join("NotoSansCJK-Regular.ttc"), b"").unwrap();
+
+        let (rank, path) = scan_fonts(&root, 0).expect("a CJK font below the root");
+        std::fs::remove_dir_all(&root).unwrap();
+
+        assert_eq!(CJK_FONT_FILES[rank].0, "notosanscjk-regular.ttc");
+        assert_eq!(CJK_FONT_FILES[rank].1, 2, "the Simplified Chinese face");
+        assert!(path.ends_with("NotoSansCJK-Regular.ttc"));
+    }
 }
