@@ -456,6 +456,7 @@ pub enum Action {
         index: u32,
     },
     ShufflePlay(String),
+    SelectLocalPlayback,
     TogglePlay,
     Next,
     Previous,

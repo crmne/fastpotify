@@ -1,0 +1,12 @@
+yt-dlp
+https://github.com/yt-dlp/yt-dlp
+
+Fastpotify may embed one official yt-dlp executable per release target.
+The pin (tag and SHA-256) lives in `manifest` in this directory. Vendor
+scripts download that file only from the official GitHub release and
+verify it against both the pin and upstream SHA2-256SUMS. Fastpotify
+does not download yt-dlp at runtime. A user-installed yt-dlp is used
+only when its version is strictly newer than the pinned build.
+
+yt-dlp is dedicated to the public domain under the Unlicense.
+See LICENSE in this directory and https://unlicense.org

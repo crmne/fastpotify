@@ -48,6 +48,10 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
+      - name: Vendor yt-dlp
+        shell: bash
+        run: bash third_party/yt-dlp/vendor.sh --target ${{ matrix.target }} --require
+
       - run: cargo build --release --target ${{ matrix.target }}
 
       - name: Package
@@ -60,7 +64,7 @@ jobs:
           else
             cp "target/${{ matrix.target }}/release/fastpotify" "dist/$name/"
           fi
-          cp README.md LICENSE "dist/$name/"
+          cp README.md LICENSE third_party/yt-dlp/NOTICE "dist/$name/"
           if [ "${{ runner.os }}" = "Linux" ]; then
             # Desktop integration for package builds and hand-installs.
             cp -r packaging "dist/$name/"
@@ -120,6 +124,11 @@ jobs:
         with:
           key: macos-universal
 
+      - name: Vendor yt-dlp
+        run: |
+          bash third_party/yt-dlp/vendor.sh --target aarch64-apple-darwin --require
+          bash third_party/yt-dlp/vendor.sh --target x86_64-apple-darwin --require
+
       - name: Build both architectures
         run: |
           cargo build --release --target aarch64-apple-darwin
@@ -163,7 +172,7 @@ jobs:
           stage="$RUNNER_TEMP/dmg"
           mkdir -p "$stage"
           cp -R Fastpotify.app "$stage/"
-          cp README.md LICENSE "$stage/"
+          cp README.md LICENSE third_party/yt-dlp/NOTICE "$stage/"
           ln -s /Applications "$stage/Applications"
           mkdir -p dist
           hdiutil create -volname Fastpotify -srcfolder "$stage" -ov \

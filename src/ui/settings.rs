@@ -5,7 +5,7 @@ use egui::{Align, CornerRadius, Frame, Layout, Margin, Stroke, Vec2};
 use crate::api::models::pick_image;
 use crate::app::App;
 use crate::model::{Action, Dialog};
-use crate::settings::ThemeChoice;
+use crate::settings::{PlaybackBackend, ThemeChoice};
 use crate::theme::{self, Icon, Palette};
 
 use super::widgets;
@@ -67,12 +67,20 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     .user
                     .as_ref()
                     .and_then(|user| user.product.clone())
-                    .map(|product| match product.as_str() {
+                    .map(|product| match product.to_ascii_lowercase().as_str() {
                         "premium" => "Spotify Premium".to_string(),
-                        "free" | "open" => "Spotify Free, local playback needs Premium".to_string(),
-                        other => other.to_string(),
+                        "free" | "open" => {
+                            "Spotify Free · bundled alternate local audio".to_string()
+                        }
+                        _ => "Spotify account · Premium not confirmed".to_string(),
                     })
-                    .unwrap_or_default();
+                    .unwrap_or_else(|| {
+                        if app.user.is_some() {
+                            "Spotify account · Premium not confirmed".to_string()
+                        } else {
+                            String::new()
+                        }
+                    });
                 theme::text(ui, product, theme::regular(13.0), palette.secondary);
                 if let Some(username) = app.local.connected.then(|| app.local.username.clone())
                     && !username.is_empty()
@@ -177,24 +185,72 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     });
 
     section(ui, &palette, "Playback on this computer", |ui| {
-        let (status, detail, action) = match &app.local_playback {
-            crate::backend::LocalPlayback::Ready { .. } => (
+        let audio_source_help = if app.is_confirmed_premium() {
+            "Spotify Connect is the default and needs Premium. Alternate mode keeps Spotify metadata and plays a third-party match on this computer. It is not Spotify audio and not Spotify Connect."
+        } else if app.is_free_account() {
+            "Spotify Free cannot use Spotify Connect or Premium player controls. This computer stays on bundled alternate local audio. It is not Spotify audio and not Spotify Connect."
+        } else {
+            "Spotify Connect needs a confirmed Premium account. This computer uses bundled alternate local audio. It is not Spotify audio and not Spotify Connect."
+        };
+        widgets::setting_row(ui, &palette, "Audio source", audio_source_help, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                let connect_locked = !app.is_confirmed_premium();
+                for choice in PlaybackBackend::ALL {
+                    let locked = connect_locked && choice == PlaybackBackend::Spotify;
+                    if theme::soft_button(
+                        ui,
+                        &palette,
+                        None,
+                        choice.label(),
+                        app.settings.playback_backend == choice,
+                    )
+                    .clicked()
+                        && app.settings.playback_backend != choice
+                        && !locked
+                    {
+                        app.settings.playback_backend = choice;
+                        changed = true;
+                        playback_dirty = true;
+                    }
+                }
+            });
+        });
+        let (status, detail, action) = match (&app.local_playback, app.settings.playback_backend) {
+            (crate::backend::LocalPlayback::AlternateReady { source }, _) => (
+                "Ready",
+                format!("This computer plays matched third-party audio locally ({source}). Not Spotify Connect."),
+                None,
+            ),
+            (crate::backend::LocalPlayback::Ready { .. }, PlaybackBackend::Spotify) => (
                 "Ready",
                 "This computer is a Spotify Connect device.".to_string(),
                 None,
             ),
-            crate::backend::LocalPlayback::Authorizing => (
+            (crate::backend::LocalPlayback::Authorizing, _) => (
                 "Setting up",
                 "Finish authorizing in your browser.".to_string(),
                 None,
             ),
-            crate::backend::LocalPlayback::Connecting => {
-                ("Connecting", "Connecting to Spotify…".to_string(), None)
+            (crate::backend::LocalPlayback::Connecting, _) => {
+                ("Connecting", "Connecting…".to_string(), None)
             }
-            crate::backend::LocalPlayback::Failed(message) => {
+            (crate::backend::LocalPlayback::Failed(message), _) => {
                 ("Unavailable", message.clone(), Some("Try again"))
             }
-            crate::backend::LocalPlayback::Unavailable => (
+            (crate::backend::LocalPlayback::Unavailable, PlaybackBackend::Alternate)
+            | (crate::backend::LocalPlayback::Ready { .. }, PlaybackBackend::Alternate) => (
+                "Not applied",
+                if crate::alternate::has_bundled_ytdlp() {
+                    "Apply playback settings to start alternate local audio. Uses the official pinned yt-dlp extracted locally, or a Piped API URL."
+                        .to_string()
+                } else {
+                    "Apply playback settings to start alternate local audio. Needs a Piped API URL or yt-dlp."
+                        .to_string()
+                },
+                None,
+            ),
+            (crate::backend::LocalPlayback::Unavailable, _) => (
                 "Not set up",
                 "Play music on this computer. Needs Spotify Premium and a one-time browser sign-in."
                     .to_string(),
@@ -204,7 +260,11 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         widgets::setting_row(ui, &palette, &format!("Status: {status}"), &detail, |ui| {
             if let Some(label) = action {
                 if theme::pill_button(ui, &palette, label, true).clicked() {
-                    app.actions.push(Action::EnablePlayback);
+                    if app.settings.playback_backend == PlaybackBackend::Alternate {
+                        app.actions.push(Action::RestartEngine);
+                    } else {
+                        app.actions.push(Action::EnablePlayback);
+                    }
                 }
             } else if app.local_ready
                 && theme::soft_button(ui, &palette, Some(Icon::Refresh), "Reconnect", false)
@@ -217,7 +277,11 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             ui,
             &palette,
             "Device name",
-            "How this computer appears in Spotify Connect.",
+            if app.settings.playback_backend == PlaybackBackend::Spotify {
+                "How this computer appears in Spotify Connect."
+            } else {
+                "How this computer is labelled in the device list. Not a Spotify Connect name."
+            },
             |ui| {
                 let response = Frame::new()
                     .fill(palette.surface)
@@ -238,69 +302,192 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 }
             },
         );
-        widgets::setting_row(
-            ui,
-            &palette,
-            "Audio quality",
-            "Higher bitrates use more data and cache space.",
-            |ui| {
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    for (kbps, label) in [(320u16, "Very high"), (160, "High"), (96, "Normal")] {
-                        if theme::soft_button(
-                            ui,
-                            &palette,
-                            None,
-                            label,
-                            app.settings.bitrate == kbps,
-                        )
-                        .clicked()
-                            && app.settings.bitrate != kbps
-                        {
-                            app.settings.bitrate = kbps;
-                            changed = true;
-                            playback_dirty = true;
-                        }
+        if app.settings.playback_backend == PlaybackBackend::Alternate {
+            let piped_error =
+                crate::alternate::validate_piped_base(&app.settings.piped_api_base).err();
+            let ytdlp_error = crate::alternate::ytdlp_path_notice(&app.settings.ytdlp_path);
+            widgets::setting_row(
+                ui,
+                &palette,
+                "Piped API base URL",
+                piped_error.as_deref().unwrap_or(
+                    "Your Piped-compatible instance, for example https://piped.example. No public instance is bundled. Do not put secrets in this URL.",
+                ),
+                |ui| {
+                    let response = Frame::new()
+                        .fill(palette.surface)
+                        .corner_radius(CornerRadius::same(6))
+                        .inner_margin(Margin::symmetric(10, 6))
+                        .show(ui, |ui| {
+                            ui.add(
+                                egui::TextEdit::singleline(&mut app.settings.piped_api_base)
+                                    .hint_text(
+                                        egui::RichText::new("https://piped.example")
+                                            .color(palette.dim),
+                                    )
+                                    .font(theme::regular(13.0))
+                                    .frame(egui::Frame::NONE)
+                                    .desired_width(220.0),
+                            )
+                        })
+                        .inner;
+                    if response.changed() {
+                        changed = true;
+                        playback_dirty = true;
                     }
-                });
-            },
-        );
-        widgets::setting_row(
-            ui,
-            &palette,
-            "Normalize volume",
-            "Keep loud and quiet tracks at a similar level.",
-            |ui| {
-                if widgets::switch(ui, &palette, &mut app.settings.normalisation).changed() {
-                    changed = true;
-                    playback_dirty = true;
-                }
-            },
-        );
-        widgets::setting_row(
-            ui,
-            &palette,
-            "Autoplay",
-            "Keep playing similar songs when your music ends.",
-            |ui| {
-                if widgets::switch(ui, &palette, &mut app.settings.autoplay).changed() {
-                    changed = true;
-                    playback_dirty = true;
-                }
-            },
-        );
-        widgets::setting_row(
-            ui,
-            &palette,
-            "Gapless playback",
-            "Run tracks into each other without silence.",
-            |ui| {
-                if widgets::switch(ui, &palette, &mut app.settings.gapless).changed() {
-                    changed = true;
-                    playback_dirty = true;
-                }
-            },
-        );
+                },
+            );
+            widgets::setting_row(
+                ui,
+                &palette,
+                "yt-dlp path",
+                ytdlp_error.as_deref().unwrap_or(
+                    if crate::alternate::has_bundled_ytdlp() {
+                        "Optional. Fastpotify extracts an official pinned yt-dlp locally and never downloads it at runtime. A strictly newer installed yt-dlp (this path or PATH) wins. Spotify tokens are never sent to it."
+                    } else {
+                        "Optional. Blank uses yt-dlp on PATH. This build has no bundled yt-dlp. Fastpotify never downloads yt-dlp at runtime and never sends Spotify tokens to it."
+                    },
+                ),
+                |ui| {
+                    let response = Frame::new()
+                        .fill(palette.surface)
+                        .corner_radius(CornerRadius::same(6))
+                        .inner_margin(Margin::symmetric(10, 6))
+                        .show(ui, |ui| {
+                            ui.add(
+                                egui::TextEdit::singleline(&mut app.settings.ytdlp_path)
+                                    .hint_text(
+                                        egui::RichText::new("yt-dlp on PATH").color(palette.dim),
+                                    )
+                                    .font(theme::regular(13.0))
+                                    .frame(egui::Frame::NONE)
+                                    .desired_width(220.0),
+                            )
+                        })
+                        .inner;
+                    if response.changed() {
+                        changed = true;
+                        playback_dirty = true;
+                    }
+                },
+            );
+            widgets::setting_row(
+                ui,
+                &palette,
+                "Minimum match score",
+                "Reject weak matches. Higher is stricter. A miss never plays the low-confidence hit.",
+                |ui| {
+                    let mut score = app.settings.alternate_min_score;
+                    let response = ui.add(
+                        egui::Slider::new(&mut score, 0.30..=0.90)
+                            .show_value(false)
+                            .trailing_fill(true),
+                    );
+                    theme::text(
+                        ui,
+                        format!("{:.0}%", score * 100.0),
+                        theme::medium(13.0),
+                        palette.secondary,
+                    );
+                    if response.changed() {
+                        app.settings.alternate_min_score = score;
+                        changed = true;
+                        playback_dirty = true;
+                    }
+                },
+            );
+            widgets::setting_row(
+                ui,
+                &palette,
+                "Skip on miss",
+                "If no match meets the score, skip to the next track. Network and decode failures stop; they do not skip.",
+                |ui| {
+                    if widgets::switch(ui, &palette, &mut app.settings.alternate_skip_on_miss)
+                        .changed()
+                    {
+                        changed = true;
+                        playback_dirty = true;
+                    }
+                },
+            );
+            ui.add_space(4.0);
+            theme::subtle(
+                ui,
+                &palette,
+                if crate::alternate::has_bundled_ytdlp() {
+                    "You are responsible for the Piped instance and any yt-dlp you run, and for following their terms. The bundled yt-dlp is the official pinned build, extracted into this computer's state directory, never downloaded at runtime. Matches are not Spotify audio. Podcasts are not supported. Playback starts after buffering; an M4A file with moov at the end may wait. Network and decode failures stop rather than skip. Apply restarts the local player; Spotify Connect is stopped while this mode is on."
+                } else {
+                    "You are responsible for the Piped instance and yt-dlp you run, and for following their terms. Matches are not Spotify audio. Podcasts are not supported. Playback starts after buffering; an M4A file with moov at the end may wait. Network and decode failures stop rather than skip. Apply restarts the local player; Spotify Connect is stopped while this mode is on."
+                },
+            );
+            ui.add_space(8.0);
+        }
+        if app.settings.playback_backend == PlaybackBackend::Spotify {
+            widgets::setting_row(
+                ui,
+                &palette,
+                "Audio quality",
+                "Higher bitrates use more data and cache space.",
+                |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        for (kbps, label) in [(320u16, "Very high"), (160, "High"), (96, "Normal")]
+                        {
+                            if theme::soft_button(
+                                ui,
+                                &palette,
+                                None,
+                                label,
+                                app.settings.bitrate == kbps,
+                            )
+                            .clicked()
+                                && app.settings.bitrate != kbps
+                            {
+                                app.settings.bitrate = kbps;
+                                changed = true;
+                                playback_dirty = true;
+                            }
+                        }
+                    });
+                },
+            );
+            widgets::setting_row(
+                ui,
+                &palette,
+                "Normalize volume",
+                "Keep loud and quiet tracks at a similar level.",
+                |ui| {
+                    if widgets::switch(ui, &palette, &mut app.settings.normalisation).changed() {
+                        changed = true;
+                        playback_dirty = true;
+                    }
+                },
+            );
+            widgets::setting_row(
+                ui,
+                &palette,
+                "Autoplay",
+                "Keep playing similar songs when your music ends.",
+                |ui| {
+                    if widgets::switch(ui, &palette, &mut app.settings.autoplay).changed() {
+                        changed = true;
+                        playback_dirty = true;
+                    }
+                },
+            );
+            widgets::setting_row(
+                ui,
+                &palette,
+                "Gapless playback",
+                "Run tracks into each other without silence.",
+                |ui| {
+                    if widgets::switch(ui, &palette, &mut app.settings.gapless).changed() {
+                        changed = true;
+                        playback_dirty = true;
+                    }
+                },
+            );
+        }
         widgets::setting_row(
             ui,
             &palette,
@@ -325,7 +512,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 }
             },
         );
-        if cfg!(target_os = "linux") {
+        if app.settings.playback_backend == PlaybackBackend::Spotify && cfg!(target_os = "linux") {
             widgets::setting_row(
                 ui,
                 &palette,
@@ -357,41 +544,44 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 },
             );
         }
-        widgets::setting_row(
-            ui,
-            &palette,
-            "Audio cache",
-            "Keep downloaded audio so replays don't stream again.",
-            |ui| {
-                // The control area lays out right-to-left: add the rightmost item first.
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    if widgets::switch(ui, &palette, &mut app.settings.audio_cache).changed() {
-                        changed = true;
-                        playback_dirty = true;
-                    }
-                    if app.settings.audio_cache {
-                        ui.add_space(6.0);
-                        for (mb, label) in [(4096u64, "4 GB"), (1024, "1 GB"), (512, "512 MB")] {
-                            if theme::soft_button(
-                                ui,
-                                &palette,
-                                None,
-                                label,
-                                app.settings.audio_cache_mb == mb,
-                            )
-                            .clicked()
-                                && app.settings.audio_cache_mb != mb
+        if app.settings.playback_backend == PlaybackBackend::Spotify {
+            widgets::setting_row(
+                ui,
+                &palette,
+                "Audio cache",
+                "Keep downloaded audio so replays don't stream again.",
+                |ui| {
+                    // The control area lays out right-to-left: add the rightmost item first.
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        if widgets::switch(ui, &palette, &mut app.settings.audio_cache).changed() {
+                            changed = true;
+                            playback_dirty = true;
+                        }
+                        if app.settings.audio_cache {
+                            ui.add_space(6.0);
+                            for (mb, label) in [(4096u64, "4 GB"), (1024, "1 GB"), (512, "512 MB")]
                             {
-                                app.settings.audio_cache_mb = mb;
-                                changed = true;
-                                playback_dirty = true;
+                                if theme::soft_button(
+                                    ui,
+                                    &palette,
+                                    None,
+                                    label,
+                                    app.settings.audio_cache_mb == mb,
+                                )
+                                .clicked()
+                                    && app.settings.audio_cache_mb != mb
+                                {
+                                    app.settings.audio_cache_mb = mb;
+                                    changed = true;
+                                    playback_dirty = true;
+                                }
                             }
                         }
-                    }
-                });
-            },
-        );
+                    });
+                },
+            );
+        }
         ui.add_space(4.0);
         ui.horizontal(|ui| {
             if playback_dirty {

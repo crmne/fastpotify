@@ -51,7 +51,12 @@ page.
 The speaker icon in the player bar lists every Spotify Connect device on
 your account. Click one and the music moves there mid-song; the same
 controls keep working. "Playing on …" in the top bar reminds you when sound
-is coming out of something across the room.
+is coming out of something across the room. If you turned on alternate local
+audio, this computer is listed as a local player with that limitation, not as
+a Connect device, and the top bar names the match source. Playback starts as
+soon as the audio headers are in; some M4A files wait until download finishes.
+Network stalls and transient HTTP errors retry and resume. A terminal
+transport or decode failure stops the track instead of skipping.
 
 The queue lives behind the list icon, as a side panel or a full page. Add
 anything to it from a row's context menu.

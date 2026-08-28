@@ -45,9 +45,10 @@ nothing new to learn.
 
 This is a young project, and it says so:
 
-- **Playing on this computer needs Spotify Premium**, as with every
+- **Spotify Connect on this computer needs Spotify Premium**, as with every
   librespot-based client. Browsing, search, and remote control work on any
-  account.
+  account. Free or unconfirmed accounts use alternate local audio for
+  third-party matches; those matches are not Spotify audio.
 - Sign-in happens twice in a lifetime, not once: the Web API and streaming
   are separate grants at Spotify. [How it connects](/how-it-connects/)
   explains why.

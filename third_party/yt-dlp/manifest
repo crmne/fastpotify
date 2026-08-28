@@ -1,0 +1,15 @@
+# Official yt-dlp provenance for Fastpotify.
+# Vendor scripts download only from this pinned GitHub release.
+# Runtime never downloads yt-dlp.
+tag=2026.08.19
+version=2026.08.19
+base_url=https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19
+sha256sums=SHA2-256SUMS
+license=Unlicense
+# target upstream_name sha256
+asset=x86_64-pc-windows-msvc yt-dlp.exe 66674953fe251b89f4d08c5f0e35e0728679bd67ab3d7d05c0562af101dd3e7a
+asset=aarch64-pc-windows-msvc yt-dlp_arm64.exe 05b438997bafc3affdfda9d041353c9d73e04dc842207254b655b0887c4445b0
+asset=x86_64-unknown-linux-gnu yt-dlp_linux 58162f9bfdc27458ea47bfcb311cf47028f17d8154a8bf7d689861d46399230a
+asset=aarch64-unknown-linux-gnu yt-dlp_linux_aarch64 b16e4dab368a816cd05d477d698a605a6ae87ccee1c8ffd38fa21d7254141fcc
+asset=aarch64-apple-darwin yt-dlp_macos 0f192b7ec147ab6288885d6351d9ab67367640029b4377576ef46dd79cf7b202
+asset=x86_64-apple-darwin yt-dlp_macos 0f192b7ec147ab6288885d6351d9ab67367640029b4377576ef46dd79cf7b202

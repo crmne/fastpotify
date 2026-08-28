@@ -145,6 +145,10 @@ impl LocalTrack {
     pub fn artist_names(&self) -> String {
         self.artists.join(", ")
     }
+
+    pub fn has_search_metadata(&self) -> bool {
+        !self.title.is_empty() && self.artists.iter().any(|name| !name.is_empty())
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -162,6 +166,10 @@ pub struct LocalState {
     pub active_client: String,
     pub error: Option<String>,
     pub seek_sequence: u64,
+    /// Upcoming tracks after the current one. Empty for Spotify Connect.
+    pub queue: Vec<LocalTrack>,
+    /// Attribution for the current audio, when it is not Spotify.
+    pub source_label: Option<String>,
 }
 
 impl LocalState {
@@ -194,6 +202,9 @@ pub struct LoadSpec {
     pub position_ms: u32,
     pub play: bool,
     pub shuffle: Option<bool>,
+    /// Already-known title/artist/duration. Alternate playback uses this to
+    /// skip a redundant Spotify track fetch. Premium Connect ignores it.
+    pub known_tracks: Vec<LocalTrack>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -212,6 +223,8 @@ pub enum PlayerCommand {
     Repeat(RepeatMode),
     Load(LoadSpec),
     Activate,
+    Stop,
+    AddToQueue(LocalTrack),
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -402,6 +415,10 @@ impl Engine {
                 }
             },
             PlayerCommand::Activate => spirc.activate()?,
+            PlayerCommand::Stop => spirc.pause()?,
+            PlayerCommand::AddToQueue(_) => {
+                // Queue adds for Spotify Connect go through the Web API.
+            }
             PlayerCommand::Load(spec) => {
                 let playing_track = spec
                     .offset_uri

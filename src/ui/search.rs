@@ -117,6 +117,7 @@ fn all(app: &mut App, ui: &mut egui::Ui, results: &SearchResults) {
                 );
             } else if let Some(track) = results.tracks.as_ref().and_then(|page| page.items.first())
             {
+                app.remember_track(track);
                 let page = track
                     .album
                     .as_ref()

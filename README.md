@@ -18,9 +18,11 @@ as one ordinary desktop application rather than a shell plugin.
 
 ## What it does
 
-- **Plays music on this computer.** Fastpotify is a Spotify Connect device.
-  Pick it from your phone, or press play here. Gapless, up to 320 kbps, with
-  optional volume normalisation and an on-disk audio cache.
+- **Plays music on this computer.** Fastpotify is a Spotify Connect device by
+  default. Pick it from your phone, or press play here. Gapless, up to 320 kbps,
+  with optional volume normalisation and an on-disk audio cache. An
+  **alternate local audio** mode keeps Spotify metadata and plays a third-party
+  match instead; that is not Spotify audio and not Spotify Connect.
 - **Controls every other device.** Move playback to a speaker, a phone, or
   another computer from the device picker, and keep controlling it: play,
   pause, skip, seek, shuffle, repeat, volume.
@@ -121,12 +123,35 @@ of other devices work immediately. The refresh token is stored in the
 platform's state directory (`~/.local/state/fastpotify` on Linux), so the
 browser is needed once per machine.
 
-Playing music **on this computer** is one more one-time browser approval.
-Spotify treats streaming as a separate grant for its own client identity,
-which is what librespot plays with. Take it from the device menu ("Play
-here, set up once") or Settings; it needs Spotify Premium, and librespot
-stores a reusable credential so it also never asks again. Browsing and
-remote control work on any account without this step.
+Playing music **on this computer** through Spotify Connect is one more
+one-time browser approval. Spotify treats streaming as a separate grant for
+its own client identity, which is what librespot plays with. Take it from
+the device menu ("Play here, set up once") or Settings; it needs Spotify
+Premium, and librespot stores a reusable credential so it also never asks
+again. Browsing and remote control work on any account without this step.
+
+For a Free account, or until Spotify confirms Premium, Fastpotify selects
+**Alternate local audio** instead of attempting Spotify playback. Premium
+users can also select it under Settings → Playback on this computer. This
+mode still talks to the Spotify Web API for library, search, and metadata,
+then resolves each track against a Piped-compatible API you configure and/or
+`yt-dlp`.
+Fastpotify does not bundle Piped and does not ship a public Piped instance.
+Release builds embed one official pinned `yt-dlp` executable for that
+target, extract it into the local state directory, and never download it at
+runtime. A user-installed `yt-dlp` is used only when its version is strictly
+newer than the pin. Spotify tokens are never sent to those tools, and the
+result is not Spotify audio. You are responsible for the endpoint and any
+binary you run, and for their terms of use. Podcasts are not supported in
+that mode. Weak matches are never played. Playback starts when audio headers
+are in, not after a fixed time buffer. An M4A file with its `moov`
+atom at the end may wait until the download finishes. Alternate playback
+does not select Opus, WebM, or Ogg/Vorbis: YouTube's useful native
+alternative is WebM/Opus, and Opus is not decoded. Network stalls and
+transient HTTP errors retry with bounded backoff and resume from the ranges
+already received; expired media URLs are refreshed.
+A terminal transport or decode failure stops the current track instead of
+skipping it.
 
 By default the Web API uses the shared public application also used by
 spotify-player, ncspot, and Omarchy Spotify. If you hit rate limits you can
@@ -186,14 +211,20 @@ through its own script commands.
 Everything lives in one readable JSON file (`~/.config/fastpotify/settings.json`
 on Linux): the Connect device name, bitrate, normalisation, autoplay, gapless
 playback, the audio backend (PulseAudio/PipeWire or ALSA on Linux), audio
-cache size, theme, and whether pages take colour from artwork. Playback
-settings apply when you press **Apply and restart playback**.
+cache size, theme, whether pages take colour from artwork, and the optional
+alternate playback fields (`playback_backend`, `piped_api_base`, `ytdlp_path`,
+`alternate_min_score`, `alternate_skip_on_miss`). Playback settings apply when
+you press **Apply and restart playback**. Switching source stops the other
+engine so both never run at once. The default remains Spotify Connect.
 
 Caches (audio, artwork) live under the cache directory and can be deleted at
 any time without signing you out.
 
 ## How it is built
 
+- `src/alternate/`: opt-in third-party match playback (Piped / yt-dlp), ranking,
+  and a local engine that is not Spirc. Audio downloads into a bounded buffer
+  and starts before the file finishes. Official yt-dlp is pinned per target.
 - `src/player.rs`: the librespot session, player, mixer, and Spirc (Spotify
   Connect) wrapped into one engine that folds player events into a state
   snapshot for the interface.
@@ -227,7 +258,9 @@ PNG and exits, which is how the screenshot above is made.
 
 Fastpotify stands on [librespot](https://github.com/librespot-org/librespot),
 [egui](https://github.com/emilk/egui), the [Inter](https://rsms.me/inter/)
-typeface (OFL), and [Lucide](https://lucide.dev) icons (ISC).
+typeface (OFL), and [Lucide](https://lucide.dev) icons (ISC). Release builds
+may embed [yt-dlp](https://github.com/yt-dlp/yt-dlp) (Unlicense); see
+[third_party/yt-dlp/NOTICE](third_party/yt-dlp/NOTICE).
 
 Fastpotify is an independent project and is not affiliated with Spotify.
 Spotify is a trademark of Spotify AB.

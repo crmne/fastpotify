@@ -86,6 +86,11 @@ impl AppDirs {
         self.cache.join("playlists")
     }
 
+    /// Extracted helper binaries (bundled yt-dlp). Not cache; not config.
+    pub fn bin_dir(&self) -> PathBuf {
+        self.state.join("bin")
+    }
+
     pub fn ensure(&self) -> std::io::Result<()> {
         for dir in [&self.config, &self.state, &self.cache] {
             std::fs::create_dir_all(dir)?;

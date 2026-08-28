@@ -510,6 +510,17 @@ fn columns(width: f32, row: &TrackRow<'_>) -> Columns {
     }
 }
 
+fn play_from_row(app: &mut App, row: &TrackRow<'_>) {
+    if let PlayableItem::Track(track) = row.item {
+        app.remember_track(track);
+    }
+    app.actions.push(Action::PlayFromRow {
+        context: row.context.clone(),
+        uri: row.item.uri().to_string(),
+        index: row.index as u32,
+    });
+}
+
 /// Draws a track row; pushes actions for what the user did.
 pub fn track_row(ui: &mut Ui, app: &mut App, row: TrackRow<'_>) {
     let palette = app.palette;
@@ -791,11 +802,7 @@ pub fn track_row(ui: &mut Ui, app: &mut App, row: TrackRow<'_>) {
 
     // Row interactions.
     if response.double_clicked() && !unavailable {
-        app.actions.push(Action::PlayFromRow {
-            context: row.context.clone(),
-            uri: row.item.uri().to_string(),
-            index: row.index as u32,
-        });
+        play_from_row(app, &row);
     } else if response.clicked() && cols.number > 0.0 {
         let number_rect = Rect::from_min_size(
             pos2(rect.left() + 8.0, rect.top()),
@@ -809,11 +816,7 @@ pub fn track_row(ui: &mut Ui, app: &mut App, row: TrackRow<'_>) {
             if is_current {
                 app.actions.push(Action::TogglePlay);
             } else {
-                app.actions.push(Action::PlayFromRow {
-                    context: row.context.clone(),
-                    uri: row.item.uri().to_string(),
-                    index: row.index as u32,
-                });
+                play_from_row(app, &row);
             }
         }
     }

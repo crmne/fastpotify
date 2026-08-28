@@ -1,11 +1,32 @@
 //! Navigation arrows, search, and the account menu above every page.
 
+use egui::text::{LayoutJob, TextFormat};
 use egui::{Align, CornerRadius, Layout, Sense, Vec2, pos2, vec2};
 
 use crate::api::models::pick_image;
 use crate::app::App;
 use crate::model::{Action, Page};
 use crate::theme::{self, Icon, Palette};
+
+pub(crate) const AVATAR_SIZE: f32 = 36.0;
+const SETTINGS_HIT: f32 = 31.0;
+const CONTROL_GAP: f32 = 4.0;
+const SPINNER_SIZE: f32 = 15.0;
+const SOURCE_MIN: f32 = 48.0;
+
+/// Right-edge cluster: inset, avatar, gap, settings, optional spinner.
+/// Search and the source label must yield before this width is stolen.
+pub(crate) fn topbar_right_reserved(spinner: bool) -> f32 {
+    let spinner_w = if spinner { SPINNER_SIZE + 8.0 } else { 0.0 };
+    super::widgets::PAGE_PADDING + AVATAR_SIZE + CONTROL_GAP + SETTINGS_HIT + spinner_w
+}
+
+pub(crate) fn topbar_search_width(available_after_nav: f32, spinner: bool) -> f32 {
+    let reserved = topbar_right_reserved(spinner);
+    let cap = (available_after_nav - reserved).max(0.0);
+    let preferred = (available_after_nav * 0.5).clamp(160.0, 440.0);
+    preferred.min(cap)
+}
 
 fn nav_button(
     ui: &mut egui::Ui,
@@ -72,7 +93,11 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             }
             ui.add_space(8.0);
 
-            let search_width = (ui.available_width() * 0.5).clamp(200.0, 440.0);
+            let spinner = app
+                .backend
+                .activity()
+                .busy(std::time::Duration::from_millis(1000));
+            let search_width = topbar_search_width(ui.available_width(), spinner);
             let id = egui::Id::new("global-search");
             let before = app.search.query.clone();
             let response = super::widgets::search_field(
@@ -117,7 +142,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                         )
                     })
                     .unwrap_or_default();
-                let (rect, response) = ui.allocate_exact_size(Vec2::splat(36.0), Sense::click());
+                let (rect, response) =
+                    ui.allocate_exact_size(Vec2::splat(AVATAR_SIZE), Sense::click());
                 if ui.is_rect_visible(rect) {
                     let fill = if response.hovered() {
                         palette.surface_hover
@@ -212,51 +238,26 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 {
                     app.actions.push(Action::Open(Page::Settings));
                 }
-                // A quiet spinner once the app has been talking to Spotify for a
-                // while, long enough that fast requests never flash it.
-                if app
-                    .backend
-                    .activity()
-                    .busy(std::time::Duration::from_millis(1000))
-                {
-                    theme::spinner(ui, 15.0, palette.secondary)
+                if spinner {
+                    theme::spinner(ui, SPINNER_SIZE, palette.secondary)
                         .on_hover_text("Talking to Spotify…");
                 }
-                // Where playback is.
                 if let Some(now) = app.now_playing()
-                    && !now.local
+                    && (!now.local || now.source_label.is_some())
                 {
-                    let label = format!(
-                        "Playing on {}",
-                        now.device_name.unwrap_or_else(|| "another device".into())
-                    );
-                    let galley =
-                        ui.painter()
-                            .layout_no_wrap(label, theme::medium(12.5), palette.accent);
-                    let size = galley.size() + vec2(28.0, 12.0);
-                    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-                    ui.painter().rect_filled(
-                        rect,
-                        CornerRadius::same(14),
-                        palette.accent.gamma_multiply(0.16),
-                    );
-                    let icon_rect = egui::Rect::from_center_size(
-                        pos2(rect.left() + 14.0, rect.center().y),
-                        Vec2::splat(13.0),
-                    );
-                    Icon::Speaker
-                        .image(palette.accent, 13.0)
-                        .paint_at(ui, icon_rect);
-                    ui.painter().galley(
-                        pos2(rect.left() + 24.0, rect.center().y - galley.size().y / 2.0),
-                        galley,
-                        palette.accent,
-                    );
-                    if response
-                        .on_hover_cursor(egui::CursorIcon::PointingHand)
-                        .clicked()
-                    {
-                        app.actions.push(Action::ToggleDevicesPopup);
+                    let label = if now.local {
+                        now.source_label
+                            .clone()
+                            .unwrap_or_else(|| "Alternate local audio".into())
+                    } else {
+                        format!(
+                            "Playing on {}",
+                            now.device_name.unwrap_or_else(|| "another device".into())
+                        )
+                    };
+                    let max_w = ui.available_width();
+                    if max_w >= SOURCE_MIN {
+                        source_chip(ui, &palette, &label, max_w, &mut app.actions);
                     }
                 }
                 // A newer release. Most people never visit a releases page,
@@ -301,10 +302,108 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     );
 }
 
+fn source_chip(
+    ui: &mut egui::Ui,
+    palette: &Palette,
+    label: &str,
+    max_width: f32,
+    actions: &mut Vec<Action>,
+) {
+    let text_max = (max_width - 28.0).max(8.0);
+    let mut job = LayoutJob::single_section(
+        label.to_string(),
+        TextFormat {
+            font_id: theme::medium(12.5),
+            color: palette.accent,
+            ..Default::default()
+        },
+    );
+    job.wrap.max_width = text_max;
+    job.wrap.max_rows = 1;
+    job.wrap.break_anywhere = true;
+    job.wrap.overflow_character = Some('…');
+    let galley = ui.ctx().fonts_mut(|fonts| fonts.layout_job(job));
+    let size = vec2(
+        (galley.size().x + 28.0).min(max_width),
+        galley.size().y + 12.0,
+    );
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    ui.painter().rect_filled(
+        rect,
+        CornerRadius::same(14),
+        palette.accent.gamma_multiply(0.16),
+    );
+    let icon_rect =
+        egui::Rect::from_center_size(pos2(rect.left() + 14.0, rect.center().y), Vec2::splat(13.0));
+    Icon::Speaker
+        .image(palette.accent, 13.0)
+        .paint_at(ui, icon_rect);
+    ui.painter().galley(
+        pos2(rect.left() + 24.0, rect.center().y - galley.size().y / 2.0),
+        galley,
+        palette.accent,
+    );
+    if response
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .clicked()
+    {
+        actions.push(Action::ToggleDevicesPopup);
+    }
+}
+
 fn capitalize(text: &str) -> String {
     let mut chars = text.chars();
     match chars.next() {
         Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
         None => String::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn right_cluster_keeps_avatar_inset() {
+        let reserved = topbar_right_reserved(false);
+        assert!(reserved >= super::super::widgets::PAGE_PADDING + AVATAR_SIZE);
+        let total = 760.0;
+        let nav = super::super::widgets::PAGE_PADDING + 32.0 + 8.0 + 32.0 + 8.0;
+        let after_nav = total - nav;
+        let search = topbar_search_width(after_nav, false);
+        let right = after_nav - search;
+        assert!(
+            right + 0.5 >= topbar_right_reserved(false),
+            "search stole the avatar inset: search={search} right={right} reserved={reserved}"
+        );
+    }
+
+    #[test]
+    fn narrow_width_shrinks_search_before_avatar() {
+        let nav = super::super::widgets::PAGE_PADDING + 32.0 + 8.0 + 32.0 + 8.0;
+        let total = 500.0;
+        let after_nav = total - nav;
+        let search = topbar_search_width(after_nav, true);
+        let right = after_nav - search;
+        assert!(right + 0.5 >= topbar_right_reserved(true));
+        assert!(
+            search < 200.0,
+            "search should yield on a narrow bar, got {search}"
+        );
+        let avatar_right = total - super::super::widgets::PAGE_PADDING;
+        let avatar_left = avatar_right - AVATAR_SIZE;
+        assert!(avatar_left >= 0.0);
+        assert!(avatar_right <= total);
+    }
+
+    #[test]
+    fn long_source_does_not_reduce_right_reserved() {
+        let reserved = topbar_right_reserved(false);
+        let after_nav = 400.0;
+        let search = topbar_search_width(after_nav, false);
+        let leftover = after_nav - search;
+        assert!(leftover + 0.5 >= reserved);
+        let source_max = leftover - reserved;
+        assert!(source_max < 280.0 || leftover >= reserved);
     }
 }

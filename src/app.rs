@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 use egui::Color32;
 
+use crate::alternate::{AlternateConfig, local_from_track};
 use crate::api::PlayRequest;
 use crate::api::models::{
     ArtistRef, Device, PlayableItem, PlaybackState, Playlist, Queue, Track, User, pick_image,
@@ -17,8 +18,10 @@ use crate::media::{MediaCommand, MediaState, MediaTrack};
 use crate::media_controls::MediaService;
 use crate::model::*;
 use crate::paths::AppDirs;
-use crate::player::{EngineConfig, LoadSpec, LocalState, Playback, PlayerCommand, RepeatMode};
-use crate::settings::{SessionState, Settings, ThemeChoice};
+use crate::player::{
+    EngineConfig, LoadSpec, LocalState, LocalTrack, Playback, PlayerCommand, RepeatMode,
+};
+use crate::settings::{PlaybackBackend, SessionState, Settings, ThemeChoice};
 use crate::single_instance::ControlCommand;
 use crate::theme::{self, Palette};
 use crate::tray::{TrayCommand, TrayService};
@@ -84,6 +87,7 @@ pub struct NowPlaying {
     pub volume_percent: u8,
     pub can_control: bool,
     pub is_episode: bool,
+    pub source_label: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -246,8 +250,7 @@ pub struct App {
     /// User ids resolved to display names; `None` while unknown, so an id
     /// is asked about only once per run.
     pub user_names: HashMap<String, Option<String>>,
-    /// Context URIs most recently played, newest first: the sidebar's
-    /// order. Kept with the session, so it survives a restart.
+    /// Context URIs most recently played, newest first: the sidebar's order.
     pub recent_contexts: Vec<String>,
     /// What was playing when the app last closed, to resume from cold.
     resume_context: Option<String>,
@@ -256,6 +259,12 @@ pub struct App {
     /// A newer release than this build, once GitHub has said so.
     pub update: Option<crate::updates::Release>,
     last_update_check: Option<Instant>,
+    /// Free-account (or Premium-required) switch to Alternate already applied.
+    free_alternate_applied: bool,
+    /// Local engine started once after `/me` selected the effective mode.
+    profile_playback_applied: bool,
+    /// One quiet toast while `/me` has not arrived yet.
+    loading_account_toasted: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -286,6 +295,8 @@ impl App {
             engine_config,
             settings.web_client_id.clone(),
             waker.clone(),
+            settings.playback_backend,
+            AlternateConfig::from_settings(&settings),
         );
         let wake = waker.clone();
         let media_controls = options
@@ -397,6 +408,9 @@ impl App {
             resume_position_ms: session.last_position_ms,
             update: None,
             last_update_check: None,
+            free_alternate_applied: false,
+            profile_playback_applied: false,
+            loading_account_toasted: false,
         };
         app.local.volume = app.settings.volume;
         app
@@ -467,8 +481,37 @@ impl App {
             .filter(|remote| remote.received_at.elapsed() < REMOTE_FRESH)
     }
 
+    pub fn is_free_account(&self) -> bool {
+        is_free_spotify_product(self.user.as_ref().and_then(|user| user.product.as_deref()))
+    }
+
+    pub fn is_confirmed_premium(&self) -> bool {
+        is_confirmed_premium_product(self.user.as_ref().and_then(|user| user.product.as_deref()))
+    }
+
+    pub fn alternate_local(&self) -> bool {
+        uses_local_transport(
+            self.settings.playback_backend,
+            self.user.as_ref().and_then(|user| user.product.as_deref()),
+            &self.local_playback,
+            self.user.is_some(),
+        )
+    }
+
+    fn allows_spotify_player_api(&self) -> bool {
+        self.is_connected() && self.is_confirmed_premium() && !self.alternate_local()
+    }
+
+    /// Local Alternate, or a loaded profile that can legally use player APIs.
+    pub fn transport_ready(&self) -> bool {
+        self.alternate_local() || self.user.is_some()
+    }
+
     /// Where playback commands go: this computer's player or a remote device.
     pub fn target(&self) -> Target {
+        if self.alternate_local() || self.user.is_none() {
+            return Target::Local;
+        }
         if self.local_ready && self.local.is_active() {
             return Target::Local;
         }
@@ -590,6 +633,7 @@ impl App {
                 volume_percent: volume_to_percent(self.local.volume),
                 can_control: true,
                 is_episode: track.is_episode,
+                source_label: self.local.source_label.clone(),
             });
         }
         let remote = self.remote_fresh()?;
@@ -663,6 +707,7 @@ impl App {
             volume_percent: volume,
             can_control: device.is_none_or(|device| !device.is_restricted),
             is_episode,
+            source_label: None,
         })
     }
 
@@ -790,13 +835,15 @@ impl App {
                 self.reset_data();
                 self.load_playlists();
                 self.ensure_loaded(self.page().clone());
-                self.poll_remote(true);
             }
             AuthStatus::WaitingForBrowser { url } => self.sign_in_url = Some(url.clone()),
             AuthStatus::SignedOut => {
                 self.sign_in_url = None;
                 self.web_app = None;
                 self.user = None;
+                self.free_alternate_applied = false;
+                self.profile_playback_applied = false;
+                self.loading_account_toasted = false;
                 self.local = LocalState::default();
                 self.local_ready = false;
                 self.local_device_id = None;
@@ -822,6 +869,13 @@ impl App {
                     self.play_request(request, false);
                 }
             }
+            LocalPlayback::AlternateReady { .. } => {
+                self.local_device_id = None;
+                self.local_ready = true;
+                if let Some(request) = self.queued_play.take() {
+                    self.play_request(request, false);
+                }
+            }
             LocalPlayback::Unavailable => {
                 self.local_ready = false;
                 self.local_device_id = None;
@@ -831,7 +885,11 @@ impl App {
                 if self.queued_play.take().is_some() {
                     self.clear_play_pending();
                 }
-                self.toast_error(format!("Local playback: {message}"));
+                if crate::backend::connect_error_is_entitlement(message) {
+                    self.apply_free_alternate_mode();
+                } else {
+                    self.toast_error(format!("Local playback: {message}"));
+                }
             }
             LocalPlayback::Authorizing | LocalPlayback::Connecting => {}
         }
@@ -883,6 +941,10 @@ impl App {
         self.local = state;
         if let Some(volume) = held_volume {
             self.local.volume = volume;
+        }
+        if matches!(self.local_playback, LocalPlayback::AlternateReady { .. }) {
+            self.queue = Loadable::Loaded(queue_from_local(&self.local, &self.track_cache));
+            self.queue_fetched_at = Some(Instant::now());
         }
         if track_changed {
             self.on_now_playing_changed();
@@ -949,6 +1011,12 @@ impl App {
                 duration_ms: now.duration_ms,
             },
         })));
+    }
+
+    pub fn remember_track(&mut self, track: &Track) {
+        if let Some(id) = track.id.as_deref().filter(|id| !id.is_empty()) {
+            self.track_cache.insert(id.to_string(), track.clone());
+        }
     }
 
     fn tick(&mut self, ctx: &egui::Context) {
@@ -1470,7 +1538,7 @@ impl App {
     }
 
     fn poll_remote(&mut self, _immediate: bool) {
-        if !self.is_connected() {
+        if !self.allows_spotify_player_api() {
             return;
         }
         self.remote_poll_pending = true;
@@ -1482,7 +1550,7 @@ impl App {
     }
 
     fn refresh_devices(&mut self) {
-        if !self.is_connected() || self.devices_loading {
+        if !self.allows_spotify_player_api() || self.devices_loading {
             return;
         }
         self.devices_loading = true;
@@ -1490,7 +1558,12 @@ impl App {
     }
 
     fn refresh_queue(&mut self, force: bool) {
-        if !self.is_connected() {
+        if self.alternate_local() {
+            self.queue = Loadable::Loaded(queue_from_local(&self.local, &self.track_cache));
+            self.queue_fetched_at = Some(Instant::now());
+            return;
+        }
+        if !self.allows_spotify_player_api() {
             return;
         }
         if self.queue.is_loading() && !force {
@@ -1575,10 +1648,18 @@ impl App {
             ApiResponse::Me(result) => match result {
                 Ok(user) => {
                     self.user = Some(user);
+                    self.loading_account_toasted = false;
+                    self.start_playback_after_profile();
+                    if self.allows_spotify_player_api() {
+                        self.poll_remote(true);
+                    }
                     let page = self.page().clone();
                     self.ensure_loaded(page);
                     if let Some(now) = self.now_playing() {
                         self.request_contains(vec![now.uri]);
+                    }
+                    if let Some(request) = self.queued_play.take() {
+                        self.play_request(request, false);
                     }
                 }
                 Err(error) => {
@@ -1621,6 +1702,9 @@ impl App {
                         {
                             self.selected_device = None;
                         }
+                    }
+                    Err(error) if error.is_premium_required() => {
+                        self.apply_free_alternate_mode();
                     }
                     Err(error) => self.toast_error(format!("Couldn't list devices: {error}")),
                 }
@@ -1678,6 +1762,7 @@ impl App {
                             known.volume_percent = device.volume_percent;
                         }
                         if let Some((wanted, _)) = self.optimistic_playing
+                            && !self.local.is_active()
                             && self
                                 .remote
                                 .as_ref()
@@ -1685,14 +1770,25 @@ impl App {
                         {
                             self.optimistic_playing = None;
                         }
-                        if uri != previous_uri {
+                        if uri != previous_uri && !self.local.is_active() {
                             self.on_now_playing_changed();
                         }
+                    }
+                    Err(error) if error.is_premium_required() => {
+                        self.apply_free_alternate_mode();
                     }
                     Err(error) => log::debug!("playback state unavailable: {error}"),
                 }
             }
             ApiResponse::Queue(result) => {
+                if let Err(error) = &result
+                    && error.is_premium_required()
+                {
+                    self.apply_free_alternate_mode();
+                    self.queue = Loadable::Loaded(queue_from_local(&self.local, &self.track_cache));
+                    self.queue_fetched_at = Some(Instant::now());
+                    return;
+                }
                 self.queue = Loadable::from_result(result);
                 if let Some(queue) = self.queue.get() {
                     let uris: Vec<String> = queue
@@ -2308,6 +2404,18 @@ impl App {
                 match result {
                     Ok(()) => {
                         self.remote_recheck_at = Some(Instant::now() + REMOTE_RECHECK);
+                        self.poll_remote_soon();
+                    }
+                    Err(error) if error.is_premium_required() => {
+                        let retry_volume = if action == RemoteAction::Volume {
+                            self.pending_remote_volume.map(|(percent, _)| percent)
+                        } else {
+                            None
+                        };
+                        self.apply_free_alternate_mode();
+                        if let Some(percent) = retry_volume {
+                            self.set_volume(percent, true);
+                        }
                     }
                     Err(error) => {
                         self.optimistic_playing = None;
@@ -2322,9 +2430,9 @@ impl App {
                             "{}: {error}.{hint}",
                             remote_action_label(action)
                         ));
+                        self.poll_remote_soon();
                     }
                 }
-                self.poll_remote_soon();
             }
             ApiResponse::Transferred { device_id, result } => match result {
                 Ok(()) => {
@@ -2333,12 +2441,18 @@ impl App {
                     self.poll_remote_soon();
                     self.refresh_devices();
                 }
+                Err(error) if error.is_premium_required() => {
+                    self.apply_free_alternate_mode();
+                }
                 Err(error) => self.toast_error(format!("Couldn't switch device: {error}")),
             },
             ApiResponse::QueueAdded { label, result } => match result {
                 Ok(()) => {
                     self.toast(format!("Added {label} to queue"));
                     self.refresh_queue(true);
+                }
+                Err(error) if error.is_premium_required() => {
+                    self.apply_free_alternate_mode();
                 }
                 Err(error) => self.toast_error(format!("Couldn't add to queue: {error}")),
             },
@@ -2347,6 +2461,97 @@ impl App {
 
     fn poll_remote_soon(&mut self) {
         self.remote_polled_at = Instant::now() - REMOTE_POLL_IDLE + Duration::from_millis(700);
+    }
+
+    fn clear_remote_control_state(&mut self) {
+        self.selected_device = None;
+        self.remote = None;
+        self.remote_poll_pending = false;
+        self.remote_recheck_at = None;
+        self.pending_remote_position = None;
+        self.pending_remote_volume = None;
+        self.pending_transfer_to = None;
+        self.devices_loading = false;
+        self.activating_receiver = None;
+        self.devices.clear();
+        self.receivers.clear();
+    }
+
+    fn apply_free_alternate_mode(&mut self) {
+        let product = self.user.as_ref().and_then(|user| user.product.clone());
+        let needs_switch = self.settings.playback_backend != PlaybackBackend::Alternate;
+        let first = !self.free_alternate_applied;
+        let start = !self.profile_playback_applied || needs_switch;
+        self.settings.playback_backend = PlaybackBackend::Alternate;
+        self.free_alternate_applied = true;
+        self.profile_playback_applied = true;
+        self.clear_remote_control_state();
+        if needs_switch {
+            self.settings_dirty = true;
+            self.save_settings();
+        }
+        if start {
+            self.backend.send(Command::RestartEngine {
+                config: engine_config(&self.dirs, &self.settings),
+                mode: PlaybackBackend::Alternate,
+                alternate: AlternateConfig::from_settings(&self.settings),
+            });
+        }
+        if first && needs_switch {
+            self.toast(if is_free_spotify_product(product.as_deref()) {
+                FREE_ALTERNATE_TOAST
+            } else {
+                UNCONFIRMED_ALTERNATE_TOAST
+            });
+        }
+    }
+
+    fn start_playback_after_profile(&mut self) {
+        let product = self.user.as_ref().and_then(|user| user.product.clone());
+        let product = product.as_deref();
+        log::info!(
+            "Spotify product classification: {}",
+            if is_confirmed_premium_product(product) {
+                "premium"
+            } else {
+                "unconfirmed"
+            }
+        );
+        let plan = profile_playback_plan(
+            product,
+            self.settings.playback_backend,
+            self.profile_playback_applied,
+        );
+        if requires_alternate_product(product) {
+            self.apply_free_alternate_mode();
+            return;
+        }
+        if !plan.start_engine {
+            return;
+        }
+        self.profile_playback_applied = true;
+        self.backend.send(Command::RestartEngine {
+            config: engine_config(&self.dirs, &self.settings),
+            mode: plan.mode,
+            alternate: AlternateConfig::from_settings(&self.settings),
+        });
+    }
+
+    fn notify_loading_account(&mut self) {
+        if self.loading_account_toasted {
+            return;
+        }
+        self.loading_account_toasted = true;
+        self.toast("Loading account...");
+    }
+
+    fn require_transport(&mut self) -> bool {
+        if self.transport_ready() {
+            true
+        } else {
+            self.notify_loading_account();
+            false
+        }
     }
 
     // ---- navigation ------------------------------------------------------------
@@ -2377,6 +2582,9 @@ impl App {
     // ---- playback --------------------------------------------------------------
 
     fn remote(&mut self, action: RemoteAction, device_id: Option<String>) {
+        if !self.allows_spotify_player_api() {
+            return;
+        }
         if device_id.is_none() && self.remote_fresh().is_none() {
             // Spotify would only answer "no active device found".
             self.clear_play_pending();
@@ -2394,8 +2602,7 @@ impl App {
         });
     }
 
-    /// Remembers `uri` as the most recently played context, for the
-    /// sidebar's order.
+    /// Remembers `uri` as the most recently played context, for the sidebar's order.
     fn note_recent_context(&mut self, uri: &str) {
         if !uri.contains(":playlist:") && !uri.contains(":album:") && !uri.contains(":collection") {
             return;
@@ -2405,9 +2612,48 @@ impl App {
         self.recent_contexts.truncate(60);
     }
 
-    /// With `shuffle_first`, shuffle is turned on before playback starts,
-    /// in one ordered exchange: two independent requests race, and shuffle
-    /// sometimes lost.
+    fn load_spec(&self, request: PlayRequest, play: bool, shuffle: Option<bool>) -> LoadSpec {
+        let known_tracks = if self.alternate_local() {
+            self.known_local_tracks(&request)
+        } else {
+            Vec::new()
+        };
+        LoadSpec {
+            context_uri: request.context_uri,
+            uris: request.uris,
+            offset_uri: request.offset_uri,
+            offset_index: request.offset_position,
+            position_ms: request.position_ms,
+            play,
+            shuffle,
+            known_tracks,
+        }
+    }
+
+    fn known_local_tracks(&self, request: &PlayRequest) -> Vec<LocalTrack> {
+        let mut uris = Vec::new();
+        if let Some(uri) = &request.offset_uri {
+            uris.push(uri.clone());
+        }
+        uris.extend(request.uris.iter().cloned());
+        let mut seen = HashSet::new();
+        let mut out = Vec::new();
+        for uri in uris {
+            if !seen.insert(uri.clone()) {
+                continue;
+            }
+            let Some(track) = util::uri_id(&uri).and_then(|id| self.track_cache.get(id)) else {
+                continue;
+            };
+            let local = local_from_track(track);
+            if local.has_search_metadata() {
+                out.push(local);
+            }
+        }
+        out
+    }
+
+    /// With `shuffle_first`, shuffle is turned on before playback starts in one ordered exchange.
     fn play_request(&mut self, request: PlayRequest, shuffle_first: bool) {
         let mut keys: Vec<String> = Vec::new();
         if let Some(context) = &request.context_uri {
@@ -2434,26 +2680,28 @@ impl App {
         self.set_play_pending(keys);
         if let Some(context) = request.context_uri.clone() {
             self.note_recent_context(&context);
-            // Light the page and the sidebar up at once; Spotify's own
-            // state takes a poll or two to say the same thing.
             self.assumed_context = Some(AssumedContext {
                 uri: context,
                 shuffle: shuffle_first.then_some(true),
                 at: Instant::now(),
             });
         }
+        if !self.transport_ready() {
+            self.queued_play = Some(request);
+            return;
+        }
         match self.target() {
             Target::Local => {
+                if !self.local_ready {
+                    self.queued_play = Some(request);
+                    return;
+                }
                 self.queued_play = None;
-                self.backend.player(PlayerCommand::Load(LoadSpec {
-                    context_uri: request.context_uri.clone(),
-                    uris: request.uris.clone(),
-                    offset_uri: request.offset_uri.clone(),
-                    offset_index: request.offset_position,
-                    position_ms: request.position_ms,
-                    play: true,
-                    shuffle: shuffle_first.then_some(true),
-                }));
+                self.backend.player(PlayerCommand::Load(self.load_spec(
+                    request,
+                    true,
+                    shuffle_first.then_some(true),
+                )));
                 self.optimistic_playing = Some((true, Instant::now()));
             }
             Target::Remote(Some(device_id)) => {
@@ -2564,6 +2812,9 @@ impl App {
     }
 
     fn toggle_play(&mut self) {
+        if !self.require_transport() {
+            return;
+        }
         let playing = self.now_playing().map(|now| now.playing);
         match self.target() {
             Target::Local => {
@@ -2618,6 +2869,9 @@ impl App {
     }
 
     fn seek(&mut self, position_ms: u32) {
+        if !self.require_transport() {
+            return;
+        }
         match self.target() {
             Target::Local => self.backend.player(PlayerCommand::Seek(position_ms)),
             Target::Remote(device_id) => {
@@ -2653,6 +2907,10 @@ impl App {
     /// at once, and Spotify is told where it ended up on release.
     fn set_volume(&mut self, percent: u8, settle: bool) {
         let percent = percent.min(100);
+        if !self.transport_ready() {
+            self.local.volume = percent_to_volume(percent);
+            return;
+        }
         match self.target() {
             Target::Local => {
                 let volume = percent_to_volume(percent);
@@ -2688,6 +2946,9 @@ impl App {
     }
 
     fn set_shuffle(&mut self, shuffle: bool) {
+        if !self.require_transport() {
+            return;
+        }
         if let Some(assumed) = &mut self.assumed_context {
             assumed.shuffle = Some(shuffle);
         }
@@ -2714,6 +2975,9 @@ impl App {
     }
 
     fn set_repeat(&mut self, mode: RepeatMode) {
+        if !self.require_transport() {
+            return;
+        }
         match self.target() {
             Target::Local => {
                 self.local.repeat = mode;
@@ -2737,6 +3001,19 @@ impl App {
     }
 
     fn transfer(&mut self, device_id: String) {
+        if !self.require_transport() {
+            return;
+        }
+        if self.alternate_local() {
+            self.select_this_computer();
+            return;
+        }
+        if matches!(self.local_playback, LocalPlayback::AlternateReady { .. })
+            && self.local.is_active()
+            && Some(device_id.as_str()) != self.local_device_id.as_deref()
+        {
+            self.backend.player(PlayerCommand::Stop);
+        }
         if Some(device_id.as_str()) == self.local_device_id.as_deref() {
             self.selected_device = None;
             self.show_devices = false;
@@ -2761,15 +3038,11 @@ impl App {
                     _ => PlayRequest::tracks(vec![uri]),
                 };
                 request.position_ms = position;
-                self.backend.player(PlayerCommand::Load(LoadSpec {
-                    context_uri: request.context_uri,
-                    uris: request.uris,
-                    offset_uri: request.offset_uri,
-                    offset_index: None,
-                    position_ms: request.position_ms,
-                    play: was_playing,
-                    shuffle: None,
-                }));
+                self.backend.player(PlayerCommand::Load(self.load_spec(
+                    request,
+                    was_playing,
+                    None,
+                )));
             }
             self.poll_remote_soon();
             return;
@@ -2780,6 +3053,28 @@ impl App {
     }
 
     fn add_to_queue(&mut self, uri: String, label: String) {
+        if !self.transport_ready() {
+            self.notify_loading_account();
+            return;
+        }
+        if self.alternate_local() {
+            if uri.contains(":episode:") || uri.contains(":show:") {
+                self.toast_error("Podcasts are not supported in alternate playback");
+                return;
+            }
+            let track = util::uri_id(&uri)
+                .and_then(|id| self.track_cache.get(id))
+                .map(local_from_track)
+                .unwrap_or(LocalTrack {
+                    uri: uri.clone(),
+                    title: label.clone(),
+                    ..LocalTrack::default()
+                });
+            self.backend.player(PlayerCommand::AddToQueue(track));
+            self.toast(format!("Added {label} to queue"));
+            self.refresh_queue(true);
+            return;
+        }
         let device_id = match self.target() {
             Target::Local => self.local_device_id.clone(),
             Target::Remote(device_id) => device_id,
@@ -2789,6 +3084,17 @@ impl App {
             device_id,
             label,
         });
+    }
+
+    fn select_this_computer(&mut self) {
+        self.selected_device = None;
+        self.show_devices = false;
+        if matches!(self.local_playback, LocalPlayback::AlternateReady { .. }) {
+            return;
+        }
+        if self.local_ready {
+            self.backend.player(PlayerCommand::Activate);
+        }
     }
 
     fn set_saved(&mut self, uri: String, saved: bool) {
@@ -2878,14 +3184,24 @@ impl App {
                 self.play_request(PlayRequest::context(uri), true);
             }
             Action::TogglePlay => self.toggle_play(),
-            Action::Next => match self.target() {
-                Target::Local => self.backend.player(PlayerCommand::Next),
-                Target::Remote(device_id) => self.remote(RemoteAction::Next, device_id),
-            },
-            Action::Previous => match self.target() {
-                Target::Local => self.backend.player(PlayerCommand::Previous),
-                Target::Remote(device_id) => self.remote(RemoteAction::Previous, device_id),
-            },
+            Action::Next => {
+                if !self.require_transport() {
+                    return;
+                }
+                match self.target() {
+                    Target::Local => self.backend.player(PlayerCommand::Next),
+                    Target::Remote(device_id) => self.remote(RemoteAction::Next, device_id),
+                }
+            }
+            Action::Previous => {
+                if !self.require_transport() {
+                    return;
+                }
+                match self.target() {
+                    Target::Local => self.backend.player(PlayerCommand::Previous),
+                    Target::Remote(device_id) => self.remote(RemoteAction::Previous, device_id),
+                }
+            }
             Action::Seek(position_ms) => self.seek(position_ms),
             Action::SeekBy(offset) => {
                 if let Some(now) = self.now_playing() {
@@ -3046,12 +3362,18 @@ impl App {
             }
             Action::Transfer(device_id) => self.transfer(device_id),
             Action::ActivateReceiver(receiver) => {
+                if !self.require_transport() || self.alternate_local() {
+                    return;
+                }
                 if self.activating_receiver.is_none() {
                     self.activating_receiver = Some(receiver.name.clone());
                     self.backend.send(Command::ActivateReceiver(receiver));
                 }
             }
             Action::RefreshDevices => {
+                if !self.allows_spotify_player_api() {
+                    return;
+                }
                 self.devices_fetched_at = None;
                 self.refresh_devices();
                 self.backend.send(Command::DiscoverReceivers);
@@ -3139,7 +3461,7 @@ impl App {
             }
             Action::ToggleDevicesPopup => {
                 self.show_devices = !self.show_devices;
-                if self.show_devices {
+                if self.show_devices && self.allows_spotify_player_api() {
                     self.refresh_devices();
                     // Receivers waiting on the network are invisible to the
                     // Web API, so look for them ourselves.
@@ -3155,13 +3477,26 @@ impl App {
                 });
             }
             Action::RestartEngine => {
+                if self.user.is_none() {
+                    self.notify_loading_account();
+                    return;
+                }
+                if !self.is_confirmed_premium() {
+                    self.settings.playback_backend = PlaybackBackend::Alternate;
+                }
                 self.save_settings();
                 let config = engine_config(&self.dirs, &self.settings);
-                self.backend.send(Command::RestartEngine(config));
-                if self.local_ready {
+                self.backend.send(Command::RestartEngine {
+                    config,
+                    mode: self.settings.playback_backend,
+                    alternate: AlternateConfig::from_settings(&self.settings),
+                });
+                if self.local_ready || self.settings.playback_backend == PlaybackBackend::Alternate
+                {
                     self.toast("Restarting local playback");
                 }
             }
+            Action::SelectLocalPlayback => self.select_this_computer(),
             Action::ShowWindow => {
                 if self.window_hidden {
                     // No window exists; the outer loop creates one.
@@ -3177,14 +3512,24 @@ impl App {
                 }
             }
             Action::EnablePlayback => {
-                let free = self
-                    .user
-                    .as_ref()
-                    .and_then(|user| user.product.as_deref())
-                    .is_some_and(|product| product != "premium");
-                if free {
-                    self.toast_error("Local playback needs Spotify Premium");
-                } else if !self.local_ready
+                if self.user.is_none() {
+                    self.notify_loading_account();
+                    return;
+                }
+                if !self.is_confirmed_premium() {
+                    self.apply_free_alternate_mode();
+                    return;
+                }
+                if self.settings.playback_backend == PlaybackBackend::Alternate {
+                    self.open(Page::Settings);
+                    self.toast(if crate::alternate::has_bundled_ytdlp() {
+                        "Apply playback settings to start alternate local audio"
+                    } else {
+                        "Set a Piped API URL or yt-dlp path, then apply playback settings"
+                    });
+                    return;
+                }
+                if !self.local_ready
                     && !matches!(
                         self.local_playback,
                         LocalPlayback::Authorizing | LocalPlayback::Connecting
@@ -3457,6 +3802,148 @@ pub fn percent_to_volume(percent: u8) -> u16 {
     ((u32::from(percent.min(100)) * u32::from(u16::MAX)) / 100) as u16
 }
 
+const FREE_ALTERNATE_TOAST: &str =
+    "Spotify Free uses bundled alternate local audio; not Spotify audio/Connect.";
+const UNCONFIRMED_ALTERNATE_TOAST: &str =
+    "Spotify playback is not confirmed Premium; using bundled alternate audio";
+
+fn normalized_product(product: Option<&str>) -> Option<&str> {
+    product.map(str::trim).filter(|value| !value.is_empty())
+}
+
+/// Only an explicit Premium product may use Spotify Connect / librespot.
+pub fn is_confirmed_premium_product(product: Option<&str>) -> bool {
+    normalized_product(product).is_some_and(|value| value.eq_ignore_ascii_case("premium"))
+}
+
+/// Free, open, empty, missing, and unknown products use Alternate.
+pub fn requires_alternate_product(product: Option<&str>) -> bool {
+    !is_confirmed_premium_product(product)
+}
+
+/// Spotify `product` values that are known Free-tier labels.
+pub fn is_free_spotify_product(product: Option<&str>) -> bool {
+    normalized_product(product).is_some_and(|value| {
+        value.eq_ignore_ascii_case("free") || value.eq_ignore_ascii_case("open")
+    })
+}
+
+/// Persist Alternate when the account is not confirmed Premium and settings still say Connect.
+pub fn should_force_alternate(product: Option<&str>, current: PlaybackBackend) -> bool {
+    requires_alternate_product(product) && current != PlaybackBackend::Alternate
+}
+
+/// What to do the first time `/me` arrives. Local engines stay down until this.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ProfilePlaybackPlan {
+    pub mode: PlaybackBackend,
+    pub start_engine: bool,
+    pub persist_alternate: bool,
+    pub toast_free: bool,
+    pub toast_unconfirmed: bool,
+}
+
+/// Map account product + stored mode to one engine start. Repeated loads are no-ops.
+pub fn profile_playback_plan(
+    product: Option<&str>,
+    stored: PlaybackBackend,
+    already_applied: bool,
+) -> ProfilePlaybackPlan {
+    let mode = if is_confirmed_premium_product(product) {
+        stored
+    } else {
+        PlaybackBackend::Alternate
+    };
+    if already_applied {
+        return ProfilePlaybackPlan {
+            mode,
+            start_engine: false,
+            persist_alternate: false,
+            toast_free: false,
+            toast_unconfirmed: false,
+        };
+    }
+    let persist_alternate = should_force_alternate(product, stored);
+    ProfilePlaybackPlan {
+        mode,
+        start_engine: true,
+        persist_alternate,
+        toast_free: persist_alternate && is_free_spotify_product(product),
+        toast_unconfirmed: persist_alternate && !is_free_spotify_product(product),
+    }
+}
+
+/// Volume and other transport controls stay on this computer.
+pub fn uses_local_transport(
+    playback_backend: PlaybackBackend,
+    product: Option<&str>,
+    local_playback: &LocalPlayback,
+    profile_loaded: bool,
+) -> bool {
+    playback_backend == PlaybackBackend::Alternate
+        || matches!(local_playback, LocalPlayback::AlternateReady { .. })
+        || (profile_loaded && requires_alternate_product(product))
+}
+
+fn queue_from_local(
+    local: &LocalState,
+    cache: &HashMap<String, Track>,
+) -> crate::api::models::Queue {
+    let currently_playing = local
+        .track
+        .as_ref()
+        .map(|track| playable_from_local(track, cache));
+    let queue = local
+        .queue
+        .iter()
+        .map(|track| playable_from_local(track, cache))
+        .collect();
+    crate::api::models::Queue {
+        currently_playing,
+        queue,
+    }
+}
+
+fn playable_from_local(
+    track: &LocalTrack,
+    cache: &HashMap<String, Track>,
+) -> crate::api::models::PlayableItem {
+    if let Some(cached) = util::uri_id(&track.uri).and_then(|id| cache.get(id)) {
+        return crate::api::models::PlayableItem::Track(cached.clone());
+    }
+    crate::api::models::PlayableItem::Track(Track {
+        id: util::uri_id(&track.uri).map(str::to_string),
+        name: track.title.clone(),
+        uri: track.uri.clone(),
+        duration_ms: track.duration_ms,
+        artists: track
+            .artists
+            .iter()
+            .map(|name| crate::api::models::ArtistRef {
+                id: None,
+                name: name.clone(),
+                uri: None,
+            })
+            .collect(),
+        album: Some(crate::api::models::Album {
+            name: track.album.clone(),
+            images: track
+                .art_url
+                .as_ref()
+                .map(|url| {
+                    vec![crate::api::models::Image {
+                        url: url.clone(),
+                        width: None,
+                        height: None,
+                    }]
+                })
+                .unwrap_or_default(),
+            ..crate::api::models::Album::default()
+        }),
+        ..Track::default()
+    })
+}
+
 fn page_related_needs_load(pages: &HashMap<String, ArtistPage>, id: &str) -> bool {
     pages.get(id).is_some_and(|page| page.related.needs_load())
 }
@@ -3504,6 +3991,55 @@ fn cap_uris(uris: Vec<String>, index: u32) -> (Vec<String>, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::ApiError;
+    use crate::paths::AppDirs;
+
+    fn test_app() -> App {
+        let root = std::env::temp_dir().join(format!(
+            "fastpotify-free-route-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        let dirs = AppDirs {
+            config: root.join("config"),
+            state: root.join("state"),
+            cache: root.join("cache"),
+        };
+        let waker = crate::backend::Waker::default();
+        let mut app = App::new(
+            &waker,
+            dirs,
+            Settings::default(),
+            AppOptions {
+                media_controls: false,
+                tray: false,
+            },
+        );
+        app.backend.set_offline(true);
+        app.auth = AuthStatus::Connected {
+            username: "test".into(),
+        };
+        app
+    }
+
+    fn user_with_product(product: &str) -> User {
+        User {
+            id: "user".into(),
+            display_name: Some("Test".into()),
+            product: Some(product.into()),
+            ..User::default()
+        }
+    }
+
+    fn premium_required() -> ApiError {
+        ApiError::Status {
+            status: 403,
+            message: "Player command failed: Premium required".into(),
+        }
+    }
 
     #[test]
     fn volume_conversions_round_trip() {
@@ -3511,6 +4047,475 @@ mod tests {
         assert_eq!(volume_to_percent(0), 0);
         assert_eq!(volume_to_percent(percent_to_volume(70)), 70);
         assert_eq!(percent_to_volume(200), u16::MAX);
+    }
+
+    #[test]
+    fn free_product_detection_is_case_insensitive() {
+        for product in ["free", "FREE", "Free", " free ", "open", "OPEN", "Open"] {
+            assert!(is_free_spotify_product(Some(product)), "{product}");
+            assert!(requires_alternate_product(Some(product)), "{product}");
+            assert!(!is_confirmed_premium_product(Some(product)), "{product}");
+        }
+        assert!(!is_free_spotify_product(Some("premium")));
+        assert!(!is_free_spotify_product(Some("PREMIUM")));
+        assert!(!is_free_spotify_product(Some("Premium")));
+        assert!(!is_free_spotify_product(None));
+        assert!(!is_free_spotify_product(Some("")));
+        assert!(is_confirmed_premium_product(Some("premium")));
+        assert!(is_confirmed_premium_product(Some("PREMIUM")));
+        assert!(is_confirmed_premium_product(Some(" Premium ")));
+        for product in [None, Some(""), Some("  "), Some("unknown"), Some("student")] {
+            assert!(requires_alternate_product(product), "{product:?}");
+            assert!(!is_confirmed_premium_product(product), "{product:?}");
+        }
+    }
+
+    #[test]
+    fn free_profile_forces_alternate_premium_does_not() {
+        assert!(should_force_alternate(
+            Some("free"),
+            PlaybackBackend::Spotify
+        ));
+        assert!(should_force_alternate(
+            Some("FREE"),
+            PlaybackBackend::Spotify
+        ));
+        assert!(should_force_alternate(
+            Some("open"),
+            PlaybackBackend::Spotify
+        ));
+        assert!(should_force_alternate(None, PlaybackBackend::Spotify));
+        assert!(should_force_alternate(Some(""), PlaybackBackend::Spotify));
+        assert!(should_force_alternate(
+            Some("unknown"),
+            PlaybackBackend::Spotify
+        ));
+        assert!(!should_force_alternate(
+            Some("free"),
+            PlaybackBackend::Alternate
+        ));
+        assert!(!should_force_alternate(
+            Some("premium"),
+            PlaybackBackend::Spotify
+        ));
+        assert!(!should_force_alternate(
+            Some("PREMIUM"),
+            PlaybackBackend::Alternate
+        ));
+    }
+
+    #[test]
+    fn profile_playback_plan_maps_once_per_account() {
+        let free_from_spotify =
+            profile_playback_plan(Some("FREE"), PlaybackBackend::Spotify, false);
+        assert_eq!(free_from_spotify.mode, PlaybackBackend::Alternate);
+        assert!(free_from_spotify.start_engine);
+        assert!(free_from_spotify.persist_alternate);
+        assert!(free_from_spotify.toast_free);
+
+        let open_from_spotify =
+            profile_playback_plan(Some("open"), PlaybackBackend::Spotify, false);
+        assert_eq!(open_from_spotify.mode, PlaybackBackend::Alternate);
+        assert!(open_from_spotify.start_engine);
+
+        let free_already_alternate =
+            profile_playback_plan(Some("free"), PlaybackBackend::Alternate, false);
+        assert_eq!(free_already_alternate.mode, PlaybackBackend::Alternate);
+        assert!(free_already_alternate.start_engine);
+        assert!(!free_already_alternate.persist_alternate);
+        assert!(!free_already_alternate.toast_free);
+
+        let premium_spotify =
+            profile_playback_plan(Some("premium"), PlaybackBackend::Spotify, false);
+        assert_eq!(premium_spotify.mode, PlaybackBackend::Spotify);
+        assert!(premium_spotify.start_engine);
+        assert!(!premium_spotify.persist_alternate);
+        assert!(!premium_spotify.toast_free);
+
+        let premium_alternate =
+            profile_playback_plan(Some("premium"), PlaybackBackend::Alternate, false);
+        assert_eq!(premium_alternate.mode, PlaybackBackend::Alternate);
+        assert!(premium_alternate.start_engine);
+        assert!(!premium_alternate.persist_alternate);
+
+        let again = profile_playback_plan(Some("free"), PlaybackBackend::Alternate, true);
+        assert!(!again.start_engine);
+        assert!(!again.persist_alternate);
+        let premium_again = profile_playback_plan(Some("premium"), PlaybackBackend::Spotify, true);
+        assert_eq!(premium_again.mode, PlaybackBackend::Spotify);
+        assert!(!premium_again.start_engine);
+
+        for product in [None, Some(""), Some("unknown")] {
+            let plan = profile_playback_plan(product, PlaybackBackend::Spotify, false);
+            assert_eq!(plan.mode, PlaybackBackend::Alternate, "{product:?}");
+            assert!(plan.start_engine, "{product:?}");
+            assert!(plan.persist_alternate, "{product:?}");
+            assert!(!plan.toast_free, "{product:?}");
+            assert!(plan.toast_unconfirmed, "{product:?}");
+            let once = profile_playback_plan(product, PlaybackBackend::Alternate, true);
+            assert!(!once.start_engine, "{product:?}");
+        }
+    }
+
+    fn assert_local_transport_only(app: &mut App) {
+        assert!(app.alternate_local() || app.transport_ready());
+        assert_eq!(app.target(), Target::Local);
+        assert!(!app.allows_spotify_player_api());
+        app.set_volume(40, true);
+        assert_eq!(app.local.volume, percent_to_volume(40));
+        assert!(app.pending_remote_volume.is_none());
+        app.seek(1_000);
+        assert!(app.pending_remote_position.is_none());
+        app.set_shuffle(true);
+        app.set_repeat(RepeatMode::Context);
+        app.play_request(PlayRequest::tracks(vec!["spotify:track:x".into()]), false);
+        assert!(app.pending_remote_volume.is_none());
+        app.add_to_queue("spotify:track:x".into(), "X".into());
+        app.transfer("speaker".into());
+        assert!(app.selected_device.is_none() || app.alternate_local());
+        app.poll_remote(true);
+        app.refresh_devices();
+        app.refresh_queue(true);
+        assert!(!app.remote_poll_pending);
+        assert!(!app.devices_loading);
+        assert!(!matches!(app.queue, Loadable::Loading));
+    }
+
+    #[test]
+    fn local_transport_guard_covers_free_open_and_alternate() {
+        for product in [
+            Some("free"),
+            Some("FREE"),
+            Some("open"),
+            Some("Open"),
+            None,
+            Some(""),
+            Some("unknown"),
+        ] {
+            assert!(
+                uses_local_transport(
+                    PlaybackBackend::Spotify,
+                    product,
+                    &LocalPlayback::Unavailable,
+                    true,
+                ),
+                "{product:?}"
+            );
+        }
+        assert!(uses_local_transport(
+            PlaybackBackend::Alternate,
+            Some("premium"),
+            &LocalPlayback::Connecting,
+            true,
+        ));
+        assert!(uses_local_transport(
+            PlaybackBackend::Alternate,
+            None,
+            &LocalPlayback::Failed("nope".into()),
+            false,
+        ));
+        assert!(!uses_local_transport(
+            PlaybackBackend::Spotify,
+            Some("premium"),
+            &LocalPlayback::Unavailable,
+            true,
+        ));
+        assert!(!uses_local_transport(
+            PlaybackBackend::Spotify,
+            None,
+            &LocalPlayback::Unavailable,
+            false,
+        ));
+
+        let mut app = test_app();
+        app.settings.playback_backend = PlaybackBackend::Spotify;
+        app.settings.playback_authorized = true;
+        app.user = Some(user_with_product("free"));
+        app.local_ready = false;
+        app.local_playback = LocalPlayback::Unavailable;
+        app.selected_device = Some("speaker".into());
+        assert_local_transport_only(&mut app);
+
+        let mut app = test_app();
+        app.settings.playback_backend = PlaybackBackend::Spotify;
+        app.user = Some(user_with_product("open"));
+        app.local_ready = false;
+        app.local_playback = LocalPlayback::Unavailable;
+        app.selected_device = Some("speaker".into());
+        assert_local_transport_only(&mut app);
+
+        let mut app = test_app();
+        app.settings.playback_backend = PlaybackBackend::Alternate;
+        app.user = None;
+        app.local_ready = false;
+        app.local_playback = LocalPlayback::Connecting;
+        app.selected_device = Some("speaker".into());
+        assert_local_transport_only(&mut app);
+
+        let mut app = test_app();
+        app.settings.playback_backend = PlaybackBackend::Spotify;
+        app.user = Some(User {
+            id: "user".into(),
+            product: None,
+            ..User::default()
+        });
+        app.local_ready = false;
+        app.local_playback = LocalPlayback::Unavailable;
+        app.selected_device = Some("speaker".into());
+        assert_local_transport_only(&mut app);
+    }
+
+    #[test]
+    fn volume_routing_premium_with_stored_spotify_can_be_remote() {
+        let mut app = test_app();
+        app.settings.playback_backend = PlaybackBackend::Spotify;
+        app.user = Some(user_with_product("premium"));
+        app.local_ready = false;
+        app.local_playback = LocalPlayback::Unavailable;
+        app.selected_device = Some("speaker".into());
+        assert!(!app.alternate_local());
+        assert_eq!(app.target(), Target::Remote(Some("speaker".into())));
+        app.set_volume(25, true);
+        assert_eq!(
+            app.pending_remote_volume.map(|(percent, _)| percent),
+            Some(25)
+        );
+    }
+
+    #[test]
+    fn free_profile_forces_alternate_persists_and_restarts() {
+        let mut app = test_app();
+        app.settings.playback_backend = PlaybackBackend::Spotify;
+        app.settings.playback_authorized = true;
+        app.selected_device = Some("speaker".into());
+        app.remote_poll_pending = true;
+        app.handle_api(ApiResponse::Me(Ok(user_with_product("FREE"))));
+        assert_eq!(app.settings.playback_backend, PlaybackBackend::Alternate);
+        assert!(app.free_alternate_applied);
+        assert!(app.profile_playback_applied);
+        assert!(app.selected_device.is_none());
+        assert!(app.remote.is_none());
+        assert_eq!(app.target(), Target::Local);
+        assert!(!app.allows_spotify_player_api());
+        assert!(app.settings.playback_authorized);
+        assert!(
+            app.toasts
+                .iter()
+                .any(|toast| toast.message == FREE_ALTERNATE_TOAST)
+        );
+        let loaded = Settings::load(&app.dirs.settings_file());
+        assert_eq!(loaded.playback_backend, PlaybackBackend::Alternate);
+
+        let toast_count = app.toasts.len();
+        app.handle_api(ApiResponse::Me(Ok(user_with_product("free"))));
+        assert_eq!(app.toasts.len(), toast_count);
+        assert!(app.profile_playback_applied);
+    }
+
+    #[test]
+    fn premium_profile_keeps_spotify_backend() {
+        let mut app = test_app();
+        app.settings.playback_backend = PlaybackBackend::Spotify;
+        app.handle_api(ApiResponse::Me(Ok(user_with_product("premium"))));
+        assert_eq!(app.settings.playback_backend, PlaybackBackend::Spotify);
+        assert!(!app.free_alternate_applied);
+        assert!(app.profile_playback_applied);
+        assert!(
+            app.toasts
+                .iter()
+                .all(|toast| toast.message != FREE_ALTERNATE_TOAST)
+        );
+        app.handle_api(ApiResponse::Me(Ok(user_with_product("premium"))));
+        assert_eq!(app.settings.playback_backend, PlaybackBackend::Spotify);
+        assert!(app.profile_playback_applied);
+    }
+
+    #[test]
+    fn premium_profile_keeps_user_selected_alternate() {
+        let mut app = test_app();
+        app.settings.playback_backend = PlaybackBackend::Alternate;
+        app.handle_api(ApiResponse::Me(Ok(user_with_product("premium"))));
+        assert_eq!(app.settings.playback_backend, PlaybackBackend::Alternate);
+        assert!(!app.free_alternate_applied);
+        assert!(app.profile_playback_applied);
+        assert_eq!(app.target(), Target::Local);
+    }
+
+    #[test]
+    fn unknown_profile_forces_alternate_and_blocks_player_api() {
+        for product in [None, Some(""), Some("unknown")] {
+            let mut app = test_app();
+            app.settings.playback_backend = PlaybackBackend::Spotify;
+            app.settings.playback_authorized = true;
+            app.selected_device = Some("speaker".into());
+            let user = User {
+                id: "user".into(),
+                display_name: Some("Test".into()),
+                product: product.map(str::to_string),
+                ..User::default()
+            };
+            app.handle_api(ApiResponse::Me(Ok(user)));
+            assert_eq!(app.settings.playback_backend, PlaybackBackend::Alternate);
+            assert!(app.profile_playback_applied);
+            assert!(app.free_alternate_applied);
+            assert!(!app.is_confirmed_premium());
+            assert!(!app.allows_spotify_player_api());
+            assert_eq!(app.target(), Target::Local);
+            assert!(
+                app.toasts
+                    .iter()
+                    .any(|toast| toast.message == UNCONFIRMED_ALTERNATE_TOAST),
+                "{product:?}"
+            );
+            let loaded = Settings::load(&app.dirs.settings_file());
+            assert_eq!(loaded.playback_backend, PlaybackBackend::Alternate);
+            app.poll_remote(true);
+            assert!(!app.remote_poll_pending);
+        }
+    }
+
+    #[test]
+    fn me_failure_does_not_start_playback() {
+        let mut app = test_app();
+        app.settings.playback_backend = PlaybackBackend::Spotify;
+        app.handle_api(ApiResponse::Me(Err(ApiError::Status {
+            status: 500,
+            message: "try again".into(),
+        })));
+        assert!(app.user.is_none());
+        assert!(!app.profile_playback_applied);
+        assert_eq!(app.settings.playback_backend, PlaybackBackend::Spotify);
+        assert!(!app.transport_ready());
+    }
+
+    #[test]
+    fn alternate_connecting_or_failed_never_routes_remote() {
+        for status in [
+            LocalPlayback::Unavailable,
+            LocalPlayback::Connecting,
+            LocalPlayback::Authorizing,
+            LocalPlayback::Failed("nope".into()),
+        ] {
+            let mut app = test_app();
+            app.settings.playback_backend = PlaybackBackend::Alternate;
+            app.local_ready = false;
+            app.local_playback = status;
+            app.selected_device = Some("speaker".into());
+            assert!(app.alternate_local());
+            assert_eq!(app.target(), Target::Local);
+        }
+    }
+
+    #[test]
+    fn remote_polling_is_skipped_for_free_and_alternate() {
+        let mut app = test_app();
+        app.settings.playback_backend = PlaybackBackend::Alternate;
+        app.poll_remote(true);
+        app.refresh_devices();
+        assert!(!app.remote_poll_pending);
+        assert!(!app.devices_loading);
+
+        app.settings.playback_backend = PlaybackBackend::Spotify;
+        app.user = Some(user_with_product("free"));
+        app.poll_remote(true);
+        app.refresh_devices();
+        assert!(!app.remote_poll_pending);
+        assert!(!app.devices_loading);
+
+        app.user = Some(user_with_product("premium"));
+        app.poll_remote(true);
+        app.refresh_devices();
+        assert!(app.remote_poll_pending);
+        assert!(app.devices_loading);
+    }
+
+    #[test]
+    fn connected_without_profile_cannot_poll_or_route_remote() {
+        let mut app = test_app();
+        app.user = None;
+        app.settings.playback_backend = PlaybackBackend::Spotify;
+        app.settings.playback_authorized = true;
+        app.local_ready = false;
+        app.local_playback = LocalPlayback::Unavailable;
+        app.selected_device = Some("speaker".into());
+        app.handle_auth(AuthStatus::Connected {
+            username: "x".into(),
+        });
+        assert!(app.user.is_none());
+        assert!(!app.transport_ready());
+        assert!(!app.allows_spotify_player_api());
+        assert_eq!(app.target(), Target::Local);
+        assert!(!app.remote_poll_pending);
+
+        app.poll_remote(true);
+        app.refresh_devices();
+        app.refresh_queue(true);
+        assert!(!app.remote_poll_pending);
+        assert!(!app.devices_loading);
+        assert!(!matches!(app.queue, Loadable::Loading));
+
+        app.set_volume(33, true);
+        assert_eq!(app.local.volume, percent_to_volume(33));
+        assert!(app.pending_remote_volume.is_none());
+
+        app.seek(2_000);
+        assert!(app.pending_remote_position.is_none());
+
+        app.play_request(PlayRequest::tracks(vec!["spotify:track:x".into()]), false);
+        assert!(app.queued_play.is_some());
+
+        let selected = app.selected_device.clone();
+        app.transfer("speaker".into());
+        assert_eq!(app.selected_device, selected);
+        app.add_to_queue("spotify:track:x".into(), "X".into());
+        assert!(!matches!(app.queue, Loadable::Loading));
+        assert!(
+            app.toasts
+                .iter()
+                .any(|toast| toast.message == "Loading account...")
+        );
+    }
+
+    #[test]
+    fn premium_required_volume_switches_once_without_error_storm() {
+        let mut app = test_app();
+        app.settings.playback_backend = PlaybackBackend::Spotify;
+        app.pending_remote_volume = Some((40, Instant::now()));
+        app.handle_api(ApiResponse::Remote {
+            action: RemoteAction::Volume,
+            result: Err(premium_required()),
+        });
+        assert_eq!(app.settings.playback_backend, PlaybackBackend::Alternate);
+        assert_eq!(app.target(), Target::Local);
+        assert_eq!(app.local.volume, percent_to_volume(40));
+        assert!(app.pending_remote_volume.is_none());
+        assert!(
+            app.toasts
+                .iter()
+                .any(|toast| toast.message == UNCONFIRMED_ALTERNATE_TOAST)
+        );
+        assert!(
+            !app.toasts
+                .iter()
+                .any(|toast| toast.kind == ToastKind::Error)
+        );
+
+        app.handle_api(ApiResponse::Remote {
+            action: RemoteAction::Volume,
+            result: Err(premium_required()),
+        });
+        assert_eq!(
+            app.toasts
+                .iter()
+                .filter(|toast| toast.message == UNCONFIRMED_ALTERNATE_TOAST)
+                .count(),
+            1
+        );
+        assert!(
+            !app.toasts
+                .iter()
+                .any(|toast| toast.kind == ToastKind::Error)
+        );
     }
 
     fn headless_app() -> App {
@@ -3530,6 +4535,8 @@ mod tests {
                 tray: false,
             },
         );
+        app.user = Some(user_with_product("premium"));
+        app.profile_playback_applied = true;
         app.local_ready = true;
         app
     }

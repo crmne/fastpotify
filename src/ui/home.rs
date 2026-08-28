@@ -247,6 +247,7 @@ fn recently_played(app: &mut App, ui: &mut egui::Ui) {
                 true,
             );
             if card.play {
+                app.remember_track(track);
                 app.actions.push(Action::PlayUris {
                     uris: vec![track.uri.clone()],
                     index: 0,

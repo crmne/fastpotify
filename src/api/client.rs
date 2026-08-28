@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use reqwest::{Method, StatusCode};
+use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use thiserror::Error;
@@ -48,6 +49,17 @@ impl ApiError {
         match self {
             Self::Status { status, .. } => Some(*status),
             _ => None,
+        }
+    }
+
+    /// Player endpoints answer this when the account cannot use Spotify Connect.
+    pub fn is_premium_required(&self) -> bool {
+        match self {
+            Self::Status { status, message } if *status == 403 => {
+                let lower = message.to_ascii_lowercase();
+                lower.contains("premium")
+            }
+            _ => false,
         }
     }
 
@@ -1109,6 +1121,18 @@ impl ApiClient {
         self.get(&format!("/tracks/{id}"), &[]).await
     }
 
+    pub async fn tracks(&self, ids: &[String]) -> Result<Vec<Track>> {
+        let mut out = Vec::with_capacity(ids.len());
+        for chunk in ids.chunks(50) {
+            if chunk.is_empty() {
+                continue;
+            }
+            let several: SeveralTracks = self.get("/tracks", &[("ids", chunk.join(","))]).await?;
+            out.extend(several.tracks.into_iter().flatten());
+        }
+        Ok(out)
+    }
+
     pub async fn recommendations(
         &self,
         seed_tracks: &[String],
@@ -1125,6 +1149,12 @@ impl ApiClient {
         let recommendations: Recommendations = self.get("/recommendations", &query).await?;
         Ok(recommendations.tracks)
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct SeveralTracks {
+    #[serde(default)]
+    tracks: Vec<Option<Track>>,
 }
 
 #[cfg(test)]
@@ -1170,5 +1200,38 @@ mod tests {
             .is_gone()
         );
         assert!(!ApiError::RateLimited.is_gone());
+    }
+
+    #[test]
+    fn premium_required_is_detected_from_player_errors() {
+        assert!(
+            ApiError::Status {
+                status: 403,
+                message: "Player command failed: Premium required".into(),
+            }
+            .is_premium_required()
+        );
+        assert!(
+            ApiError::Status {
+                status: 403,
+                message: "PREMIUM_REQUIRED".into(),
+            }
+            .is_premium_required()
+        );
+        assert!(
+            !ApiError::Status {
+                status: 403,
+                message: "Forbidden".into(),
+            }
+            .is_premium_required()
+        );
+        assert!(
+            !ApiError::Status {
+                status: 404,
+                message: "Premium required".into(),
+            }
+            .is_premium_required()
+        );
+        assert!(!ApiError::RateLimited.is_premium_required());
     }
 }

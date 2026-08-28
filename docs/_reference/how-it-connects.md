@@ -41,9 +41,13 @@ how, in five minutes.
   Besides Spotify (and its album art CDN), the app talks to
   [lrclib.net](https://lrclib.net) while the lyrics panel is open and
   Spotify itself has no words for the track, sending the track's artist,
-  title, album, and length, and to
-  api.github.com once a day to learn whether a newer release exists, which
-  Settings can turn off.
+  title, album, and length, and to api.github.com once a day to learn whether
+  a newer release exists, which Settings can turn off. Alternate local audio,
+  selected for Free or unconfirmed accounts and available in Settings, also
+  talks to the Piped endpoint you configured and/or a local yt-dlp process
+  (the official pinned build extracted on this computer, or a strictly newer
+  one you installed). Spotify tokens are never sent there. yt-dlp is never
+  downloaded at runtime.
 
 ## When Spotify pushes back
 
@@ -77,3 +81,18 @@ Connect session, so this computer appears as a device to every other Spotify
 client you own, receives transfers, and reports its position back. If the
 session drops, the engine reconnects with the stored credential; the
 interface never blocks on any of it.
+
+The opt-in alternate engine is a separate session. It does not announce a
+Connect device, does not use Spirc, and does not run at the same time as
+librespot. It resolves Spotify track metadata to a third-party match and
+decodes AAC/M4A or MP3 locally. Playback starts when container headers and
+the first packets are in (a few frames for MP3; fast-start M4A once `moov`
+is present). Fast-start M4A (`moov` before `mdat`) can start while the rest
+downloads; `moov` at the end waits until the file is complete. Alternate
+stream selection rejects Opus, WebM, and Ogg/Vorbis. YouTube's useful
+native alternative is WebM/Opus, Opus is not decoded, and enabling Ogg
+adds no useful YouTube startup path. If the UI already has title and artist,
+a track click does not wait on Spotify `/tracks/{id}`. A miss can skip to the
+next track if you enable that setting. Network stalls and transient HTTP
+errors retry with bounded backoff, keep received ranges, and refresh expired
+media URLs. A terminal transport or decode failure stops the current item.

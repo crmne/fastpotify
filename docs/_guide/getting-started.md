@@ -64,6 +64,28 @@ After that, this computer shows up as a Spotify Connect device named
 **Fastpotify** (rename it in Settings), visible from your phone like any
 speaker.
 
+## Alternate local audio (optional)
+
+Spotify Connect on this computer is the default and needs Premium. Settings
+also has **Alternate local audio**. Fastpotify selects it for a Free account,
+or until Spotify confirms Premium; Premium users can select it in Settings.
+The app still uses the Spotify Web API for your library and search, then looks
+up a third-party match (a Piped API you point at, and/or yt-dlp) and plays
+that audio locally.
+
+That mode is not Spotify Connect, not Spotify audio, and not a way to bypass
+DRM. Fastpotify does not ship a Piped instance. It does embed an official
+pinned yt-dlp build in each supported release binary, extracts it into the
+local state directory, and never downloads yt-dlp at runtime. A yt-dlp you
+installed is used only when its version is strictly newer than that pin.
+You are responsible for the Piped endpoint and any yt-dlp you run, and for
+their terms. Podcasts are not supported. A weak match is never played; you
+can choose to skip to the next track instead. Playback starts after a short
+buffer. An M4A file with metadata at the end may wait until download
+finishes. Network stalls and transient HTTP errors retry and resume from
+received ranges. A terminal transport or decode failure stops instead of
+skipping.
+
 ## A few things worth knowing on day one
 
 - **Closing the window does not stop the music.** Fastpotify keeps playing

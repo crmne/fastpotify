@@ -12,11 +12,13 @@ use std::time::{Duration, Instant};
 use librespot_core::authentication::Credentials;
 use tokio::sync::{mpsc, watch};
 
+use crate::alternate::{self, AlternateConfig, AlternateHandle};
 use crate::api::models::*;
 use crate::api::{ApiClient, ApiError, NetActivity, PlayRequest, TokenProvider, WebTokens};
 use crate::images::{ArtLoader, accent_color};
 use crate::paths::AppDirs;
 use crate::player::{Engine, EngineConfig, EngineEvent, LocalState, PlayerCommand};
+use crate::settings::PlaybackBackend;
 
 pub type ApiResult<T> = Result<T, ApiError>;
 
@@ -346,8 +348,12 @@ pub enum Command {
     SignOut,
     /// Authorize local playback on this computer (a separate browser grant).
     AuthorizePlayback,
-    /// Reload the engine config (audio settings changed).
-    RestartEngine(EngineConfig),
+    /// Reload the engine config (audio settings or playback source changed).
+    RestartEngine {
+        config: EngineConfig,
+        mode: PlaybackBackend,
+        alternate: AlternateConfig,
+    },
     Player(PlayerCommand),
     Api(ApiRequest),
     Accent {
@@ -461,7 +467,39 @@ pub enum LocalPlayback {
     Ready {
         device_id: String,
     },
+    /// This computer plays matched third-party audio locally. Not Connect.
+    AlternateReady {
+        source: String,
+    },
     Failed(String),
+}
+
+/// After Alternate is stopped, Spotify Connect is idle unless an engine is up
+/// or a connection is already in flight. `None` means do not overwrite status.
+pub fn spotify_idle_status(has_engine: bool, connecting: bool) -> Option<LocalPlayback> {
+    if has_engine || connecting {
+        None
+    } else {
+        Some(LocalPlayback::Unavailable)
+    }
+}
+
+/// What to do after a stored Web grant is loaded, before `/me` returns.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PreProfileSessionPlan {
+    pub dispatch_me: bool,
+    pub start_local_engine: bool,
+}
+
+/// Restore/sign-in may talk to `/me`. They must not start librespot or Alternate.
+pub fn pre_profile_session_plan(has_web_token: bool) -> Option<PreProfileSessionPlan> {
+    if !has_web_token {
+        return None;
+    }
+    Some(PreProfileSessionPlan {
+        dispatch_me: true,
+        start_local_engine: false,
+    })
 }
 
 /// Wakes whichever window currently exists, if any.
@@ -505,6 +543,8 @@ impl Backend {
         engine_config: EngineConfig,
         web_client_id: Option<String>,
         waker: Waker,
+        playback_mode: PlaybackBackend,
+        alternate: AlternateConfig,
     ) -> Self {
         let (command_tx, command_rx) = mpsc::unbounded_channel();
         let (event_tx, event_rx) = std::sync::mpsc::channel();
@@ -539,6 +579,8 @@ impl Backend {
                         event_tx,
                         worker_commands,
                         waker,
+                        playback_mode,
+                        alternate,
                     );
                     worker.run(command_rx).await;
                 });
@@ -611,6 +653,12 @@ struct Worker {
     commands: mpsc::UnboundedSender<Command>,
     waker: Waker,
     engine: Option<Arc<Engine>>,
+    alternate: Option<Arc<AlternateHandle>>,
+    playback_mode: PlaybackBackend,
+    alternate_config: AlternateConfig,
+    /// Drop the next librespot connect result; we switched engines.
+    ignore_spotify_engine: bool,
+    event_generation: Arc<std::sync::atomic::AtomicU64>,
     /// True while a playback grant or engine connection is in flight, so a
     /// second attempt does not pile up.
     engine_busy: bool,
@@ -633,6 +681,8 @@ impl Worker {
         events: std::sync::mpsc::Sender<Event>,
         commands: mpsc::UnboundedSender<Command>,
         waker: Waker,
+        playback_mode: PlaybackBackend,
+        alternate_config: AlternateConfig,
     ) -> Self {
         Self {
             dirs,
@@ -645,6 +695,11 @@ impl Worker {
             commands,
             waker,
             engine: None,
+            alternate: None,
+            playback_mode,
+            alternate_config,
+            ignore_spotify_engine: false,
+            event_generation: Arc::new(std::sync::atomic::AtomicU64::new(1)),
             engine_busy: false,
             signed_in: false,
             premium: None,
@@ -669,27 +724,36 @@ impl Worker {
                         let _ = cancel.send(true);
                     }
                 }
-                Command::SignOut => self.sign_out(),
-                Command::AuthorizePlayback => self.authorize_playback(),
-                Command::RestartEngine(config) => {
-                    self.engine_config = config;
-                    self.reconnect_engine();
-                }
-                Command::Player(command) => match &self.engine {
-                    Some(engine) => {
-                        if let Err(error) = engine.command(command) {
-                            self.emit(Event::Error(format!("Playback error: {error}")));
-                        }
+                Command::SignOut => self.sign_out().await,
+                Command::AuthorizePlayback => {
+                    if self.playback_mode == PlaybackBackend::Alternate {
+                        self.emit(Event::Error(
+                            "Spotify Connect is off. Alternate local audio does not use Premium playback authorization.".into(),
+                        ));
+                    } else {
+                        self.authorize_playback();
                     }
-                    None => self.emit(Event::Error(
-                        "Local playback isn't set up on this computer yet".into(),
-                    )),
-                },
+                }
+                Command::RestartEngine {
+                    config,
+                    mode,
+                    alternate,
+                } => {
+                    self.engine_config = config;
+                    self.playback_mode = mode;
+                    self.alternate_config = alternate;
+                    self.switch_playback().await;
+                }
+                Command::Player(command) => self.player_command(command),
                 Command::Api(request) => self.dispatch(request),
                 Command::Accent { url } => self.accent(url),
                 Command::WebSignedIn(token) => self.on_web_signed_in(*token),
                 Command::PlaybackAuthorized { access_token } => {
-                    self.connect_engine(Credentials::with_access_token(access_token))
+                    if self.playback_mode != PlaybackBackend::Spotify {
+                        self.cancel_signin = None;
+                    } else {
+                        self.connect_engine(Credentials::with_access_token(access_token));
+                    }
                 }
                 Command::EngineConnected { engine, error } => {
                     self.on_engine_connected(*engine, error)
@@ -711,15 +775,46 @@ impl Worker {
                 Command::SwitchWebApp(client_id) => self.switch_web_app(client_id),
             }
         }
+        self.stop_all_engines().await;
+    }
+
+    fn player_command(&self, command: PlayerCommand) {
+        if let Some(alternate) = &self.alternate {
+            if let Err(error) = alternate.command(command) {
+                self.emit(Event::Error(format!("Playback error: {error}")));
+            }
+            return;
+        }
+        match &self.engine {
+            Some(engine) => {
+                if let Err(error) = engine.command(command) {
+                    self.emit(Event::Error(format!("Playback error: {error}")));
+                }
+            }
+            None => self.emit(Event::Error(
+                "Local playback isn't set up on this computer yet".into(),
+            )),
+        }
+    }
+
+    async fn stop_all_engines(&mut self) {
+        self.event_generation
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         if let Some(engine) = self.engine.take() {
             engine.shutdown();
+        }
+        if let Some(alternate) = self.alternate.take() {
+            alternate.shutdown().await;
+        }
+        if self.engine_busy {
+            self.ignore_spotify_engine = true;
         }
     }
 
     // ---- Web API sign-in --------------------------------------------------
 
-    /// On startup, resume a saved Web API grant. The local engine follows
-    /// once the plan is known (`on_account_checked`), never before.
+    /// On startup, resume a saved Web API grant and load `/me`.
+    /// Local playback waits until the account plan is known.
     fn restore_session(&mut self) {
         match crate::auth::StoredToken::load(&self.dirs.web_token_file()) {
             Some(token) if !token.has_scopes(crate::auth::WEB_SCOPES) => {
@@ -730,13 +825,19 @@ impl Worker {
                 )));
             }
             Some(token) => {
+                let plan = pre_profile_session_plan(true).expect("web token present");
                 self.activate_web_token(token);
                 self.emit(Event::Auth(AuthStatus::Connecting));
-                self.dispatch(ApiRequest::Me);
+                if plan.dispatch_me {
+                    self.dispatch(ApiRequest::Me);
+                }
                 self.signed_in = true;
                 self.emit(Event::Auth(AuthStatus::Connected {
                     username: String::new(),
                 }));
+                if plan.start_local_engine {
+                    self.resume_engine();
+                }
             }
             None => self.emit(Event::Auth(AuthStatus::SignedOut)),
         }
@@ -761,7 +862,13 @@ impl Worker {
         self.emit(Event::Auth(AuthStatus::Connected {
             username: String::new(),
         }));
-        self.dispatch(ApiRequest::Me);
+        let plan = pre_profile_session_plan(true).expect("web token present");
+        if plan.dispatch_me {
+            self.dispatch(ApiRequest::Me);
+        }
+        if plan.start_local_engine {
+            self.resume_engine();
+        }
     }
 
     fn sign_in(&mut self) {
@@ -823,11 +930,9 @@ impl Worker {
         self.sign_in();
     }
 
-    fn sign_out(&mut self) {
+    async fn sign_out(&mut self) {
         self.signed_in = false;
-        if let Some(engine) = self.engine.take() {
-            engine.shutdown();
-        }
+        self.stop_all_engines().await;
         if let Some(cancel) = self.cancel_signin.take() {
             let _ = cancel.send(true);
         }
@@ -844,20 +949,78 @@ impl Worker {
         let events = self.events.clone();
         let commands = self.commands.clone();
         let waker = self.waker.clone();
-        Arc::new(move |event| match event {
-            EngineEvent::State(state) => {
-                let _ = events.send(Event::Local(Box::new(state)));
-                waker.wake();
+        let current = Arc::clone(&self.event_generation);
+        let mine = current.load(std::sync::atomic::Ordering::SeqCst);
+        Arc::new(move |event| {
+            if current.load(std::sync::atomic::Ordering::SeqCst) != mine {
+                return;
             }
-            EngineEvent::SessionEnded => {
-                let _ = commands.send(Command::Reconnect);
+            match event {
+                EngineEvent::State(state) => {
+                    let _ = events.send(Event::Local(Box::new(state)));
+                    waker.wake();
+                }
+                EngineEvent::SessionEnded => {
+                    let _ = commands.send(Command::Reconnect);
+                }
             }
         })
+    }
+
+    async fn switch_playback(&mut self) {
+        self.stop_all_engines().await;
+        match self.playback_mode {
+            PlaybackBackend::Alternate => self.start_alternate(),
+            PlaybackBackend::Spotify => {
+                if self.signed_in {
+                    self.resume_engine();
+                } else {
+                    self.emit(Event::Playback(LocalPlayback::Unavailable));
+                }
+            }
+        }
+    }
+
+    fn start_alternate(&mut self) {
+        if self.alternate.is_some() {
+            return;
+        }
+        self.stop_spotify_only();
+        match alternate::spawn(
+            self.alternate_config.clone(),
+            Arc::clone(&self.api),
+            self.http.clone(),
+            self.engine_notify(),
+            None,
+            self.dirs.bin_dir(),
+        ) {
+            Ok(handle) => {
+                let source = self.alternate_config.source_summary();
+                self.alternate = Some(Arc::new(handle));
+                self.emit(Event::Playback(LocalPlayback::AlternateReady { source }));
+            }
+            Err(message) => {
+                self.emit(Event::Playback(LocalPlayback::Failed(message)));
+            }
+        }
+    }
+
+    fn stop_spotify_only(&mut self) {
+        if let Some(engine) = self.engine.take() {
+            engine.shutdown();
+        }
+        if self.engine_busy {
+            self.ignore_spotify_engine = true;
+        }
     }
 
     /// Bring the engine up from a credential stored by a previous playback
     /// authorization, if there is one. Silent when there is nothing to resume.
     fn resume_engine(&mut self) {
+        if self.playback_mode == PlaybackBackend::Alternate {
+            self.start_alternate();
+            return;
+        }
         if self.engine.is_some() || self.engine_busy || self.premium == Some(false) {
             return;
         }
@@ -868,11 +1031,16 @@ impl Worker {
             .and_then(|cache| cache.credentials());
         if let Some(credentials) = credentials {
             self.connect_engine(credentials);
+        } else if let Some(status) = spotify_idle_status(self.engine.is_some(), self.engine_busy) {
+            self.emit(Event::Playback(status));
         }
     }
 
     /// Reconnect the engine after its session dropped or audio settings changed.
     fn reconnect_engine(&mut self) {
+        if self.playback_mode == PlaybackBackend::Alternate {
+            return;
+        }
         if !self.signed_in {
             return;
         }
@@ -1011,6 +1179,14 @@ impl Worker {
 
     fn on_engine_connected(&mut self, engine: Option<Engine>, error: Option<String>) {
         self.engine_busy = false;
+        if self.ignore_spotify_engine || self.playback_mode != PlaybackBackend::Spotify {
+            self.ignore_spotify_engine = false;
+            if let Some(engine) = engine {
+                engine.shutdown();
+            }
+            // Leave AlternateReady / the in-flight Spotify connect alone.
+            return;
+        }
         match engine {
             Some(engine) => {
                 let device_id = engine.device_id().to_string();
@@ -1020,36 +1196,25 @@ impl Worker {
             }
             None => {
                 let message = error.unwrap_or_else(|| "Local playback is unavailable".into());
+                if connect_error_is_entitlement(&message) {
+                    self.reconnects.clear();
+                }
                 self.emit(Event::Playback(LocalPlayback::Failed(message)));
             }
         }
     }
 
-    /// The plan gates the engine because librespot 0.8 calls `exit(1)` from
-    /// inside its session the moment Spotify tells it the account is not
-    /// Premium; no error path of ours can catch that, so a Free account must
-    /// never reach it. When the API cannot say, the engine comes back as it
-    /// always did.
+    /// Record the account plan, but let `App` choose and restart the effective
+    /// engine after it receives the same `/me` response. Only an explicit
+    /// Premium result may ever reach librespot; missing and unknown products
+    /// are routed to Alternate by the interface.
     fn on_account_checked(&mut self, premium: Option<bool>) {
         self.premium = premium;
-        if premium == Some(false) {
-            if let Some(engine) = self.engine.take() {
-                engine.shutdown();
-            }
-            let credential_stored = self
-                .engine_config
-                .open_cache()
-                .ok()
-                .and_then(|cache| cache.credentials())
-                .is_some();
-            if credential_stored {
-                self.emit(Event::Playback(LocalPlayback::Failed(
-                    PREMIUM_NEEDED.into(),
-                )));
-            }
-            return;
+        if premium != Some(true)
+            && let Some(engine) = self.engine.take()
+        {
+            engine.shutdown();
         }
-        self.resume_engine();
     }
 
     // ---- receivers on the local network -----------------------------------
@@ -1234,12 +1399,21 @@ impl Worker {
     }
 }
 
+/// Connect failures that mean this account cannot use librespot / Connect.
+pub fn connect_error_is_entitlement(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("premium")
+        || (lower.contains("free")
+            && (lower.contains("account") || lower.contains("support") || lower.contains('"')))
+        || (lower.contains("open") && lower.contains("support"))
+}
+
 fn friendly_connect_error(error: &anyhow::Error) -> String {
     let text = format!("{error:#}");
     let lower = text.to_lowercase();
     if lower.contains("badcredentials") || lower.contains("bad credentials") {
         "Spotify rejected the saved sign-in. Please sign in again.".to_string()
-    } else if lower.contains("premium") {
+    } else if connect_error_is_entitlement(&text) {
         PREMIUM_NEEDED.to_string()
     } else if lower.contains("dns") || lower.contains("connect") || lower.contains("resolve") {
         format!("Couldn't reach Spotify: {text}")
@@ -1530,4 +1704,42 @@ async fn spotify_lyrics(
 struct CachedPlaylist {
     snapshot: String,
     items: Vec<PlaylistItem>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn spotify_switch_without_engine_is_unavailable() {
+        assert_eq!(
+            spotify_idle_status(false, false),
+            Some(LocalPlayback::Unavailable)
+        );
+        assert_eq!(spotify_idle_status(true, false), None);
+        assert_eq!(spotify_idle_status(false, true), None);
+        assert_eq!(spotify_idle_status(true, true), None);
+    }
+
+    #[test]
+    fn restore_and_web_sign_in_do_not_start_engine_before_profile() {
+        assert_eq!(pre_profile_session_plan(false), None);
+        let plan = pre_profile_session_plan(true).expect("token");
+        assert!(plan.dispatch_me);
+        assert!(!plan.start_local_engine);
+    }
+
+    #[test]
+    fn free_account_connect_errors_are_entitlement() {
+        assert!(connect_error_is_entitlement(
+            r#"librespot does not support "free" accounts"#
+        ));
+        assert!(connect_error_is_entitlement(
+            "Player command failed: Premium required"
+        ));
+        assert!(connect_error_is_entitlement(
+            "Local playback needs Spotify Premium."
+        ));
+        assert!(!connect_error_is_entitlement("Couldn't reach Spotify: dns"));
+    }
 }

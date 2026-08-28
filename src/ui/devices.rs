@@ -24,6 +24,61 @@ pub fn device_icon(kind: &str) -> Icon {
     }
 }
 
+fn alternate_local_row(app: &mut App, ui: &mut egui::Ui, active: bool) {
+    use egui::{Rect, Sense, Vec2, pos2, vec2};
+    let palette = app.palette;
+    let source = match &app.local_playback {
+        crate::backend::LocalPlayback::AlternateReady { source } => source.clone(),
+        _ => "alternate".into(),
+    };
+    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 52.0), Sense::click());
+    if response.hovered() && !active {
+        ui.painter()
+            .rect_filled(rect, egui::CornerRadius::same(6), palette.surface_hover);
+    }
+    let color = if active { palette.accent } else { palette.text };
+    let icon_rect =
+        Rect::from_center_size(pos2(rect.left() + 24.0, rect.center().y), Vec2::splat(22.0));
+    Icon::Laptop.image(color, 22.0).paint_at(ui, icon_rect);
+    let painter = ui.painter().with_clip_rect(rect);
+    painter.text(
+        pos2(rect.left() + 48.0, rect.center().y - 9.0),
+        egui::Align2::LEFT_CENTER,
+        format!("{} (this computer)", app.settings.device_name),
+        theme::medium(14.0),
+        color,
+    );
+    painter.text(
+        pos2(rect.left() + 48.0, rect.center().y + 10.0),
+        egui::Align2::LEFT_CENTER,
+        if active {
+            format!("Alternate local audio · {source}")
+        } else {
+            "Play matched audio here · not Spotify Connect".into()
+        },
+        theme::regular(12.0),
+        if active {
+            palette.accent
+        } else {
+            palette.secondary
+        },
+    );
+    if active {
+        let dot = pos2(rect.right() - 16.0, rect.center().y);
+        ui.painter().circle_filled(dot, 4.0, palette.accent);
+    }
+    if response.clicked() && !active {
+        app.actions.push(crate::model::Action::SelectLocalPlayback);
+    }
+    response.on_hover_cursor(egui::CursorIcon::PointingHand);
+    ui.painter().hline(
+        rect.x_range().shrink(6.0),
+        rect.bottom(),
+        egui::Stroke::new(1.0, palette.outline),
+    );
+    ui.add_space(4.0);
+}
+
 /// A row offering to authorize local playback on this computer.
 fn enable_playback_row(app: &mut App, ui: &mut egui::Ui) {
     use egui::{Rect, Sense, Vec2, pos2, vec2};
@@ -164,28 +219,41 @@ pub fn popup(app: &mut App, ctx: &egui::Context) {
                 ui.set_width(width);
                 ui.horizontal(|ui| {
                     ui.add_space(6.0);
-                    theme::text(ui, "Connect to a device", theme::bold(16.0), palette.text);
+                    theme::text(
+                        ui,
+                        if app.alternate_local() {
+                            "This computer"
+                        } else {
+                            "Connect to a device"
+                        },
+                        theme::bold(16.0),
+                        palette.text,
+                    );
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if app.devices_loading {
-                            theme::spinner(ui, 16.0, palette.accent);
-                        } else if theme::icon_button(
-                            ui,
-                            Icon::Refresh,
-                            15.0,
-                            palette.secondary,
-                            palette.text,
-                            "Refresh",
-                        )
-                        .clicked()
-                        {
-                            app.actions.push(Action::RefreshDevices);
+                        if !app.alternate_local() {
+                            if app.devices_loading {
+                                theme::spinner(ui, 16.0, palette.accent);
+                            } else if theme::icon_button(
+                                ui,
+                                Icon::Refresh,
+                                15.0,
+                                palette.secondary,
+                                palette.text,
+                                "Refresh",
+                            )
+                            .clicked()
+                            {
+                                app.actions.push(Action::RefreshDevices);
+                            }
                         }
                     });
                 });
                 ui.add_space(4.0);
                 let local_id = app.local_device_id.clone();
+                let alternate = app.alternate_local();
                 let mut devices: Vec<Device> = app.devices.clone();
                 if app.local_ready
+                    && !alternate
                     && let Some(local_id) = &local_id
                     && !devices
                         .iter()
@@ -221,7 +289,10 @@ pub fn popup(app: &mut App, ctx: &egui::Context) {
                     .cloned()
                     .collect();
 
-                if !app.local_ready {
+                if alternate {
+                    alternate_local_row(app, ui, matches!(app.target(), crate::app::Target::Local));
+                    return;
+                } else if !app.local_ready {
                     enable_playback_row(app, ui);
                 }
                 if devices.is_empty() && waiting.is_empty() && app.local_ready {

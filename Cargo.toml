@@ -56,14 +56,13 @@ librespot-playback = { version = "0.8", default-features = false, features = ["r
 librespot-connect = { version = "0.8", default-features = false }
 librespot-metadata = { version = "0.8", default-features = false }
 librespot-protocol = { version = "0.8", default-features = false }
-# Local playback's audio sink is this crate's own (src/sink.rs): librespot's
-# rodio backend unwraps the device open on the player thread, and a release
-# build aborts on panic. Same rodio and cpal versions librespot-playback uses,
-# so nothing new is compiled.
-rodio = { version = "0.21", default-features = false, features = ["playback"] }
+# Local playback uses this crate's own sinks. The Spotify sink avoids a panic
+# when no device exists; the alternate sink also decodes AAC/M4A/MP3/WAV.
+# Opus/WebM/Ogg are not selected by alternate playback.
+rodio = { version = "0.21", default-features = false, features = ["playback", "wav", "symphonia-isomp4", "symphonia-aac", "symphonia-mp3"] }
 cpal = "0.16"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "json", "gzip", "http2", "blocking"] }
-tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "process", "io-util", "fs"] }
 sha1 = "0.10"
 sha2 = "0.10"
 base64 = "0.22"
@@ -100,6 +99,9 @@ windows-sys = { version = "0.60", features = ["Win32_Foundation", "Win32_Graphic
 ksni = { version = "0.3", features = ["blocking"] }
 librespot-playback = { version = "0.8", default-features = false, features = ["rodio-backend", "pulseaudio-backend", "rustls-tls-native-roots"] }
 mpris-server = { version = "0.10", features = ["tokio"] }
+
+[build-dependencies]
+sha2 = "0.10"
 
 # The icon and version information Windows shows for the executable.
 [target.'cfg(windows)'.build-dependencies]
