@@ -111,7 +111,7 @@ fn main() -> eframe::Result<()> {
     #[cfg(feature = "demo")]
     if cli.demo_shot.is_some() {
         options = app::AppOptions {
-            mpris: false,
+            media_controls: false,
             tray: false,
         };
     }

@@ -7,12 +7,14 @@ pub mod backend;
 #[cfg(any(test, feature = "demo"))]
 pub mod demo;
 pub mod images;
-pub mod model;
+pub mod media;
 #[cfg(target_os = "linux")]
-pub mod mpris;
+#[path = "mpris.rs"]
+pub mod media_controls;
 #[cfg(not(target_os = "linux"))]
-#[path = "mpris_stub.rs"]
-pub mod mpris;
+#[path = "media_stub.rs"]
+pub mod media_controls;
+pub mod model;
 pub mod paths;
 pub mod player;
 pub mod settings;

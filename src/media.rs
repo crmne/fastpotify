@@ -1,9 +1,12 @@
-//! No-op desktop media controls for platforms without MPRIS.
+//! What the desktop's own media controls say and hear.
+//!
+//! MPRIS on Linux and Now Playing on macOS answer the same questions, so the
+//! interface speaks this vocabulary and each platform module translates it.
 
 use crate::player::{Playback, RepeatMode};
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum MprisCommand {
+pub enum MediaCommand {
     Play,
     Pause,
     PlayPause,
@@ -21,7 +24,7 @@ pub enum MprisCommand {
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct MprisTrack {
+pub struct MediaTrack {
     pub uri: String,
     pub title: String,
     pub artists: Vec<String>,
@@ -31,9 +34,9 @@ pub struct MprisTrack {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct MprisState {
+pub struct MediaState {
     pub playback: Playback,
-    pub track: Option<MprisTrack>,
+    pub track: Option<MediaTrack>,
     pub position_ms: u32,
     pub volume: f64,
     pub shuffle: bool,
@@ -41,7 +44,7 @@ pub struct MprisState {
     pub can_control: bool,
 }
 
-impl Default for MprisState {
+impl Default for MediaState {
     fn default() -> Self {
         Self {
             playback: Playback::Stopped,
@@ -53,20 +56,4 @@ impl Default for MprisState {
             can_control: true,
         }
     }
-}
-
-pub struct MprisService;
-
-impl MprisService {
-    pub fn spawn(_wake: impl Fn() + Send + Sync + 'static) -> Self {
-        Self
-    }
-
-    pub fn drain_commands(&self) -> Vec<MprisCommand> {
-        Vec::new()
-    }
-
-    pub fn update(&mut self, _state: MprisState) {}
-
-    pub fn seeked(&self, _position_ms: u32) {}
 }
