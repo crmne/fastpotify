@@ -19,6 +19,7 @@ use crate::model::*;
 use crate::paths::AppDirs;
 use crate::player::{EngineConfig, LoadSpec, LocalState, Playback, PlayerCommand, RepeatMode};
 use crate::settings::{SessionState, Settings, ThemeChoice};
+use crate::single_instance::ControlCommand;
 use crate::theme::{self, Palette};
 use crate::tray::{TrayCommand, TrayService};
 use crate::util;
@@ -108,9 +109,13 @@ pub struct App {
     /// A hidden app was asked to show itself; the outer loop recreates the
     /// window.
     pub wants_show: bool,
-    /// Set by a second launch that wants this window brought forward, on the
-    /// platforms where that request does not arrive through MPRIS.
-    show_requests: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// Commands from control clients (a second `fastpotify <verb>` launch,
+    /// a Raycast script), on the platforms where they do not arrive through
+    /// MPRIS. Drained every frame.
+    control_commands: Option<std::sync::Arc<std::sync::Mutex<Vec<ControlCommand>>>>,
+    /// Where the now-playing snapshot goes for the control channel's
+    /// `nowplaying` verb to answer from.
+    control_now_playing: Option<std::sync::Arc<std::sync::Mutex<String>>>,
     /// Sample data is loaded and nothing is asked of Spotify.
     pub offline: bool,
     pub palette: Palette,
@@ -259,7 +264,8 @@ impl App {
             window_hidden: false,
             hide_intent: false,
             wants_show: false,
-            show_requests: None,
+            control_commands: None,
+            control_now_playing: None,
             offline: false,
             palette: Palette::dark(),
             applied_dark: None,
@@ -331,9 +337,11 @@ impl App {
         app
     }
 
-    /// Watches the flag a second launch sets to ask for this window.
-    pub fn set_show_requests(&mut self, flag: std::sync::Arc<std::sync::atomic::AtomicBool>) {
-        self.show_requests = Some(flag);
+    /// Watches the queue control clients fill and keeps their now-playing
+    /// snapshot fresh.
+    pub fn set_remote_control(&mut self, guard: &crate::single_instance::Guard) {
+        self.control_commands = Some(guard.commands());
+        self.control_now_playing = Some(guard.now_playing_slot());
     }
 
     /// Per-window setup: fonts, icons, loaders, theme. Called every time a
@@ -934,6 +942,34 @@ impl App {
         }
     }
 
+    fn handle_control_commands(&mut self) {
+        let Some(queue) = &self.control_commands else {
+            return;
+        };
+        let commands: Vec<ControlCommand> =
+            std::mem::take(&mut *queue.lock().unwrap_or_else(|p| p.into_inner()));
+        for command in commands {
+            let playing = self.now_playing().is_some_and(|now| now.playing);
+            let action = match command {
+                ControlCommand::Show => Some(Action::ShowWindow),
+                ControlCommand::PlayPause => Some(Action::TogglePlay),
+                ControlCommand::Play => (!playing).then_some(Action::TogglePlay),
+                ControlCommand::Pause => playing.then_some(Action::TogglePlay),
+                ControlCommand::Next => Some(Action::Next),
+                ControlCommand::Previous => Some(Action::Previous),
+                ControlCommand::SeekBy(offset) => Some(Action::SeekBy(offset)),
+                ControlCommand::VolumeBy(delta) => Some(Action::VolumeBy(delta)),
+                ControlCommand::SetVolume(volume) => Some(Action::SetVolume(volume.min(100))),
+                ControlCommand::ToggleMute => Some(Action::ToggleMute),
+                ControlCommand::ToggleShuffle => Some(Action::ToggleShuffle),
+                ControlCommand::CycleRepeat => Some(Action::CycleRepeat),
+            };
+            if let Some(action) = action {
+                self.actions.push(action);
+            }
+        }
+    }
+
     fn handle_media_commands(&mut self) {
         let Some(commands) = self
             .media_controls
@@ -1014,6 +1050,37 @@ impl App {
         if let Some(tray) = &mut self.tray {
             tray.set_playing(playing);
         }
+        if let Some(slot) = &self.control_now_playing {
+            let snapshot = self.control_snapshot();
+            *slot.lock().unwrap_or_else(|p| p.into_inner()) = snapshot;
+        }
+    }
+
+    /// One line for the control channel's `nowplaying` verb: tab-separated
+    /// `state, title, artists, album, position_ms, duration_ms, volume,
+    /// shuffle, repeat`, or [`crate::single_instance::NOTHING_PLAYING`].
+    fn control_snapshot(&self) -> String {
+        let Some(now) = self.now_playing() else {
+            return crate::single_instance::NOTHING_PLAYING.to_owned();
+        };
+        let state = if now.playing { "playing" } else { "paused" };
+        let repeat = match now.repeat {
+            RepeatMode::Off => "off",
+            RepeatMode::Context => "context",
+            RepeatMode::Track => "track",
+        };
+        // Tabs separate the fields, so a tab inside one would shift the rest.
+        let clean = |text: &str| text.replace('\t', " ");
+        format!(
+            "{state}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{repeat}",
+            clean(&now.title),
+            clean(&now.subtitle),
+            clean(&now.album_name),
+            now.position_ms,
+            now.duration_ms,
+            now.volume_percent,
+            if now.shuffle { "on" } else { "off" },
+        )
     }
 
     // ---- loading ---------------------------------------------------------------
@@ -2845,11 +2912,7 @@ impl App {
     /// headless loop in `main` drives this with a windowless context while
     /// the app lives in the tray.
     pub fn background_frame(&mut self, ctx: &egui::Context) {
-        if let Some(flag) = &self.show_requests
-            && flag.swap(false, std::sync::atomic::Ordering::SeqCst)
-        {
-            self.actions.push(Action::ShowWindow);
-        }
+        self.handle_control_commands();
         self.handle_events();
         self.handle_media_commands();
         self.handle_tray();
@@ -3081,5 +3144,70 @@ mod tests {
         app.handle_local(snapshot_at(35));
         assert_eq!(volume_to_percent(app.local.volume), 35);
         assert_eq!(volume_to_percent(app.settings.volume), 35);
+    }
+
+    /// What a Raycast script sends becomes the same action a menu pick or a
+    /// media key would produce.
+    #[test]
+    fn a_control_command_becomes_the_action_it_names() {
+        // #given
+        let mut app = headless_app();
+        let queue: std::sync::Arc<std::sync::Mutex<Vec<ControlCommand>>> = Default::default();
+        app.control_commands = Some(std::sync::Arc::clone(&queue));
+
+        // #when
+        queue.lock().expect("the queue").extend([
+            ControlCommand::Next,
+            ControlCommand::Previous,
+            ControlCommand::SeekBy(-15_000),
+            ControlCommand::VolumeBy(10),
+            ControlCommand::SetVolume(240),
+            ControlCommand::ToggleShuffle,
+            ControlCommand::Show,
+        ]);
+        app.handle_control_commands();
+
+        // #then
+        assert!(
+            matches!(
+                app.actions.as_slice(),
+                [
+                    Action::Next,
+                    Action::Previous,
+                    Action::SeekBy(-15_000),
+                    Action::VolumeBy(10),
+                    // A percentage above the scale is clamped, not wrapped.
+                    Action::SetVolume(100),
+                    Action::ToggleShuffle,
+                    Action::ShowWindow,
+                ]
+            ),
+            "{:?}",
+            app.actions
+        );
+        assert!(queue.lock().expect("the queue").is_empty());
+    }
+
+    /// `play` and `pause` say what state to end in, so the one that would
+    /// undo the current state does nothing.
+    #[test]
+    fn play_and_pause_do_not_toggle_the_wrong_way() {
+        let mut app = headless_app();
+        let queue: std::sync::Arc<std::sync::Mutex<Vec<ControlCommand>>> = Default::default();
+        app.control_commands = Some(std::sync::Arc::clone(&queue));
+
+        // Nothing is playing in a headless app, so `pause` has nothing to do
+        // and `play` asks for the toggle.
+        queue
+            .lock()
+            .expect("the queue")
+            .extend([ControlCommand::Pause, ControlCommand::Play]);
+        app.handle_control_commands();
+
+        assert!(
+            matches!(app.actions.as_slice(), [Action::TogglePlay]),
+            "{:?}",
+            app.actions
+        );
     }
 }

@@ -10,6 +10,10 @@ use clap::Parser;
 #[derive(Debug, Parser)]
 #[command(name = "fastpotify", version, about)]
 struct Cli {
+    /// A command for the running instance; without one, the app starts.
+    #[command(subcommand)]
+    control: Option<Control>,
+
     /// Spotify Connect device name for this session.
     #[arg(long)]
     device_name: Option<String>,
@@ -49,8 +53,135 @@ struct Cli {
     demo_shot_delay: u64,
 }
 
+/// Remote control of the running instance, for Raycast scripts, launchers,
+/// and hands on keyboards.
+#[derive(Debug, clap::Subcommand)]
+enum Control {
+    /// Toggle play/pause
+    PlayPause,
+    /// Start playback if paused
+    Play,
+    /// Pause playback if playing
+    Pause,
+    /// Skip to the next track
+    Next,
+    /// Return to the previous track
+    Previous,
+    /// Seek by this many seconds; negative seeks backwards
+    Seek {
+        #[arg(allow_negative_numbers = true)]
+        seconds: i64,
+    },
+    /// Set the volume to a percentage
+    Volume {
+        #[arg(value_parser = clap::value_parser!(u8).range(0..=100))]
+        percent: u8,
+    },
+    /// Raise the volume
+    VolumeUp {
+        #[arg(default_value_t = 10, value_parser = clap::value_parser!(u8).range(1..=100))]
+        percent: u8,
+    },
+    /// Lower the volume
+    VolumeDown {
+        #[arg(default_value_t = 10, value_parser = clap::value_parser!(u8).range(1..=100))]
+        percent: u8,
+    },
+    /// Toggle mute
+    Mute,
+    /// Toggle shuffle
+    Shuffle,
+    /// Cycle the repeat mode
+    Repeat,
+    /// Print the playing track
+    NowPlaying {
+        /// Print the fields tab-separated instead: state, title, artists,
+        /// album, position_ms, duration_ms, volume, shuffle, repeat.
+        #[arg(long)]
+        raw: bool,
+    },
+    /// Bring the window of the running instance forward
+    Show,
+}
+
+/// Sends one control verb to the running instance. Speaks over the
+/// single-instance loopback socket, which Linux does not have.
+#[cfg(not(target_os = "linux"))]
+fn run_control(control: Control) -> i32 {
+    let raw = matches!(control, Control::NowPlaying { raw: true });
+    let verb = match control {
+        Control::PlayPause => "playpause".to_owned(),
+        Control::Play => "play".to_owned(),
+        Control::Pause => "pause".to_owned(),
+        Control::Next => "next".to_owned(),
+        Control::Previous => "previous".to_owned(),
+        Control::Seek { seconds } => format!("seek-by {}", seconds.saturating_mul(1000)),
+        Control::Volume { percent } => format!("volume-set {percent}"),
+        Control::VolumeUp { percent } => format!("volume-by {percent}"),
+        Control::VolumeDown { percent } => format!("volume-by -{percent}"),
+        Control::Mute => "mute".to_owned(),
+        Control::Shuffle => "shuffle".to_owned(),
+        Control::Repeat => "repeat".to_owned(),
+        Control::NowPlaying { .. } => "nowplaying".to_owned(),
+        Control::Show => "show".to_owned(),
+    };
+    match single_instance::send(&verb) {
+        Ok(single_instance::Reply::Ok) => 0,
+        Ok(single_instance::Reply::NowPlaying(snapshot)) => {
+            if raw {
+                println!("{snapshot}");
+            } else {
+                println!("{}", format_now_playing(&snapshot));
+            }
+            0
+        }
+        Err(error) => {
+            eprintln!("Fastpotify is not running, or predates remote control: {error}");
+            1
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn run_control(_control: Control) -> i32 {
+    eprintln!(
+        "On Linux the running instance speaks MPRIS instead; use e.g. \
+         `playerctl --player=fastpotify play-pause`."
+    );
+    2
+}
+
+/// The `nowplaying` snapshot as one human-readable line.
+#[cfg(not(target_os = "linux"))]
+fn format_now_playing(snapshot: &str) -> String {
+    let mut fields = snapshot.split('\t');
+    let state = fields.next().unwrap_or_default();
+    let title = fields.next().unwrap_or_default();
+    let artists = fields.next().unwrap_or_default();
+    let _album = fields.next();
+    let position_ms: u32 = fields.next().and_then(|ms| ms.parse().ok()).unwrap_or(0);
+    let duration_ms: u32 = fields.next().and_then(|ms| ms.parse().ok()).unwrap_or(0);
+    let clock = |ms: u32| format!("{}:{:02}", ms / 60_000, ms % 60_000 / 1000);
+    match state {
+        "playing" | "paused" => {
+            let mark = if state == "playing" { "▶" } else { "⏸" };
+            format!(
+                "{mark} {title} — {artists}  [{} / {}]",
+                clock(position_ms),
+                clock(duration_ms)
+            )
+        }
+        _ => "Nothing playing".to_owned(),
+    }
+}
+
 fn main() -> eframe::Result<()> {
     let cli = Cli::parse();
+    // A control launch is a client, not a second app: talk to the running
+    // instance and exit before touching the log file it is writing to.
+    if let Some(control) = cli.control {
+        std::process::exit(run_control(control));
+    }
     let default_filter = if cli.verbose {
         "info,librespot=info,fastpotify=debug"
     } else {
@@ -118,7 +249,7 @@ fn main() -> eframe::Result<()> {
     #[allow(unused_mut)]
     let mut app = app::App::new(&waker, dirs, settings, options);
     if let Some(guard) = &instance {
-        app.set_show_requests(guard.show_requests());
+        app.set_remote_control(guard);
     }
     #[cfg(feature = "demo")]
     if demo {
