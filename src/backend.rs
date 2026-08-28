@@ -381,117 +381,6 @@ pub enum ApiResponse {
     },
 }
 
-impl ApiResponse {
-    fn error(&self) -> Option<&ApiError> {
-        match self {
-            Self::Me(Err(error))
-            | Self::Devices(Err(error))
-            | Self::Queue(Err(error))
-            | Self::PlaylistCreated(Err(error))
-            | Self::TopArtists {
-                result: Err(error), ..
-            }
-            | Self::RecentlyPlayed {
-                result: Err(error), ..
-            }
-            | Self::Recommendations {
-                result: Err(error), ..
-            }
-            | Self::PlaybackState {
-                result: Err(error), ..
-            }
-            | Self::TopTracks {
-                result: Err(error), ..
-            }
-            | Self::Discover {
-                result: Err(error), ..
-            }
-            | Self::MyPlaylists {
-                result: Err(error), ..
-            }
-            | Self::Playlist {
-                result: Err(error), ..
-            }
-            | Self::PlaylistItems {
-                result: Err(error), ..
-            }
-            | Self::PlaylistSample {
-                result: Err(error), ..
-            }
-            | Self::PlaylistUpdated {
-                result: Err(error), ..
-            }
-            | Self::PlaylistItemsChanged {
-                result: Err(error), ..
-            }
-            | Self::PlaylistFollowChanged {
-                result: Err(error), ..
-            }
-            | Self::SavedTracks {
-                result: Err(error), ..
-            }
-            | Self::SavedAlbums {
-                result: Err(error), ..
-            }
-            | Self::FollowedArtists {
-                result: Err(error), ..
-            }
-            | Self::SavedShows {
-                result: Err(error), ..
-            }
-            | Self::SavedEpisodes {
-                result: Err(error), ..
-            }
-            | Self::SavedChanged {
-                result: Err(error), ..
-            }
-            | Self::Contains {
-                result: Err(error), ..
-            }
-            | Self::Search {
-                result: Err(error), ..
-            }
-            | Self::Artist {
-                result: Err(error), ..
-            }
-            | Self::ArtistTopTracks {
-                result: Err(error), ..
-            }
-            | Self::ArtistAlbums {
-                result: Err(error), ..
-            }
-            | Self::RelatedArtists {
-                result: Err(error), ..
-            }
-            | Self::Album {
-                result: Err(error), ..
-            }
-            | Self::AlbumTracks {
-                result: Err(error), ..
-            }
-            | Self::Show {
-                result: Err(error), ..
-            }
-            | Self::ShowEpisodes {
-                result: Err(error), ..
-            }
-            | Self::Track {
-                result: Err(error), ..
-            }
-            | Self::Remote {
-                result: Err(error), ..
-            }
-            | Self::Transferred {
-                result: Err(error), ..
-            }
-            | Self::QueueAdded {
-                result: Err(error), ..
-            } => Some(error),
-            _ => None,
-        }
-    }
-}
-
 pub enum Command {
     /// Start (or restart) the Web API sign-in in the browser.
     SignIn,
@@ -517,8 +406,12 @@ pub enum Command {
         token: Box<crate::auth::StoredToken>,
         user: Box<User>,
     },
-    /// Internal: a browser flow ended (success or not).
-    SignInEnded,
+    /// Internal: a Web API browser flow or verification ended (success or not).
+    SignInEnded {
+        source: ApiSource,
+    },
+    /// Internal: the playback browser flow ended without a credential.
+    PlaybackAuthEnded,
     /// Internal: the Web API said which plan the account is on (`None` when
     /// it could not tell).
     AccountChecked {
@@ -835,7 +728,12 @@ impl Worker {
                     if let Some(cancel) = self.cancel_signin.take() {
                         let _ = cancel.send(true);
                     }
-                    self.authorizing_source = None;
+                    if let Some(source) = self.authorizing_source.take()
+                        && matches!(self.api.state(source), SessionState::Authorizing)
+                    {
+                        self.api.clear(source);
+                    }
+                    self.pending_authorization = None;
                 }
                 Command::SignOut => self.sign_out(),
                 Command::AuthorizePlayback => self.authorize_playback(),
@@ -857,6 +755,9 @@ impl Worker {
                 Command::Accent { url } => self.accent(url),
                 Command::WebSignedIn { source, token } => {
                     if self.authorizing_source == Some(source) {
+                        if let Err(error) = token.save(&self.token_path(source)) {
+                            log::warn!("unable to save the Spotify sign-in: {error}");
+                        }
                         self.on_web_signed_in(source, *token);
                     }
                 }
@@ -871,15 +772,22 @@ impl Worker {
                 Command::EngineConnected { engine, error } => {
                     self.on_engine_connected(*engine, error)
                 }
-                Command::SignInEnded => {
-                    self.cancel_signin = None;
-                    if let Some(source) = self.authorizing_source.take()
-                        && matches!(self.api.state(source), SessionState::Authorizing)
-                    {
-                        self.api.clear(source);
+                Command::SignInEnded { source } => {
+                    if self.authorizing_source == Some(source) {
+                        self.cancel_signin = None;
+                        self.authorizing_source = None;
+                        if matches!(self.api.state(source), SessionState::Authorizing) {
+                            self.api.clear(source);
+                        }
+                        if let Some(pending) = self.pending_authorization.take() {
+                            self.sign_in_source(pending);
+                        }
                     }
-                    if let Some(source) = self.pending_authorization.take() {
-                        self.sign_in_source(source);
+                }
+                Command::PlaybackAuthEnded => {
+                    self.cancel_signin = None;
+                    if let Some(pending) = self.pending_authorization.take() {
+                        self.sign_in_source(pending);
                     }
                 }
                 Command::AccountChecked { premium } => self.on_account_checked(premium),
@@ -909,23 +817,9 @@ impl Worker {
 
     fn restore_session(&mut self) {
         self.migrate_legacy_token();
-        let shared = crate::auth::StoredToken::load(&self.dirs.shared_web_token_file());
-        let personal = self.web_client_id.as_deref().and_then(|client_id| {
-            crate::auth::StoredToken::load(&self.dirs.personal_web_token_file())
-                .filter(|token| token.client_id == client_id)
-        });
-        let shared_ready = shared
-            .as_ref()
-            .is_some_and(|token| token.has_scopes(crate::auth::WEB_SCOPES));
-        let personal_ready = personal
-            .as_ref()
-            .is_some_and(|token| token.has_scopes(crate::auth::WEB_SCOPES));
-
-        if shared_ready {
-            self.emit(Event::Auth(AuthStatus::Connecting));
-        }
-        match shared {
+        match crate::auth::StoredToken::load(&self.dirs.shared_web_token_file()) {
             Some(token) if token.has_scopes(crate::auth::WEB_SCOPES) => {
+                self.emit(Event::Auth(AuthStatus::Connecting));
                 self.on_web_signed_in(ApiSource::Shared, token);
             }
             Some(_) => self.emit(Event::Auth(AuthStatus::Failed(
@@ -933,7 +827,12 @@ impl Worker {
             ))),
             None => self.emit(Event::Auth(AuthStatus::SignedOut)),
         }
-        if let Some(token) = personal.filter(|_| personal_ready) {
+        let personal = self.web_client_id.as_deref().and_then(|client_id| {
+            crate::auth::StoredToken::load(&self.dirs.personal_web_token_file())
+                .filter(|token| token.client_id == client_id)
+                .filter(|token| token.has_scopes(crate::auth::WEB_SCOPES))
+        });
+        if let Some(token) = personal {
             self.on_web_signed_in(ApiSource::Personal, token);
         }
     }
@@ -970,36 +869,48 @@ impl Worker {
         let events = self.events.clone();
         let waker = self.waker.clone();
         tokio::spawn(async move {
-            match client.me().await {
-                Ok(user) => {
-                    let _ = commands.send(Command::WebVerified {
-                        source,
-                        token: Box::new(token),
-                        user: Box::new(user),
-                    });
-                }
-                Err(error) => {
-                    gateway.set_state(source, SessionState::Failed);
-                    let message = match source {
-                        ApiSource::Shared => format!("Shared Spotify sign-in failed: {error}"),
-                        ApiSource::Personal => {
-                            format!("Personal app authorization failed: {error}")
-                        }
-                    };
-                    let other_ready = match source {
-                        ApiSource::Shared => gateway.personal_ready(),
-                        ApiSource::Personal => {
-                            matches!(gateway.state(ApiSource::Shared), SessionState::Ready { .. })
-                        }
-                    };
-                    if source == ApiSource::Shared || !other_ready {
-                        let _ = events.send(Event::Auth(AuthStatus::Failed(message.clone())));
+            let mut wait = Duration::from_secs(2);
+            let error = loop {
+                match client.me().await {
+                    Ok(user) => {
+                        let _ = commands.send(Command::WebVerified {
+                            source,
+                            token: Box::new(token),
+                            user: Box::new(user),
+                        });
+                        return;
                     }
-                    let _ = events.send(Event::Error(message));
-                    let _ = commands.send(Command::SignInEnded);
-                    waker.wake();
+                    Err(error @ ApiError::SignInExpired { .. }) => break error,
+                    Err(error) if error.status().is_some_and(|status| status < 500) => break error,
+                    Err(error) => {
+                        log::warn!("Spotify sign-in verification will retry: {error}");
+                        tokio::time::sleep(wait).await;
+                        wait = (wait * 2).min(Duration::from_secs(60));
+                        if !matches!(gateway.state(source), SessionState::Authorizing) {
+                            return;
+                        }
+                    }
                 }
+            };
+            gateway.clear(source);
+            let message = match source {
+                ApiSource::Shared => format!("Shared Spotify sign-in failed: {error}"),
+                ApiSource::Personal => {
+                    format!("Personal app authorization failed: {error}")
+                }
+            };
+            let other_ready = match source {
+                ApiSource::Shared => gateway.personal_ready(),
+                ApiSource::Personal => {
+                    matches!(gateway.state(ApiSource::Shared), SessionState::Ready { .. })
+                }
+            };
+            if source == ApiSource::Shared || !other_ready {
+                let _ = events.send(Event::Auth(AuthStatus::Failed(message.clone())));
             }
+            let _ = events.send(Event::Error(message));
+            let _ = commands.send(Command::SignInEnded { source });
+            waker.wake();
         });
     }
 
@@ -1010,23 +921,14 @@ impl Worker {
         {
             return;
         }
-        let provider = TokenProvider::Web(WebTokens::new(
-            self.http.clone(),
-            token.clone(),
-            self.token_path(source),
-            source,
-        ));
-        if let Err(error) = self
-            .api
-            .install(source, provider, AccountId::new(user.id.clone()))
-        {
+        if let Err(error) = self.api.install(source, AccountId::new(user.id.clone())) {
             self.api.clear(source);
+            if source == ApiSource::Shared {
+                self.emit(Event::Auth(AuthStatus::Failed(error.to_string())));
+            }
             self.emit(Event::Error(error.to_string()));
             self.finish_authorization(source);
             return;
-        }
-        if let Err(error) = token.save(&self.token_path(source)) {
-            log::warn!("unable to save the Spotify sign-in: {error}");
         }
         match source {
             ApiSource::Shared => {
@@ -1123,7 +1025,7 @@ impl Worker {
                         let _ = events.send(Event::Error(format!("Sign-in failed: {message}")));
                     }
                     waker.wake();
-                    let _ = commands.send(Command::SignInEnded);
+                    let _ = commands.send(Command::SignInEnded { source });
                 }
             }
         });
@@ -1276,7 +1178,7 @@ impl Worker {
                         let _ = events.send(Event::Playback(LocalPlayback::Failed(message)));
                     }
                     waker.wake();
-                    let _ = commands.send(Command::SignInEnded);
+                    let _ = commands.send(Command::PlaybackAuthEnded);
                 }
             }
         });
@@ -1559,10 +1461,10 @@ impl Worker {
             } else {
                 None
             };
-            let response = handle(&api, request).await;
-            if let Some(ApiError::SignInExpired { api_source, .. }) = response.error() {
-                api.fail(*api_source);
-                if *api_source == ApiSource::Personal {
+            let (response, expired) = handle(&api, request).await;
+            if let Some(api_source) = expired {
+                api.clear(api_source);
+                if api_source == ApiSource::Personal {
                     let _ = events.send(Event::WebApp { client_id: None });
                 } else {
                     let _ = events.send(Event::Auth(AuthStatus::Failed(
@@ -1634,25 +1536,29 @@ fn operation_for(api: &ApiGateway, request: &ApiRequest) -> Operation {
         | ApiRequest::FollowedArtists { .. }
         | ApiRequest::SavedShows { .. }
         | ApiRequest::SavedEpisodes { .. }
-        | ApiRequest::SetSaved { .. }
-        | ApiRequest::Contains { .. }
-        | ApiRequest::FollowPlaylist { .. } => Operation::UserData,
+        | ApiRequest::SetSaved { .. } => Operation::UserData,
+        // Development Mode cannot answer membership for playlists it omits.
+        ApiRequest::Contains { uris } => {
+            if uris.iter().any(|uri| uri.starts_with("spotify:playlist:")) {
+                Operation::UnsupportedDevelopmentMode
+            } else {
+                Operation::UserData
+            }
+        }
         ApiRequest::MyPlaylists { .. } => Operation::PlaylistLibrary,
         ApiRequest::CreatePlaylist { .. } => Operation::PlaylistCreation,
         ApiRequest::Discover { .. } | ApiRequest::Search { .. } => Operation::PlaylistSearch,
-        ApiRequest::Playlist { id, .. } => {
-            Operation::PlaylistMetadata(api.playlist_access(&PlaylistId::new(id.clone())))
-        }
+        ApiRequest::Playlist { id, .. } => Operation::PlaylistMetadata(api.playlist_access(id)),
         ApiRequest::PlaylistItems { id, .. } | ApiRequest::PlaylistSample { id, .. } => {
-            Operation::PlaylistItems(api.playlist_access(&PlaylistId::new(id.clone())))
+            Operation::PlaylistItems(api.playlist_access(id))
         }
-        ApiRequest::UpdatePlaylist { id, .. } => {
-            Operation::PlaylistMutation(api.playlist_access(&PlaylistId::new(id.clone())))
+        ApiRequest::UpdatePlaylist { id, .. } | ApiRequest::FollowPlaylist { id, .. } => {
+            Operation::PlaylistMutation(api.playlist_access(id))
         }
         ApiRequest::AddToPlaylist { playlist_id, .. }
         | ApiRequest::RemoveFromPlaylist { playlist_id, .. }
         | ApiRequest::ReorderPlaylist { playlist_id, .. } => {
-            Operation::PlaylistMutation(api.playlist_access(&PlaylistId::new(playlist_id.clone())))
+            Operation::PlaylistMutation(api.playlist_access(playlist_id))
         }
         ApiRequest::Recommendations { .. }
         | ApiRequest::ArtistTopTracks { .. }
@@ -1697,6 +1603,21 @@ fn observe_playlists(api: &ApiGateway, response: &ApiResponse) {
             id,
             result: Err(error),
             ..
+        }
+        | ApiResponse::PlaylistItems {
+            id,
+            result: Err(error),
+            ..
+        }
+        | ApiResponse::PlaylistSample {
+            id,
+            result: Err(error),
+            ..
+        }
+        | ApiResponse::PlaylistFollowChanged {
+            id,
+            result: Err(error),
+            ..
         } if error.status() == Some(403) => {
             api.invalidate_playlist_access(&PlaylistId::new(id.clone()));
         }
@@ -1704,17 +1625,20 @@ fn observe_playlists(api: &ApiGateway, response: &ApiResponse) {
     }
 }
 
-async fn handle(api: &ApiGateway, request: ApiRequest) -> ApiResponse {
-    let selected = api
-        .client_for(operation_for(api, &request))
-        .map(|(_, client)| client);
+async fn handle(api: &ApiGateway, request: ApiRequest) -> (ApiResponse, Option<ApiSource>) {
+    let selected = api.client_for(operation_for(api, &request));
+    let expired = std::cell::Cell::new(None);
     macro_rules! routed {
-        ($method:ident($($argument:expr),* $(,)?)) => {
-            match &selected {
+        ($method:ident($($argument:expr),* $(,)?)) => {{
+            let result = match &selected {
                 Ok(client) => client.$method($($argument),*).await,
                 Err(error) => Err(error.clone()),
+            };
+            if let Err(ApiError::SignInExpired { api_source }) = &result {
+                expired.set(Some(*api_source));
             }
-        };
+            result
+        }};
     }
 
     let response = match request {
@@ -1774,7 +1698,7 @@ async fn handle(api: &ApiGateway, request: ApiRequest) -> ApiResponse {
             offset,
             generation,
         } => ApiResponse::PlaylistItems {
-            result: api.playlist_items(&id, offset, PLAYLIST_PAGE_SIZE).await,
+            result: routed!(playlist_items(&id, offset, PLAYLIST_PAGE_SIZE)),
             id,
             offset,
             generation,
@@ -1784,7 +1708,7 @@ async fn handle(api: &ApiGateway, request: ApiRequest) -> ApiResponse {
             offset,
             generation,
         } => ApiResponse::PlaylistSample {
-            result: api.playlist_items(&id, offset, PLAYLIST_PAGE_SIZE).await,
+            result: routed!(playlist_items(&id, offset, PLAYLIST_PAGE_SIZE)),
             id,
             generation,
         },
@@ -1799,14 +1723,12 @@ async fn handle(api: &ApiGateway, request: ApiRequest) -> ApiResponse {
             description,
             public,
         } => ApiResponse::PlaylistUpdated {
-            result: match api.playlist_mutation_client(&id).await {
-                Ok((_, client)) => {
-                    client
-                        .update_playlist(&id, name.as_deref(), description.as_deref(), public)
-                        .await
-                }
-                Err(error) => Err(error),
-            },
+            result: routed!(update_playlist(
+                &id,
+                name.as_deref(),
+                description.as_deref(),
+                public
+            )),
             id,
         },
         ApiRequest::AddToPlaylist {
@@ -1814,10 +1736,7 @@ async fn handle(api: &ApiGateway, request: ApiRequest) -> ApiResponse {
             playlist_name,
             uris,
         } => ApiResponse::PlaylistItemsChanged {
-            result: match api.playlist_mutation_client(&playlist_id).await {
-                Ok((_, client)) => client.add_playlist_items(&playlist_id, &uris, None).await,
-                Err(error) => Err(error),
-            },
+            result: routed!(add_playlist_items(&playlist_id, &uris, None)),
             id: playlist_id,
             message: format!("Added to {playlist_name}"),
         },
@@ -1826,14 +1745,11 @@ async fn handle(api: &ApiGateway, request: ApiRequest) -> ApiResponse {
             uris,
             snapshot_id,
         } => ApiResponse::PlaylistItemsChanged {
-            result: match api.playlist_mutation_client(&playlist_id).await {
-                Ok((_, client)) => {
-                    client
-                        .remove_playlist_items(&playlist_id, &uris, snapshot_id.as_deref())
-                        .await
-                }
-                Err(error) => Err(error),
-            },
+            result: routed!(remove_playlist_items(
+                &playlist_id,
+                &uris,
+                snapshot_id.as_deref()
+            )),
             id: playlist_id,
             message: "Removed from playlist".to_string(),
         },
@@ -1843,19 +1759,12 @@ async fn handle(api: &ApiGateway, request: ApiRequest) -> ApiResponse {
             insert_before,
             snapshot_id,
         } => ApiResponse::PlaylistItemsChanged {
-            result: match api.playlist_mutation_client(&playlist_id).await {
-                Ok((_, client)) => {
-                    client
-                        .reorder_playlist(
-                            &playlist_id,
-                            range_start,
-                            insert_before,
-                            snapshot_id.as_deref(),
-                        )
-                        .await
-                }
-                Err(error) => Err(error),
-            },
+            result: routed!(reorder_playlist(
+                &playlist_id,
+                range_start,
+                insert_before,
+                snapshot_id.as_deref()
+            )),
             id: playlist_id,
             message: String::new(),
         },
@@ -1996,7 +1905,7 @@ async fn handle(api: &ApiGateway, request: ApiRequest) -> ApiResponse {
         },
     };
     observe_playlists(api, &response);
-    response
+    (response, expired.get())
 }
 
 /// Spotify's transcription of the track, when the local session can ask for

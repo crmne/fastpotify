@@ -260,13 +260,14 @@ pub async fn exchange_code(
         ],
     )
     .await
+    .map_err(|error| anyhow!("{error}"))
 }
 
 pub async fn refresh(
     http: &reqwest::Client,
     client_id: &str,
     refresh_token: &str,
-) -> Result<TokenResponse> {
+) -> std::result::Result<TokenResponse, TokenEndpointError> {
     token_request(
         http,
         &[
@@ -278,16 +279,29 @@ pub async fn refresh(
     .await
 }
 
-async fn token_request(http: &reqwest::Client, form: &[(&str, &str)]) -> Result<TokenResponse> {
+#[derive(Debug, thiserror::Error)]
+pub enum TokenEndpointError {
+    /// Spotify refused the grant itself; only the browser can mint a new one.
+    #[error("Spotify rejected the token request ({status}): {detail}")]
+    Rejected { status: u16, detail: String },
+    /// The endpoint could not answer; the grant may still be valid.
+    #[error("token request failed: {0}")]
+    Unreachable(String),
+}
+
+async fn token_request(
+    http: &reqwest::Client,
+    form: &[(&str, &str)],
+) -> std::result::Result<TokenResponse, TokenEndpointError> {
     let response = http
         .post(TOKEN_URL)
         .form(form)
         .send()
         .await
-        .context("token request failed")?;
+        .map_err(|error| TokenEndpointError::Unreachable(error.to_string()))?;
     let status = response.status();
     let text = response.text().await.unwrap_or_default();
-    if !status.is_success() {
+    if status.is_client_error() {
         let detail = serde_json::from_str::<serde_json::Value>(&text)
             .ok()
             .and_then(|value| {
@@ -297,9 +311,20 @@ async fn token_request(http: &reqwest::Client, form: &[(&str, &str)]) -> Result<
                     .map(str::to_string)
             })
             .unwrap_or_else(|| redact(&text));
-        bail!("Spotify rejected the token request ({status}): {detail}");
+        return Err(TokenEndpointError::Rejected {
+            status: status.as_u16(),
+            detail,
+        });
     }
-    serde_json::from_str(&text).context("unexpected token response")
+    if !status.is_success() {
+        return Err(TokenEndpointError::Unreachable(format!(
+            "Spotify answered {status}: {}",
+            redact(&text)
+        )));
+    }
+    serde_json::from_str(&text).map_err(|error| {
+        TokenEndpointError::Unreachable(format!("unexpected token response: {error}"))
+    })
 }
 
 fn redact(text: &str) -> String {
@@ -339,6 +364,10 @@ impl StoredToken {
 
     pub fn needs_refresh(&self) -> bool {
         now_secs() + REFRESH_MARGIN.as_secs() >= self.expires_at
+    }
+
+    pub fn expired(&self) -> bool {
+        now_secs() >= self.expires_at
     }
 
     /// Whether the grant covers every scope in `scopes`. A grant cannot be

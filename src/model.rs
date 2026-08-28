@@ -123,6 +123,13 @@ impl<T> Loadable<T> {
             Err(error) => Loadable::Failed(error.to_string()),
         }
     }
+
+    /// Keeps an already loaded value when a refresh fails.
+    pub fn refresh<E: std::fmt::Display>(&mut self, result: Result<T, E>) {
+        if result.is_ok() || self.get().is_none() {
+            *self = Self::from_result(result);
+        }
+    }
 }
 
 /// An offset-paginated list that loads on demand as the user scrolls.
@@ -296,7 +303,6 @@ pub struct SearchState {
     pub committed: String,
     pub serial: u64,
     pub results: Loadable<SearchResults>,
-    pub refreshing: bool,
     pub filter: SearchFilter,
     pub typed_at: Option<Instant>,
     pub focus_requested: bool,

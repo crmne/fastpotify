@@ -21,6 +21,7 @@ use super::models::*;
 const BASE_URL: &str = "https://api.spotify.com/v1";
 const MAX_IN_FLIGHT: usize = 6;
 const RATE_LIMIT_RETRIES: u32 = 3;
+const MAX_RETRY_AFTER: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Debug, Error)]
 pub enum ApiError {
@@ -136,10 +137,16 @@ impl WebTokens {
                         log::warn!("token refresh returned an unusable response: {error}")
                     }
                 },
-                Err(_) => {
+                Err(crate::auth::TokenEndpointError::Rejected { .. }) => {
                     return Err(ApiError::SignInExpired {
                         api_source: self.source,
                     });
+                }
+                Err(crate::auth::TokenEndpointError::Unreachable(detail)) => {
+                    if force || guard.expired() {
+                        return Err(ApiError::Network(detail));
+                    }
+                    log::warn!("token refresh failed, using the current token: {detail}");
                 }
             }
         }
@@ -366,7 +373,8 @@ impl ApiClient {
                     .get(reqwest::header::RETRY_AFTER)
                     .and_then(|value| value.to_str().ok())
                     .and_then(|value| value.parse::<u64>().ok())
-                    .map_or(Duration::from_secs(1), Duration::from_secs);
+                    .map_or(Duration::from_secs(1), Duration::from_secs)
+                    .min(MAX_RETRY_AFTER);
                 let text = response.text().await.unwrap_or_default();
                 if is_quota_exhausted(&text) {
                     return Err(ApiError::QuotaExhausted);

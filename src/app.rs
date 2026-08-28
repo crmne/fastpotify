@@ -1565,7 +1565,6 @@ impl App {
         }
         self.search.serial += 1;
         self.search.committed = query.clone();
-        self.search.refreshing = true;
         if self.search.results.get().is_none() {
             self.search.results = Loadable::Loading;
         }
@@ -1763,9 +1762,7 @@ impl App {
                         self.note_recent_context(&context);
                     }
                 }
-                if result.is_ok() || self.home.recently_played.get().is_none() {
-                    self.home.recently_played = Loadable::from_result(result);
-                }
+                self.home.recently_played.refresh(result);
             }
             ApiResponse::TopTracks {
                 offset,
@@ -1801,9 +1798,7 @@ impl App {
                             }
                         }
                         Err(error) => {
-                            if self.home.top_songs.get().is_none() {
-                                self.home.top_songs = Loadable::Failed(error.to_string());
-                            }
+                            self.home.top_songs.refresh(Err::<Vec<Track>, _>(error));
                             self.home.top_songs_loading = false;
                         }
                     }
@@ -1841,9 +1836,7 @@ impl App {
                 if generation != self.home.generation {
                     return;
                 }
-                if result.is_ok() || self.home.top_artists.get().is_none() {
-                    self.home.top_artists = Loadable::from_result(result);
-                }
+                self.home.top_artists.refresh(result);
             }
             ApiResponse::Recommendations { generation, result } => {
                 if generation != self.home.generation {
@@ -1853,9 +1846,7 @@ impl App {
                     let uris: Vec<String> = tracks.iter().map(|track| track.uri.clone()).collect();
                     self.request_contains(uris);
                 }
-                if result.is_ok() || self.home.recommendations.get().is_none() {
-                    self.home.recommendations = Loadable::from_result(result);
-                }
+                self.home.recommendations.refresh(result);
             }
             ApiResponse::Discover {
                 term,
@@ -1935,10 +1926,8 @@ impl App {
                 {
                     self.tint_for(Some(image));
                 }
-                if let Some(page) = self.playlist_pages.get_mut(&id)
-                    && (result.is_ok() || page.playlist.get().is_none())
-                {
-                    page.playlist = Loadable::from_result(result);
+                if let Some(page) = self.playlist_pages.get_mut(&id) {
+                    page.playlist.refresh(result);
                 }
                 self.try_adopt_playlist_cache(&id);
             }
@@ -2288,7 +2277,6 @@ impl App {
                 if serial != self.search.serial || query != self.search.committed {
                     return;
                 }
-                self.search.refreshing = false;
                 if let Ok(results) = &result {
                     let uris: Vec<String> = results
                         .tracks
@@ -2300,9 +2288,7 @@ impl App {
                     self.settings.remember_search(&query);
                     self.settings_dirty = true;
                 }
-                if result.is_ok() || self.search.results.get().is_none() {
-                    self.search.results = Loadable::from_result(result);
-                }
+                self.search.results.refresh(result);
             }
             ApiResponse::Artist { id, result } => {
                 if let Ok(artist) = &result {
@@ -2622,62 +2608,56 @@ impl App {
         }
     }
 
+    /// Adopt a playlist's disk cache once both it and the live playlist
+    /// are here and Spotify's snapshot still matches; a stale cache is
+    /// discarded, never shown.
     fn try_adopt_playlist_cache(&mut self, id: &str) {
         let mut uris = Vec::new();
         let mut adders: Vec<String> = Vec::new();
-        let mut reload = None;
         if let Some(page) = self.playlist_pages.get_mut(id) {
-            if page.items.loaded_once && !page.cache_complete {
+            let Some(snapshot_now) = page
+                .playlist
+                .get()
+                .and_then(|playlist| playlist.snapshot_id.clone())
+            else {
+                return;
+            };
+            match &page.pending_cache {
+                Some((held, _)) if *held == snapshot_now => {}
+                Some(_) => {
+                    // The playlist changed since; the cache is history.
+                    page.pending_cache = None;
+                    return;
+                }
+                None => return,
+            }
+            if page.items.is_complete() || page.cache_complete {
                 page.pending_cache = None;
                 return;
             }
-            if !page.cache_complete
-                && let Some((_, items)) = &page.pending_cache
-            {
-                uris = items
-                    .iter()
-                    .filter_map(|item| item.playable())
-                    .map(|item| item.uri().to_string())
-                    .collect();
-                adders = items
-                    .iter()
-                    .filter_map(|item| item.added_by.as_ref()?.id.clone())
-                    .collect();
-                page.contributors.extend(adders.iter().cloned());
-                page.items.total = Some(items.len() as u32);
-                page.items.items = items.clone();
-                page.items.next_offset = None;
-                page.items.loading = false;
-                page.items.loaded_once = true;
-                page.items.error = None;
-                page.cache_complete = true;
-            }
-            if let Some(snapshot_now) = page
-                .playlist
-                .get()
-                .and_then(|playlist| playlist.snapshot_id.as_deref())
-                && let Some((cached_snapshot, _)) = &page.pending_cache
-            {
-                if cached_snapshot == snapshot_now {
-                    page.pending_cache = None;
-                } else {
-                    page.pending_cache = None;
-                    page.cache_complete = false;
-                    page.items.reset();
-                    page.items.loading = true;
-                    reload = Some(page.generation);
-                }
-            }
+            let Some((_, items)) = page.pending_cache.take() else {
+                return;
+            };
+            uris = items
+                .iter()
+                .filter_map(|item| item.playable())
+                .map(|item| item.uri().to_string())
+                .collect();
+            adders = items
+                .iter()
+                .filter_map(|item| item.added_by.as_ref()?.id.clone())
+                .collect();
+            page.contributors.extend(adders.iter().cloned());
+            page.items.total = Some(items.len() as u32);
+            page.items.items = items;
+            page.items.next_offset = None;
+            page.items.loading = false;
+            page.items.loaded_once = true;
+            page.items.error = None;
+            page.cache_complete = true;
         }
         self.request_contains(uris);
         self.request_user_names(adders);
-        if let Some(generation) = reload {
-            self.backend.api(ApiRequest::PlaylistItems {
-                id: id.to_string(),
-                offset: 0,
-                generation,
-            });
-        }
     }
 
     /// Play what was playing when the app last closed. `false` when

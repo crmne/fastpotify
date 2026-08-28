@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use super::ApiSource;
 use super::client::{ApiClient, ApiError, NetActivity, TokenProvider};
-use super::models::{Page, Playlist, PlaylistItem};
+use super::models::Playlist;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct AccountId(String);
@@ -31,19 +31,24 @@ impl PlaylistId {
     }
 }
 
+impl std::borrow::Borrow<str> for PlaylistId {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SessionState {
     Unavailable,
     Authorizing,
     Ready { account: AccountId },
-    Failed,
 }
 
 impl SessionState {
     pub fn account(&self) -> Option<&AccountId> {
         match self {
             Self::Ready { account } => Some(account),
-            Self::Unavailable | Self::Authorizing | Self::Failed => None,
+            Self::Unavailable | Self::Authorizing => None,
         }
     }
 }
@@ -92,34 +97,23 @@ pub enum Operation {
     UnsupportedDevelopmentMode,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Route {
-    Dispatch(ApiSource),
-    ClassifyPlaylist,
-}
-
-fn plan(operation: Operation, personal_ready: bool) -> Route {
+/// A playlist with unknown access dispatches to the shared app, which can
+/// serve anything; later requests move once a response reveals the owner.
+fn plan(operation: Operation, personal_ready: bool) -> ApiSource {
     use Operation::*;
     match operation {
         CanonicalAccount | PlaylistLibrary | PlaylistSearch | UnsupportedDevelopmentMode => {
-            Route::Dispatch(ApiSource::Shared)
-        }
-        PlaylistItems(PlaylistAccess::Unknown) | PlaylistMutation(PlaylistAccess::Unknown)
-            if personal_ready =>
-        {
-            Route::ClassifyPlaylist
+            ApiSource::Shared
         }
         PlaylistMetadata(PlaylistAccess::External | PlaylistAccess::Unknown)
-        | PlaylistItems(PlaylistAccess::External)
-        | PlaylistMutation(PlaylistAccess::External) => Route::Dispatch(ApiSource::Shared),
+        | PlaylistItems(PlaylistAccess::External | PlaylistAccess::Unknown)
+        | PlaylistMutation(PlaylistAccess::External | PlaylistAccess::Unknown) => ApiSource::Shared,
         PlaylistMetadata(_) | PlaylistItems(_) | PlaylistMutation(_) if personal_ready => {
-            Route::Dispatch(ApiSource::Personal)
+            ApiSource::Personal
         }
-        Playback | UserData | PlaylistCreation | Catalog if personal_ready => {
-            Route::Dispatch(ApiSource::Personal)
-        }
+        Playback | UserData | PlaylistCreation | Catalog if personal_ready => ApiSource::Personal,
         Playback | UserData | PlaylistCreation | Catalog | PlaylistMetadata(_)
-        | PlaylistItems(_) | PlaylistMutation(_) => Route::Dispatch(ApiSource::Shared),
+        | PlaylistItems(_) | PlaylistMutation(_) => ApiSource::Shared,
     }
 }
 
@@ -196,12 +190,9 @@ impl ApiGateway {
         self.session(source).set_state(state);
     }
 
-    pub fn install(
-        &self,
-        source: ApiSource,
-        provider: TokenProvider,
-        account: AccountId,
-    ) -> Result<(), ApiError> {
+    /// Marks a verified session ready, keeping the token provider that
+    /// `begin_verification` installed.
+    pub fn install(&self, source: ApiSource, account: AccountId) -> Result<(), ApiError> {
         let other = match source {
             ApiSource::Shared => ApiSource::Personal,
             ApiSource::Personal => ApiSource::Shared,
@@ -216,9 +207,8 @@ impl ApiGateway {
                 message: "The Spotify grants belong to different accounts".into(),
             });
         }
-        let session = self.session(source);
-        session.client.set_token_provider(Some(provider));
-        session.set_state(SessionState::Ready { account });
+        self.session(source)
+            .set_state(SessionState::Ready { account });
         Ok(())
     }
 
@@ -236,12 +226,6 @@ impl ApiGateway {
         let session = self.session(source);
         session.client.set_token_provider(None);
         session.set_state(SessionState::Unavailable);
-    }
-
-    pub fn fail(&self, source: ApiSource) {
-        let session = self.session(source);
-        session.client.set_token_provider(None);
-        session.set_state(SessionState::Failed);
     }
 
     pub fn clear_all(&self) {
@@ -264,28 +248,17 @@ impl ApiGateway {
         matches!(self.state(ApiSource::Personal), SessionState::Ready { .. })
     }
 
-    fn source_for(&self, operation: Operation) -> Route {
-        plan(operation, self.personal_ready())
-    }
-
-    pub fn client_for(
-        &self,
-        operation: Operation,
-    ) -> Result<(ApiSource, Arc<ApiClient>), ApiError> {
-        let Route::Dispatch(source) = self.source_for(operation) else {
-            return Err(ApiError::Decode(
-                "playlist access must be classified before dispatch".into(),
-            ));
-        };
+    pub fn client_for(&self, operation: Operation) -> Result<Arc<ApiClient>, ApiError> {
+        let source = plan(operation, self.personal_ready());
         let session = self.session(source);
         if !matches!(session.state(), SessionState::Ready { .. }) {
             return Err(ApiError::NotSignedIn);
         }
         log::debug!("Spotify route operation={operation:?} source={source}");
-        Ok((source, Arc::clone(&session.client)))
+        Ok(Arc::clone(&session.client))
     }
 
-    pub fn playlist_access(&self, id: &PlaylistId) -> PlaylistAccess {
+    pub fn playlist_access(&self, id: &str) -> PlaylistAccess {
         self.playlist_access
             .lock()
             .unwrap_or_else(|lock| lock.into_inner())
@@ -317,54 +290,6 @@ impl ApiGateway {
             .unwrap_or_else(|lock| lock.into_inner())
             .insert(id.clone(), PlaylistAccess::Unknown);
     }
-
-    async fn playlist_client(
-        &self,
-        id: &PlaylistId,
-        mutation: bool,
-    ) -> Result<(ApiSource, Arc<ApiClient>), ApiError> {
-        let access = self.playlist_access(id);
-        let operation = if mutation {
-            Operation::PlaylistMutation(access)
-        } else {
-            Operation::PlaylistItems(access)
-        };
-        if self.source_for(operation) == Route::ClassifyPlaylist {
-            let (_, shared) =
-                self.client_for(Operation::PlaylistMetadata(PlaylistAccess::Unknown))?;
-            let metadata = shared.playlist(id.as_str()).await?;
-            self.observe_playlist(&metadata);
-        }
-        let access = self.playlist_access(id);
-        let operation = if mutation {
-            Operation::PlaylistMutation(access)
-        } else {
-            Operation::PlaylistItems(access)
-        };
-        self.client_for(operation)
-    }
-
-    pub async fn playlist_items(
-        &self,
-        id: &str,
-        offset: u32,
-        limit: u32,
-    ) -> Result<Page<PlaylistItem>, ApiError> {
-        let id = PlaylistId::new(id);
-        let (_, client) = self.playlist_client(&id, false).await?;
-        let result = client.playlist_items(id.as_str(), offset, limit).await;
-        if result.as_ref().err().and_then(ApiError::status) == Some(403) {
-            self.invalidate_playlist_access(&id);
-        }
-        result
-    }
-
-    pub async fn playlist_mutation_client(
-        &self,
-        id: &str,
-    ) -> Result<(ApiSource, Arc<ApiClient>), ApiError> {
-        self.playlist_client(&PlaylistId::new(id), true).await
-    }
 }
 
 #[cfg(test)]
@@ -394,10 +319,7 @@ mod tests {
             Operation::PlaylistItems(PlaylistAccess::Owned),
             Operation::PlaylistItems(PlaylistAccess::Collaborative),
         ] {
-            assert_eq!(
-                plan(operation, personal),
-                Route::Dispatch(ApiSource::Personal)
-            );
+            assert_eq!(plan(operation, personal), ApiSource::Personal);
         }
         for operation in [
             Operation::CanonicalAccount,
@@ -407,24 +329,12 @@ mod tests {
             Operation::PlaylistMetadata(PlaylistAccess::External),
             Operation::PlaylistMetadata(PlaylistAccess::Unknown),
             Operation::PlaylistItems(PlaylistAccess::External),
+            Operation::PlaylistItems(PlaylistAccess::Unknown),
             Operation::PlaylistMutation(PlaylistAccess::External),
+            Operation::PlaylistMutation(PlaylistAccess::Unknown),
         ] {
-            assert_eq!(
-                plan(operation, personal),
-                Route::Dispatch(ApiSource::Shared)
-            );
+            assert_eq!(plan(operation, personal), ApiSource::Shared);
         }
-        assert_eq!(
-            plan(Operation::PlaylistItems(PlaylistAccess::Unknown), personal),
-            Route::ClassifyPlaylist
-        );
-        assert_eq!(
-            plan(
-                Operation::PlaylistMutation(PlaylistAccess::Unknown),
-                personal
-            ),
-            Route::ClassifyPlaylist
-        );
         for operation in [
             Operation::Playback,
             Operation::UserData,
@@ -435,7 +345,7 @@ mod tests {
             Operation::PlaylistMetadata(PlaylistAccess::Unknown),
             Operation::PlaylistItems(PlaylistAccess::Unknown),
         ] {
-            assert_eq!(plan(operation, false), Route::Dispatch(ApiSource::Shared));
+            assert_eq!(plan(operation, false), ApiSource::Shared);
         }
     }
 
@@ -470,29 +380,23 @@ mod tests {
     #[test]
     fn dual_sessions_require_the_same_account() {
         let gateway = ApiGateway::new(reqwest::Client::new(), Arc::new(NetActivity::default()));
+        gateway.begin_verification(ApiSource::Shared, provider("shared", ApiSource::Shared));
         gateway
-            .install(
-                ApiSource::Shared,
-                provider("shared", ApiSource::Shared),
-                AccountId::new("same"),
-            )
+            .install(ApiSource::Shared, AccountId::new("same"))
             .unwrap();
+        gateway.begin_verification(
+            ApiSource::Personal,
+            provider("personal", ApiSource::Personal),
+        );
         gateway
-            .install(
-                ApiSource::Personal,
-                provider("personal", ApiSource::Personal),
-                AccountId::new("same"),
-            )
+            .install(ApiSource::Personal, AccountId::new("same"))
             .unwrap();
         assert!(gateway.personal_ready());
         gateway.clear(ApiSource::Personal);
+        gateway.begin_verification(ApiSource::Personal, provider("other", ApiSource::Personal));
         assert!(
             gateway
-                .install(
-                    ApiSource::Personal,
-                    provider("other", ApiSource::Personal),
-                    AccountId::new("other"),
-                )
+                .install(ApiSource::Personal, AccountId::new("other"))
                 .is_err()
         );
         assert!(matches!(
@@ -500,21 +404,21 @@ mod tests {
             SessionState::Ready { .. }
         ));
 
+        gateway.begin_verification(
+            ApiSource::Personal,
+            provider("personal-again", ApiSource::Personal),
+        );
         gateway
-            .install(
-                ApiSource::Personal,
-                provider("personal-again", ApiSource::Personal),
-                AccountId::new("same"),
-            )
+            .install(ApiSource::Personal, AccountId::new("same"))
             .unwrap();
         gateway.clear(ApiSource::Shared);
+        gateway.begin_verification(
+            ApiSource::Shared,
+            provider("other-shared", ApiSource::Shared),
+        );
         assert!(
             gateway
-                .install(
-                    ApiSource::Shared,
-                    provider("other-shared", ApiSource::Shared),
-                    AccountId::new("other"),
-                )
+                .install(ApiSource::Shared, AccountId::new("other"))
                 .is_err()
         );
         assert!(matches!(
