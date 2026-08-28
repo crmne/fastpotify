@@ -80,6 +80,9 @@ const TRACKS: &[&str] = &[
     "Sunlight",
     "My Friend the Forest",
     "Kaleidoscope",
+    "봄여름가을겨울",
+    "夜に駆ける",
+    "起风了",
 ];
 
 const PLAYLISTS: &[&str] = &[

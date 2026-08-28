@@ -259,6 +259,9 @@ fn install_fonts(ctx: &egui::Context) {
         .entry(FontFamily::Proportional)
         .or_default()
         .insert(0, "inter".to_owned());
+    // Inter has no Hangul, kana, or CJK ideographs. System UI fonts fill the
+    // gap without shipping a 10+ MB Noto CJK in the binary.
+    crate::fonts::add_system_fallbacks(&mut fonts);
     let fallbacks: Vec<String> = fonts.families[&FontFamily::Proportional]
         .iter()
         .skip(1)

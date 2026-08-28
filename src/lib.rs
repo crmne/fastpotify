@@ -6,6 +6,7 @@ pub mod auth;
 pub mod backend;
 #[cfg(any(test, feature = "demo"))]
 pub mod demo;
+mod fonts;
 pub mod images;
 pub mod model;
 #[cfg(target_os = "linux")]
