@@ -76,6 +76,10 @@ On macOS, with [Homebrew](https://brew.sh):
 brew install --cask crmne/tap/fastpotify
 ```
 
+The media keys, Control Centre and the lock screen drive playback there. macOS
+routes them to bundled applications only, so they work from `Fastpotify.app`
+and not from `cargo run`; `packaging/macos/bundle.sh` builds the bundle.
+
 Everywhere else it is a single binary. Build it with a stable Rust toolchain
 (1.95 or newer):
 

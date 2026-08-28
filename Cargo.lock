@@ -1444,6 +1444,7 @@ dependencies = [
  "aes",
  "anyhow",
  "base64",
+ "block2 0.5.1",
  "clap",
  "cpal",
  "ctr",
@@ -1465,6 +1466,10 @@ dependencies = [
  "mdns-sd",
  "memmap2",
  "mpris-server",
+ "objc2 0.5.2",
+ "objc2-app-kit 0.2.2",
+ "objc2-foundation 0.2.2",
+ "objc2-media-player",
  "open",
  "pbkdf2",
  "percent-encoding",
@@ -3437,6 +3442,19 @@ version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a1a1ae721c5e35be65f01a03b6d2ac13a54cb4fa70d8a5da293d7b0020261398"
 dependencies = [
+ "block2 0.5.1",
+ "objc2 0.5.2",
+ "objc2-app-kit 0.2.2",
+ "objc2-foundation 0.2.2",
+]
+
+[[package]]
+name = "objc2-media-player"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aeee7e398f352d50d8016c73969878942efb422030884a744180a2d2b8b341de"
+dependencies = [
+ "bitflags 2.13.1",
  "block2 0.5.1",
  "objc2 0.5.2",
  "objc2-app-kit 0.2.2",

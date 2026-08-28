@@ -78,6 +78,23 @@ pbkdf2 = "0.12"
 aes = "0.8"
 ctr = "0.9"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.5.2"
+objc2-foundation = { version = "0.2.2", features = ["NSString", "NSDictionary", "NSData", "NSValue", "NSGeometry"] }
+objc2-app-kit = { version = "0.2.2", features = ["NSImage"] }
+# Now Playing and the remote command centre: media keys, Control Centre and
+# the lock screen. block2 carries the command handlers, NSImage the cover art.
+objc2-media-player = { version = "0.2.2", features = [
+    "MPNowPlayingInfoCenter",
+    "MPRemoteCommandCenter",
+    "MPRemoteCommand",
+    "MPRemoteCommandEvent",
+    "MPMediaItem",
+    "block2",
+    "objc2-app-kit",
+] }
+block2 = "0.5"
+
 [target.'cfg(target_os = "linux")'.dependencies]
 ksni = { version = "0.3", features = ["blocking"] }
 librespot-playback = { version = "0.8", default-features = false, features = ["rodio-backend", "pulseaudio-backend", "rustls-tls-native-roots"] }
