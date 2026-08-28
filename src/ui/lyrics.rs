@@ -56,12 +56,16 @@ pub fn side_panel(app: &mut App, ui: &mut egui::Ui) {
                     }
                     // The accent fill of a pill is the toggle's on state;
                     // Romanize sits left of Follow, Translate left of that.
+                    // While the answer is on its way, a spinner stands in
+                    // for the label of each toggle that is waiting on it.
                     if loaded {
-                        if theme::pill_button(
+                        let busy = matches!(app.translation, Loadable::Loading);
+                        if theme::pill_toggle(
                             ui,
                             &palette,
                             "Romanize",
                             app.settings.lyrics_romanize,
+                            busy && app.settings.lyrics_romanize,
                         )
                         .on_hover_text("Write the lines in Latin letters, to sing along.")
                         .clicked()
@@ -70,11 +74,12 @@ pub fn side_panel(app: &mut App, ui: &mut egui::Ui) {
                             app.actions.push(Action::SettingsChanged);
                             app.request_translation();
                         }
-                        if theme::pill_button(
+                        if theme::pill_toggle(
                             ui,
                             &palette,
                             "Translate",
                             app.settings.lyrics_show_translation,
+                            busy && app.settings.lyrics_show_translation,
                         )
                         .on_hover_text("Show each line in your language.")
                         .clicked()
@@ -151,12 +156,16 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
     let quiet = palette.text.gamma_multiply(0.45);
     // Whether the words are rewritten in Latin letters or echoed in the
     // reader's language. When that was asked for and the request failed,
-    // one quiet line says so -- nothing more; flipping a toggle or moving
-    // to the next track tries again.
+    // one quiet line says so, with a way to ask again.
     let romanize = app.settings.lyrics_romanize;
     let translate = app.settings.lyrics_show_translation;
     if (romanize || translate) && matches!(app.translation, Loadable::Failed(_)) {
-        theme::subtle(ui, &palette, "Translation is unavailable right now.");
+        ui.horizontal(|ui| {
+            theme::subtle(ui, &palette, "Translation is unavailable right now.");
+            if theme::pill_button(ui, &palette, "Try again", false).clicked() {
+                app.retry_translation();
+            }
+        });
     }
     let scroll = egui::ScrollArea::vertical()
         .id_salt("lyrics-scroll")

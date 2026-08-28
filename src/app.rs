@@ -1029,6 +1029,16 @@ impl App {
             })));
     }
 
+    /// Asks for the panel's translation again, even when an answer or a
+    /// failure is already showing: the buttons in the panel retry through
+    /// this, so a moment of bad network does not cost the song its echo.
+    pub fn retry_translation(&mut self) {
+        self.translation = Loadable::NotLoaded;
+        self.translation_uri = None;
+        self.translation_target = None;
+        self.request_translation();
+    }
+
     fn tick(&mut self, ctx: &egui::Context) {
         let now = Instant::now();
         self.toasts
@@ -3715,5 +3725,56 @@ mod tests {
             "{:?}",
             app.actions
         );
+    }
+
+    #[test]
+    fn a_new_track_is_translated_again_without_retoggling() {
+        let mut app = headless_app();
+        app.settings.lyrics_show_translation = true;
+        app.settings.lyrics_romanize = true;
+        app.show_lyrics_panel = true;
+        app.local.playback = Playback::Playing;
+
+        // One song is playing, its words and their translation are in.
+        app.local.track = Some(crate::player::LocalTrack {
+            uri: "spotify:track:a".into(),
+            ..Default::default()
+        });
+        app.lyrics_uri = Some("spotify:track:a".into());
+        app.lyrics = Loadable::Loaded(Some(crate::lyrics::Lyrics {
+            lines: vec![crate::lyrics::Line {
+                at_ms: Some(0),
+                text: "a".into(),
+            }],
+            synced: true,
+            instrumental: false,
+        }));
+        app.translation_uri = Some("spotify:track:a".into());
+        app.translation_target = Some("en".into());
+        app.translation = Loadable::Loaded(Some(crate::translate::Translation::default()));
+
+        // The next song begins and its words arrive. Asking for the panel's
+        // translation must reach for the new track, not rest on the old one.
+        app.local.track = Some(crate::player::LocalTrack {
+            uri: "spotify:track:b".into(),
+            ..Default::default()
+        });
+        app.lyrics_uri = Some("spotify:track:b".into());
+        app.lyrics = Loadable::Loaded(Some(crate::lyrics::Lyrics {
+            lines: vec![crate::lyrics::Line {
+                at_ms: Some(0),
+                text: String::new(),
+            }],
+            synced: true,
+            instrumental: false,
+        }));
+        app.request_translation();
+        assert_eq!(app.translation_uri.as_deref(), Some("spotify:track:b"));
+        assert!(matches!(app.translation, Loadable::Loading));
+
+        // A failure does not stick either: trying again asks once more.
+        app.translation = Loadable::Failed("no answer".into());
+        app.retry_translation();
+        assert!(matches!(app.translation, Loadable::Loading));
     }
 }

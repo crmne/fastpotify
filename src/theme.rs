@@ -641,6 +641,50 @@ pub fn pill_button(ui: &mut egui::Ui, palette: &Palette, label: &str, primary: b
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
+/// A pill-shaped toggle whose accent fill is the on state; while `busy`, a
+/// small spinner takes the label's place, for a toggle waiting on its data.
+pub fn pill_toggle(
+    ui: &mut egui::Ui,
+    palette: &Palette,
+    label: &str,
+    on: bool,
+    busy: bool,
+) -> Response {
+    let font = semibold(13.0);
+    let color = if on { palette.on_accent } else { palette.text };
+    let galley = ui.painter().layout_no_wrap(label.to_string(), font, color);
+    let padding = Vec2::new(18.0, 8.0);
+    let size = galley.size() + padding * 2.0;
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    if ui.is_rect_visible(rect) {
+        let hovered = response.hovered();
+        let radius = rect.height() / 2.0;
+        if on {
+            let fill = if hovered {
+                palette.accent_hover
+            } else {
+                palette.accent
+            };
+            ui.painter().rect_filled(rect, radius, fill);
+        } else {
+            let stroke_color = if hovered { palette.text } else { palette.dim };
+            ui.painter().rect_stroke(
+                rect,
+                radius,
+                Stroke::new(1.0, stroke_color),
+                egui::StrokeKind::Inside,
+            );
+        }
+        if busy {
+            paint_spinner(ui, rect.center(), galley.size().y, color);
+        } else {
+            let pos = rect.center() - galley.size() / 2.0;
+            ui.painter().galley(pos, galley, color);
+        }
+    }
+    response.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
 /// A muted button with an icon and label, for row and header actions.
 pub fn soft_button(
     ui: &mut egui::Ui,
@@ -686,22 +730,27 @@ pub fn soft_button(
 pub fn spinner(ui: &mut egui::Ui, size: f32, color: Color32) -> Response {
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
     if ui.is_rect_visible(rect) {
-        ui.ctx()
-            .request_repaint_after(std::time::Duration::from_millis(33));
-        let radius = size / 2.0 - 2.0;
-        let start = ui.input(|input| input.time) * std::f64::consts::TAU * 1.2;
-        let sweep = 250_f64.to_radians();
-        let points = (0..20)
-            .map(|index| {
-                let angle = start + sweep * f64::from(index) / 19.0;
-                let (sin, cos) = angle.sin_cos();
-                rect.center() + radius * egui::vec2(cos as f32, sin as f32)
-            })
-            .collect();
-        ui.painter()
-            .add(egui::Shape::line(points, Stroke::new(2.0, color)));
+        paint_spinner(ui, rect.center(), size, color);
     }
     response
+}
+
+/// The arc of a spinner around `center`, asking for the repaints that turn it.
+fn paint_spinner(ui: &mut egui::Ui, center: egui::Pos2, size: f32, color: Color32) {
+    ui.ctx()
+        .request_repaint_after(std::time::Duration::from_millis(33));
+    let radius = size / 2.0 - 2.0;
+    let start = ui.input(|input| input.time) * std::f64::consts::TAU * 1.2;
+    let sweep = 250_f64.to_radians();
+    let points = (0..20)
+        .map(|index| {
+            let angle = start + sweep * f64::from(index) / 19.0;
+            let (sin, cos) = angle.sin_cos();
+            center + radius * egui::vec2(cos as f32, sin as f32)
+        })
+        .collect();
+    ui.painter()
+        .add(egui::Shape::line(points, Stroke::new(2.0, color)));
 }
 
 /// Truncated single-line text in a given font and colour.
