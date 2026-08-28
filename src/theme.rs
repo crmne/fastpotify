@@ -540,12 +540,14 @@ pub fn circle_button(
         // Hover and press both animate; the press shrink is brief and snappy
         // while the hover grow is a slow settle, so the play button feels
         // alive instead of jumping between sizes.
-        let hover_t = ui
-            .ctx()
-            .animate_bool_with_time(ui.id().with("circle-hover"), hovered, 0.18);
-        let press_t = ui
-            .ctx()
-            .animate_bool_with_time(ui.id().with("circle-press"), response.is_pointer_button_down_on(), 0.09);
+        let hover_t =
+            ui.ctx()
+                .animate_bool_with_time(response.id.with("circle-hover"), hovered, 0.18);
+        let press_t = ui.ctx().animate_bool_with_time(
+            response.id.with("circle-press"),
+            response.is_pointer_button_down_on(),
+            0.09,
+        );
         let grow = 1.0 + 0.05 * ease_out(hover_t);
         let radius = diameter / 2.0 * grow * (1.0 - 0.08 * press_t);
         let fill = if hovered { fill_hover } else { fill };

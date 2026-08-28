@@ -402,7 +402,7 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
                         );
                     } else if response.hovered() {
                         let hover_t = ui.ctx().animate_bool_with_time(
-                            ui.id().with("sidebar-row-hover"),
+                            response.id.with("sidebar-row-hover"),
                             true,
                             0.12,
                         );

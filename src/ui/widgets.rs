@@ -528,7 +528,7 @@ pub fn track_row(ui: &mut Ui, app: &mut App, row: TrackRow<'_>) {
     // lists feel calm while the cursor moves.
     let hover_t = ui
         .ctx()
-        .animate_bool_with_time(ui.id().with("row-hover"), hovered, 0.12);
+        .animate_bool_with_time(response.id.with("row-hover"), hovered, 0.12);
     if hover_t > 0.0 {
         let fill = palette
             .surface_hover
@@ -929,13 +929,9 @@ pub fn card(
         // little, the shadow deepens, and the play button fades in and
         // springs up. All driven by one animated hover value, so every
         // element moves together.
-        let hover_t = ui
-            .ctx()
-            .animate_bool_with_time(
-                ui.id().with("card-hover"),
-                hovered,
-                0.16,
-            );
+        let hover_t =
+            ui.ctx()
+                .animate_bool_with_time(response.id.with("card-hover"), hovered, 0.16);
         let lift = theme::ease_out(hover_t);
         if lift > 0.0 {
             ui.painter().rect_filled(
