@@ -442,6 +442,63 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 }
             },
         );
+        widgets::setting_row(
+            ui,
+            &palette,
+            "Interface scale",
+            "Make everything larger or smaller. Also Ctrl + +, Ctrl + -, Ctrl + 0.",
+            |ui| {
+                let current = crate::settings::Settings::clamp_ui_scale(app.settings.ui_scale);
+                let mut new_scale = current;
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    if theme::soft_button(ui, &palette, Some(Icon::Minus), "", false)
+                        .clicked()
+                    {
+                        new_scale = crate::settings::Settings::clamp_ui_scale(
+                            ((current - 0.1) * 10.0).round() / 10.0,
+                        );
+                    }
+                    // Current percentage as a badge-like label.
+                    {
+                        let pct = format!("{}%", (current * 100.0).round() as i32);
+                        let galley = ui.painter().layout_no_wrap(
+                            pct.clone(),
+                            theme::semibold(13.0),
+                            palette.text,
+                        );
+                        let width = galley.size().x + 16.0;
+                        let height = 26.0;
+                        let (rect, _) =
+                            ui.allocate_exact_size(Vec2::new(width, height), egui::Sense::hover());
+                        ui.painter().rect_filled(rect, height / 2.0, palette.surface);
+                        ui.painter().galley(
+                            rect.center() - galley.size() / 2.0,
+                            galley,
+                            palette.text,
+                        );
+                    }
+                    if theme::soft_button(ui, &palette, Some(Icon::Plus), "", false)
+                        .clicked()
+                    {
+                        new_scale = crate::settings::Settings::clamp_ui_scale(
+                            ((current + 0.1) * 10.0).round() / 10.0,
+                        );
+                    }
+                    if (current - 1.0).abs() > 0.001
+                        && theme::soft_button(ui, &palette, None, "Reset", false)
+                            .clicked()
+                    {
+                        new_scale = 1.0;
+                    }
+                });
+                if (new_scale - current).abs() > 0.001 {
+                    app.settings.ui_scale = new_scale;
+                    changed = true;
+                    ui.ctx().set_zoom_factor(new_scale);
+                }
+            },
+        );
     });
 
     section(ui, &palette, "Storage", |ui| {

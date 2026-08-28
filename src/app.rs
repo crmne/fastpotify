@@ -256,6 +256,7 @@ pub struct App {
     /// A newer release than this build, once GitHub has said so.
     pub update: Option<crate::updates::Release>,
     last_update_check: Option<Instant>,
+    last_zoom_factor: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -304,6 +305,7 @@ impl App {
             .and_then(Page::decode)
             .filter(|page| !matches!(page, Page::Settings | Page::Queue))
             .unwrap_or(Page::Home);
+        let initial_zoom = settings.normalized_ui_scale();
 
         let mut app = Self {
             dirs,
@@ -397,6 +399,7 @@ impl App {
             resume_position_ms: session.last_position_ms,
             update: None,
             last_update_check: None,
+            last_zoom_factor: initial_zoom,
         };
         app.local.volume = app.settings.volume;
         app
@@ -430,6 +433,11 @@ impl App {
         // of what every other player scrolls per notch; trackpads report
         // pixels and are unaffected (#32).
         ctx.options_mut(|options| options.input_options.line_scroll_speed = 120.0);
+        let scale = self.settings.normalized_ui_scale();
+        if (scale - 1.0).abs() > f32::EPSILON {
+            ctx.set_zoom_factor(scale);
+        }
+        self.last_zoom_factor = scale;
     }
 
     /// The window is gone but the process stays: audio, the tray, and the
@@ -1045,6 +1053,57 @@ impl App {
             self.accents.clear();
             self.accent_pending.clear();
         }
+    }
+
+    fn sync_zoom(&mut self, ctx: &egui::Context) {
+        let ctx_zoom = ctx.zoom_factor();
+        let setting_zoom = self.settings.normalized_ui_scale();
+        if (setting_zoom - self.settings.ui_scale).abs() > f32::EPSILON {
+            self.settings.ui_scale = setting_zoom;
+            self.settings_dirty = true;
+        }
+        if (ctx_zoom - setting_zoom).abs() < 0.001 {
+            self.last_zoom_factor = ctx_zoom;
+            return;
+        }
+        if (ctx_zoom - self.last_zoom_factor).abs() > 0.001 {
+            // Changed via egui's Ctrl+Plus/Minus handling.
+            let clamped = crate::settings::Settings::clamp_ui_scale(ctx_zoom);
+            if (clamped - ctx_zoom).abs() > 0.001 {
+                ctx.set_zoom_factor(clamped);
+            }
+            if (clamped - self.settings.ui_scale).abs() > 0.001 {
+                self.settings.ui_scale = clamped;
+                self.settings_dirty = true;
+            }
+            self.last_zoom_factor = clamped;
+        } else {
+            // Setting changed via the UI.
+            ctx.set_zoom_factor(setting_zoom);
+            self.last_zoom_factor = setting_zoom;
+        }
+    }
+
+    pub fn set_ui_scale(&mut self, ctx: &egui::Context, scale: f32) {
+        let clamped = crate::settings::Settings::clamp_ui_scale(scale);
+        // Keep two decimals for slider precision; keyboard steps are already rounded.
+        let rounded = (clamped * 100.0).round() / 100.0;
+        let clamped = crate::settings::Settings::clamp_ui_scale(rounded);
+        if (clamped - self.settings.ui_scale).abs() < 0.001 {
+            return;
+        }
+        self.settings.ui_scale = clamped;
+        self.settings_dirty = true;
+        ctx.set_zoom_factor(clamped);
+        self.last_zoom_factor = clamped;
+    }
+
+    fn zoom_step(&mut self, ctx: &egui::Context, delta: f32) {
+        let current = self.settings.normalized_ui_scale();
+        let mut next = current + delta;
+        next = (next * 10.0).round() / 10.0;
+        next = crate::settings::Settings::clamp_ui_scale(next);
+        self.set_ui_scale(ctx, next);
     }
 
     fn handle_tray(&mut self) {
@@ -3154,6 +3213,10 @@ impl App {
                     ThemeChoice::System => egui::ThemePreference::System,
                 });
             }
+            Action::SetUiScale(scale) => self.set_ui_scale(ctx, scale),
+            Action::ZoomIn => self.zoom_step(ctx, 0.1),
+            Action::ZoomOut => self.zoom_step(ctx, -0.1),
+            Action::ZoomReset => self.set_ui_scale(ctx, 1.0),
             Action::RestartEngine => {
                 self.save_settings();
                 let config = engine_config(&self.dirs, &self.settings);
@@ -3271,6 +3334,7 @@ impl App {
         let ctx = ui.ctx().clone();
         let ctx = &ctx;
         self.apply_theme(ctx);
+        self.sync_zoom(ctx);
         self.lock_scroll_axis(ctx);
         crate::ui::show(self, ui);
         self.apply_actions(ctx);

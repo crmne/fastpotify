@@ -109,6 +109,8 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+←  /  Ctrl+→", "Previous or next"),
     ("Shift+←  /  Shift+→", "Seek 10 seconds"),
     ("Ctrl+↑  /  Ctrl+↓", "Volume up or down"),
+    ("Ctrl+Plus  /  Ctrl+Minus", "Zoom in or out"),
+    ("Ctrl+0", "Reset zoom"),
     ("M", "Mute or unmute"),
     ("S", "Toggle shuffle"),
     ("R", "Cycle repeat"),

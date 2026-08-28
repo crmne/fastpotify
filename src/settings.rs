@@ -4,6 +4,14 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+pub const UI_SCALE_MIN: f32 = 0.5;
+pub const UI_SCALE_MAX: f32 = 2.0;
+pub const UI_SCALE_DEFAULT: f32 = 1.0;
+
+fn default_ui_scale() -> f32 {
+    UI_SCALE_DEFAULT
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ThemeChoice {
@@ -46,6 +54,8 @@ pub struct Settings {
     /// Last local volume, 0..=65535.
     pub volume: u16,
     pub sidebar_width: f32,
+    #[serde(default = "default_ui_scale")]
+    pub ui_scale: f32,
     pub search_history: Vec<String>,
     pub show_shortcut_hints: bool,
     /// A personal Spotify Web API application id, if the user registered one.
@@ -78,6 +88,7 @@ impl Default for Settings {
             accent_from_art: true,
             volume: (u16::MAX as u32 * 70 / 100) as u16,
             sidebar_width: 250.0,
+            ui_scale: UI_SCALE_DEFAULT,
             search_history: Vec::new(),
             show_shortcut_hints: true,
             web_client_id: None,
@@ -92,12 +103,27 @@ impl Default for Settings {
 impl Settings {
     pub fn load(path: &Path) -> Self {
         match std::fs::read_to_string(path) {
-            Ok(text) => serde_json::from_str(&text).unwrap_or_else(|error| {
-                log::warn!("settings at {} are unreadable: {error}", path.display());
-                Self::default()
-            }),
+            Ok(text) => {
+                let mut settings: Self = serde_json::from_str(&text).unwrap_or_else(|error| {
+                    log::warn!("settings at {} are unreadable: {error}", path.display());
+                    Self::default()
+                });
+                settings.ui_scale = Self::clamp_ui_scale(settings.ui_scale);
+                settings
+            }
             Err(_) => Self::default(),
         }
+    }
+
+    pub fn clamp_ui_scale(scale: f32) -> f32 {
+        if !scale.is_finite() {
+            return UI_SCALE_DEFAULT;
+        }
+        scale.clamp(UI_SCALE_MIN, UI_SCALE_MAX)
+    }
+
+    pub fn normalized_ui_scale(&self) -> f32 {
+        Self::clamp_ui_scale(self.ui_scale)
     }
 
     pub fn save(&self, path: &Path) {
