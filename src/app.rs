@@ -11,7 +11,7 @@ use crate::api::models::{
 };
 use crate::backend::{
     ApiRequest, ApiResponse, AuthStatus, Backend, Command, Event, LocalPlayback, LyricsRequest,
-    RemoteAction, Waker,
+    PLAYLIST_PAGE_SIZE, RemoteAction, Waker,
 };
 use crate::media::{MediaCommand, MediaState, MediaTrack};
 use crate::media_controls::MediaService;
@@ -44,7 +44,7 @@ const PLAYBACK_HOLD: Duration = Duration::from_secs(6);
 /// A second look after a command, so the button settles quickly rather than
 /// waiting for the ordinary poll.
 const REMOTE_RECHECK: Duration = Duration::from_millis(1200);
-const CONTAINS_BATCH: usize = 50;
+const CONTAINS_BATCH: usize = 40;
 
 pub struct RemoteSnapshot {
     pub state: PlaybackState,
@@ -164,6 +164,7 @@ pub struct App {
     pub home: HomeData,
     pub search: SearchState,
     pub playlist_pages: HashMap<String, PlaylistPage>,
+    load_generation: u64,
     pub album_pages: HashMap<String, AlbumPage>,
     pub artist_pages: HashMap<String, ArtistPage>,
     pub show_pages: HashMap<String, ShowPage>,
@@ -213,8 +214,7 @@ pub struct App {
     pub volume_preview: Option<f32>,
     last_eviction: Instant,
     pub sign_in_url: Option<String>,
-    /// The Web API application the current sign-in belongs to, so Settings
-    /// can say whether the one named there is in use yet.
+    /// The verified personal Web API application, when acceleration is ready.
     pub web_app: Option<String>,
     pending_remote_position: Option<(u32, Instant)>,
     pending_remote_volume: Option<(u8, Instant)>,
@@ -343,6 +343,7 @@ impl App {
             home: HomeData::default(),
             search: SearchState::default(),
             playlist_pages: HashMap::new(),
+            load_generation: 0,
             album_pages: HashMap::new(),
             artist_pages: HashMap::new(),
             show_pages: HashMap::new(),
@@ -491,14 +492,6 @@ impl App {
         } else {
             Target::Remote(None)
         }
-    }
-
-    /// Whether the Web API sign-in belongs to an app of the user's own
-    /// rather than the shared one.
-    pub fn own_web_app(&self) -> bool {
-        self.web_app
-            .as_deref()
-            .is_some_and(|id| id != crate::auth::DEFAULT_WEB_CLIENT_ID)
     }
 
     /// The context playing as the interface should show it: the one just
@@ -759,10 +752,14 @@ impl App {
                     }
                 }
                 Event::PlaylistCache {
+                    account_id,
                     id,
                     snapshot,
                     items,
                 } => {
+                    if self.user_id() != Some(account_id.as_str()) {
+                        continue;
+                    }
                     if let Some(page) = self.playlist_pages.get_mut(&id) {
                         page.pending_cache = Some((snapshot, items));
                     }
@@ -771,7 +768,7 @@ impl App {
                 Event::UserName { id, name } => {
                     self.user_names.insert(id, name);
                 }
-                Event::WebApp { client_id } => self.web_app = Some(client_id),
+                Event::WebApp { client_id } => self.web_app = client_id,
                 Event::UpdateAvailable { version, url } => {
                     let notice = crate::updates::Release { version, url };
                     if self.update.as_ref() != Some(&notice) {
@@ -1252,16 +1249,32 @@ impl App {
                 }
             }
             Page::Playlist(id) => {
+                let needs_generation = self
+                    .playlist_pages
+                    .get(&id)
+                    .is_none_or(|page| page.generation == 0);
+                if needs_generation {
+                    self.load_generation += 1;
+                    self.playlist_pages
+                        .entry(id.clone())
+                        .or_default()
+                        .generation = self.load_generation;
+                }
                 let page = self.playlist_pages.entry(id.clone()).or_default();
+                let generation = page.generation;
                 if page.playlist.needs_load() {
                     page.playlist = Loadable::Loading;
-                    self.backend.api(ApiRequest::Playlist { id: id.clone() });
+                    self.backend.api(ApiRequest::Playlist {
+                        id: id.clone(),
+                        generation,
+                    });
                 }
                 if !page.items.loaded_once && page.items.can_load_more() {
                     page.items.loading = true;
                     self.backend.api(ApiRequest::PlaylistItems {
                         id: id.clone(),
                         offset: 0,
+                        generation,
                     });
                     // The disk may hold the whole list already; it is
                     // adopted only if Spotify's snapshot still matches.
@@ -1335,21 +1348,37 @@ impl App {
         }
         self.home.requested = true;
         self.home.loaded_at = Some(Instant::now());
-        self.home.recently_played = Loadable::Loading;
-        self.home.top_artists = Loadable::Loading;
-        self.home.top_tracks = Loadable::Loading;
-        self.backend.api(ApiRequest::RecentlyPlayed);
-        self.backend.api(ApiRequest::TopArtists);
+        self.home.generation += 1;
+        let generation = self.home.generation;
+        if self.home.recently_played.get().is_none() {
+            self.home.recently_played = Loadable::Loading;
+        }
+        if self.home.top_artists.get().is_none() {
+            self.home.top_artists = Loadable::Loading;
+        }
+        if self.home.top_tracks.get().is_none() {
+            self.home.top_tracks = Loadable::Loading;
+        }
+        self.backend.api(ApiRequest::RecentlyPlayed { generation });
+        self.backend.api(ApiRequest::TopArtists { generation });
         self.backend.api(ApiRequest::TopTracks {
             offset: 0,
             full: false,
+            generation,
         });
+        self.home.discover_pending.clear();
         for term in DISCOVER_TERMS {
             self.home
-                .discover
+                .discover_pending
                 .insert((*term).to_string(), Loadable::Loading);
+            if !self.home.discover.contains_key(*term) {
+                self.home
+                    .discover
+                    .insert((*term).to_string(), Loadable::Loading);
+            }
             self.backend.api(ApiRequest::Discover {
                 term: (*term).to_string(),
+                generation,
             });
         }
     }
@@ -1361,9 +1390,11 @@ impl App {
         self.home.top_songs = Loadable::Loading;
         self.home.top_songs_loading = true;
         self.home.top_songs_complete = false;
+        self.home.top_songs_generation += 1;
         self.backend.api(ApiRequest::TopTracks {
             offset: 0,
             full: true,
+            generation: self.home.top_songs_generation,
         });
     }
 
@@ -1411,7 +1442,11 @@ impl App {
                     let list = &mut page.items;
                     if let Some(offset) = list.next_offset.filter(|_| list.can_load_more()) {
                         list.loading = true;
-                        self.backend.api(ApiRequest::PlaylistItems { id, offset });
+                        self.backend.api(ApiRequest::PlaylistItems {
+                            id,
+                            offset,
+                            generation: page.generation,
+                        });
                     }
                 }
             }
@@ -1452,7 +1487,23 @@ impl App {
             Page::Podcasts => self.library.shows.reset(),
             Page::Episodes => self.library.episodes.reset(),
             Page::Playlist(id) => {
-                self.playlist_pages.remove(id);
+                if let Some(playlist) = self.playlist_pages.get_mut(id) {
+                    self.load_generation += 1;
+                    playlist.generation = self.load_generation;
+                    playlist.items.loading = true;
+                    playlist.cache_complete = false;
+                    playlist.pending_cache = None;
+                    self.backend.api(ApiRequest::Playlist {
+                        id: id.clone(),
+                        generation: playlist.generation,
+                    });
+                    self.backend.api(ApiRequest::PlaylistItems {
+                        id: id.clone(),
+                        offset: 0,
+                        generation: playlist.generation,
+                    });
+                    return;
+                }
             }
             Page::Album(id) => {
                 self.album_pages.remove(id);
@@ -1514,7 +1565,10 @@ impl App {
         }
         self.search.serial += 1;
         self.search.committed = query.clone();
-        self.search.results = Loadable::Loading;
+        self.search.refreshing = true;
+        if self.search.results.get().is_none() {
+            self.search.results = Loadable::Loading;
+        }
         self.backend.api(ApiRequest::Search {
             query,
             serial: self.search.serial,
@@ -1538,9 +1592,6 @@ impl App {
     }
 
     pub fn request_contains(&mut self, uris: Vec<String>) {
-        let Some(user_id) = self.user_id().map(str::to_string) else {
-            return;
-        };
         let mut batch = Vec::new();
         for uri in uris {
             if uri.is_empty()
@@ -1555,22 +1606,17 @@ impl App {
             if batch.len() == CONTAINS_BATCH {
                 self.backend.api(ApiRequest::Contains {
                     uris: std::mem::take(&mut batch),
-                    user_id: user_id.clone(),
                 });
             }
         }
         if !batch.is_empty() {
-            self.backend.api(ApiRequest::Contains {
-                uris: batch,
-                user_id,
-            });
+            self.backend.api(ApiRequest::Contains { uris: batch });
         }
     }
 
     // ---- api responses -------------------------------------------------------
 
     fn handle_api(&mut self, response: ApiResponse) {
-        let own_app = self.own_web_app();
         match response {
             ApiResponse::Me(result) => match result {
                 Ok(user) => {
@@ -1582,11 +1628,10 @@ impl App {
                     }
                 }
                 Err(error) => {
-                    if matches!(error, crate::api::ApiError::SignInExpired(_)) {
+                    if matches!(error, crate::api::ApiError::SignInExpired { .. }) {
                         self.auth = AuthStatus::Failed(
                             "Your Spotify sign-in expired. Please sign in again.".into(),
                         );
-                        self.backend.send(Command::SignOut);
                     } else {
                         self.toast_error(format!("Couldn't load your profile: {error}"));
                     }
@@ -1703,7 +1748,10 @@ impl App {
                     self.request_contains(uris);
                 }
             }
-            ApiResponse::RecentlyPlayed(result) => {
+            ApiResponse::RecentlyPlayed { generation, result } => {
+                if generation != self.home.generation {
+                    return;
+                }
                 if let Ok(history) = &result {
                     // Oldest first, so the newest ends up at the front.
                     let contexts: Vec<String> = history
@@ -1715,14 +1763,20 @@ impl App {
                         self.note_recent_context(&context);
                     }
                 }
-                self.home.recently_played = Loadable::from_result(result);
+                if result.is_ok() || self.home.recently_played.get().is_none() {
+                    self.home.recently_played = Loadable::from_result(result);
+                }
             }
             ApiResponse::TopTracks {
                 offset,
                 full,
+                generation,
                 result,
             } => {
                 if full {
+                    if generation != self.home.top_songs_generation {
+                        return;
+                    }
                     match result {
                         Ok(page) => {
                             let received = page.items.len() as u32;
@@ -1739,6 +1793,7 @@ impl App {
                                 self.backend.api(ApiRequest::TopTracks {
                                     offset: offset + received,
                                     full: true,
+                                    generation,
                                 });
                             } else {
                                 self.home.top_songs_loading = false;
@@ -1746,44 +1801,70 @@ impl App {
                             }
                         }
                         Err(error) => {
-                            self.home.top_songs = Loadable::Failed(error.to_string());
+                            if self.home.top_songs.get().is_none() {
+                                self.home.top_songs = Loadable::Failed(error.to_string());
+                            }
                             self.home.top_songs_loading = false;
                         }
                     }
-                } else if let Ok(page) = result {
+                } else if generation == self.home.generation
+                    && let Ok(page) = result
+                {
                     let tracks = page.items;
                     let seeds: Vec<String> = tracks
                         .iter()
                         .filter_map(|track| track.id.clone())
                         .take(5)
                         .collect();
-                    if !seeds.is_empty() && self.home.recommendations.needs_load() {
-                        self.home.recommendations = Loadable::Loading;
+                    if !seeds.is_empty() {
+                        if self.home.recommendations.get().is_none() {
+                            self.home.recommendations = Loadable::Loading;
+                        }
                         self.backend.api(ApiRequest::Recommendations {
                             seed_tracks: seeds,
                             seed_artists: Vec::new(),
+                            generation,
                         });
                     }
                     let uris: Vec<String> = tracks.iter().map(|track| track.uri.clone()).collect();
                     self.request_contains(uris);
                     self.home.top_tracks = Loadable::Loaded(tracks);
-                } else if offset == 0
+                } else if generation == self.home.generation
+                    && offset == 0
                     && let Err(error) = result
+                    && self.home.top_tracks.get().is_none()
                 {
                     self.home.top_tracks = Loadable::Failed(error.to_string());
                 }
             }
-            ApiResponse::TopArtists(result) => {
-                self.home.top_artists = Loadable::from_result(result);
+            ApiResponse::TopArtists { generation, result } => {
+                if generation != self.home.generation {
+                    return;
+                }
+                if result.is_ok() || self.home.top_artists.get().is_none() {
+                    self.home.top_artists = Loadable::from_result(result);
+                }
             }
-            ApiResponse::Recommendations(result) => {
+            ApiResponse::Recommendations { generation, result } => {
+                if generation != self.home.generation {
+                    return;
+                }
                 if let Ok(tracks) = &result {
                     let uris: Vec<String> = tracks.iter().map(|track| track.uri.clone()).collect();
                     self.request_contains(uris);
                 }
-                self.home.recommendations = Loadable::from_result(result);
+                if result.is_ok() || self.home.recommendations.get().is_none() {
+                    self.home.recommendations = Loadable::from_result(result);
+                }
             }
-            ApiResponse::Discover { term, result } => {
+            ApiResponse::Discover {
+                term,
+                generation,
+                result,
+            } => {
+                if generation != self.home.generation {
+                    return;
+                }
                 let filtered = result.map(|playlists| {
                     let needle = term.to_lowercase();
                     let mut seen = std::collections::HashSet::new();
@@ -1800,19 +1881,27 @@ impl App {
                     matching
                 });
                 self.home
-                    .discover
+                    .discover_pending
                     .insert(term, Loadable::from_result(filtered));
+                let complete = DISCOVER_TERMS.iter().all(|term| {
+                    self.home
+                        .discover_pending
+                        .get(*term)
+                        .is_some_and(|result| !result.is_loading())
+                });
+                if complete {
+                    self.home.discover = std::mem::take(&mut self.home.discover_pending);
+                }
             }
             ApiResponse::MyPlaylists { offset, result } => match result {
                 Ok(page) => {
-                    let has_more = page.next.is_some() && !page.items.is_empty();
-                    let received = page.items.len() as u32;
+                    let next_offset = page.next_offset();
                     match &mut self.library.playlists {
                         Loadable::Loaded(existing) if offset > 0 => existing.extend(page.items),
                         slot => *slot = Loadable::Loaded(page.items),
                     }
-                    self.library.playlists_next = has_more.then_some(offset + received);
-                    if has_more {
+                    self.library.playlists_next = next_offset;
+                    if next_offset.is_some() {
                         self.load_more(Page::Home);
                     }
                     if let Some(playlists) = self.library.playlists.get() {
@@ -1829,18 +1918,43 @@ impl App {
                     }
                 }
             },
-            ApiResponse::Playlist { id, result } => {
+            ApiResponse::Playlist {
+                id,
+                generation,
+                result,
+            } => {
+                if self
+                    .playlist_pages
+                    .get(&id)
+                    .is_none_or(|page| page.generation != generation)
+                {
+                    return;
+                }
                 if let Ok(playlist) = &result
                     && let Some(image) = pick_image(&playlist.images, 300)
                 {
                     self.tint_for(Some(image));
                 }
-                if let Some(page) = self.playlist_pages.get_mut(&id) {
+                if let Some(page) = self.playlist_pages.get_mut(&id)
+                    && (result.is_ok() || page.playlist.get().is_none())
+                {
                     page.playlist = Loadable::from_result(result);
                 }
                 self.try_adopt_playlist_cache(&id);
             }
-            ApiResponse::PlaylistItems { id, offset, result } => {
+            ApiResponse::PlaylistItems {
+                id,
+                offset,
+                generation,
+                result,
+            } => {
+                if self
+                    .playlist_pages
+                    .get(&id)
+                    .is_none_or(|page| page.generation != generation)
+                {
+                    return;
+                }
                 let mut uris = Vec::new();
                 let mut adders: Vec<String> = Vec::new();
                 if let Some(page) = self.playlist_pages.get_mut(&id) {
@@ -1873,12 +1987,13 @@ impl App {
                                 {
                                     self.backend.api(ApiRequest::PlaylistSample {
                                         id: id.clone(),
-                                        offset: total.saturating_sub(100),
+                                        offset: total.saturating_sub(PLAYLIST_PAGE_SIZE),
+                                        generation,
                                     });
                                 }
                             }
                         }
-                        Err(error) => page.items.fail(friendly_page_error(&error, own_app)),
+                        Err(error) => page.items.fail(friendly_page_error(&error)),
                     }
                 }
                 self.request_contains(uris);
@@ -1903,7 +2018,18 @@ impl App {
                     self.load_more(Page::Playlist(id));
                 }
             }
-            ApiResponse::PlaylistSample { id, result } => {
+            ApiResponse::PlaylistSample {
+                id,
+                generation,
+                result,
+            } => {
+                if self
+                    .playlist_pages
+                    .get(&id)
+                    .is_none_or(|page| page.generation != generation)
+                {
+                    return;
+                }
                 let mut adders: Vec<String> = Vec::new();
                 if let Ok(items) = result
                     && let Some(page) = self.playlist_pages.get_mut(&id)
@@ -2162,6 +2288,7 @@ impl App {
                 if serial != self.search.serial || query != self.search.committed {
                     return;
                 }
+                self.search.refreshing = false;
                 if let Ok(results) = &result {
                     let uris: Vec<String> = results
                         .tracks
@@ -2173,22 +2300,21 @@ impl App {
                     self.settings.remember_search(&query);
                     self.settings_dirty = true;
                 }
-                self.search.results = Loadable::from_result(result);
+                if result.is_ok() || self.search.results.get().is_none() {
+                    self.search.results = Loadable::from_result(result);
+                }
             }
             ApiResponse::Artist { id, result } => {
                 if let Ok(artist) = &result {
                     if let Some(image) = pick_image(&artist.images, 300) {
                         self.tint_for(Some(image));
                     }
-                    let name = artist.name.clone();
                     if let Some(page) = self.artist_pages.get_mut(&id)
                         && page.top_tracks.needs_load()
                     {
                         page.top_tracks = Loadable::Loading;
-                        self.backend.api(ApiRequest::ArtistTopTracks {
-                            id: id.clone(),
-                            name,
-                        });
+                        self.backend
+                            .api(ApiRequest::ArtistTopTracks { id: id.clone() });
                     }
                 }
                 if let Some(page) = self.artist_pages.get_mut(&id) {
@@ -2496,56 +2622,62 @@ impl App {
         }
     }
 
-    /// Adopt a playlist's disk cache once both it and the live playlist
-    /// are here and Spotify's snapshot still matches; a stale cache is
-    /// discarded, never shown.
     fn try_adopt_playlist_cache(&mut self, id: &str) {
         let mut uris = Vec::new();
         let mut adders: Vec<String> = Vec::new();
+        let mut reload = None;
         if let Some(page) = self.playlist_pages.get_mut(id) {
-            let Some(snapshot_now) = page
-                .playlist
-                .get()
-                .and_then(|playlist| playlist.snapshot_id.clone())
-            else {
-                return;
-            };
-            match &page.pending_cache {
-                Some((held, _)) if *held == snapshot_now => {}
-                Some(_) => {
-                    // The playlist changed since; the cache is history.
-                    page.pending_cache = None;
-                    return;
-                }
-                None => return,
-            }
-            if page.items.is_complete() || page.cache_complete {
+            if page.items.loaded_once && !page.cache_complete {
                 page.pending_cache = None;
                 return;
             }
-            let Some((_, items)) = page.pending_cache.take() else {
-                return;
-            };
-            uris = items
-                .iter()
-                .filter_map(|item| item.playable())
-                .map(|item| item.uri().to_string())
-                .collect();
-            adders = items
-                .iter()
-                .filter_map(|item| item.added_by.as_ref()?.id.clone())
-                .collect();
-            page.contributors.extend(adders.iter().cloned());
-            page.items.total = Some(items.len() as u32);
-            page.items.items = items;
-            page.items.next_offset = None;
-            page.items.loading = false;
-            page.items.loaded_once = true;
-            page.items.error = None;
-            page.cache_complete = true;
+            if !page.cache_complete
+                && let Some((_, items)) = &page.pending_cache
+            {
+                uris = items
+                    .iter()
+                    .filter_map(|item| item.playable())
+                    .map(|item| item.uri().to_string())
+                    .collect();
+                adders = items
+                    .iter()
+                    .filter_map(|item| item.added_by.as_ref()?.id.clone())
+                    .collect();
+                page.contributors.extend(adders.iter().cloned());
+                page.items.total = Some(items.len() as u32);
+                page.items.items = items.clone();
+                page.items.next_offset = None;
+                page.items.loading = false;
+                page.items.loaded_once = true;
+                page.items.error = None;
+                page.cache_complete = true;
+            }
+            if let Some(snapshot_now) = page
+                .playlist
+                .get()
+                .and_then(|playlist| playlist.snapshot_id.as_deref())
+                && let Some((cached_snapshot, _)) = &page.pending_cache
+            {
+                if cached_snapshot == snapshot_now {
+                    page.pending_cache = None;
+                } else {
+                    page.pending_cache = None;
+                    page.cache_complete = false;
+                    page.items.reset();
+                    page.items.loading = true;
+                    reload = Some(page.generation);
+                }
+            }
         }
         self.request_contains(uris);
         self.request_user_names(adders);
+        if let Some(generation) = reload {
+            self.backend.api(ApiRequest::PlaylistItems {
+                id: id.to_string(),
+                offset: 0,
+                generation,
+            });
+        }
     }
 
     /// Play what was playing when the app last closed. `false` when
@@ -3004,9 +3136,6 @@ impl App {
                 public,
                 add_uris,
             } => {
-                let Some(user_id) = self.user_id().map(str::to_string) else {
-                    return;
-                };
                 self.playlist_busy = true;
                 self.dialog = Some(Dialog::CreatePlaylist {
                     name: name.clone(),
@@ -3014,7 +3143,6 @@ impl App {
                     add_uris,
                 });
                 self.backend.api(ApiRequest::CreatePlaylist {
-                    user_id,
                     name,
                     public,
                     description: String::new(),
@@ -3112,10 +3240,11 @@ impl App {
                 self.sign_in_url = None;
                 self.auth = AuthStatus::SignedOut;
             }
-            Action::SwitchWebApp => {
+            Action::ConfigurePersonalWebApp => {
                 self.save_settings();
-                self.backend
-                    .send(Command::SwitchWebApp(self.settings.web_client_id.clone()));
+                self.backend.send(Command::ConfigurePersonalWebApp(
+                    self.settings.web_client_id.clone(),
+                ));
             }
             Action::SignOut => {
                 self.backend.send(Command::SignOut);
@@ -3474,14 +3603,8 @@ fn remote_action_label(action: RemoteAction) -> &'static str {
     }
 }
 
-/// Since February 2026 a personal app (Development Mode) may read only the
-/// playlists its user owns or collaborates on; the shared app predates
-/// that and reads anything public.
-fn friendly_page_error(error: &crate::api::ApiError, own_app: bool) -> String {
+fn friendly_page_error(error: &crate::api::ApiError) -> String {
     match error.status() {
-        Some(403) | Some(404) if own_app => {
-            "Spotify lets a personal app open only the playlists you own or collaborate on. Switch back to the shared app in Settings to open this one.".to_string()
-        }
         Some(403) | Some(404) => {
             "Spotify doesn't make this playlist's songs available to third-party apps.".to_string()
         }

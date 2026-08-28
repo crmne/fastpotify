@@ -11,19 +11,21 @@ Fastpotify follows each platform's conventions. On Linux:
 | What | Where | Safe to delete? |
 | --- | --- | --- |
 | Settings | `~/.config/fastpotify/settings.json` | Yes, you lose preferences |
-| Web API sign-in | `~/.local/state/fastpotify/web_api_token.json` | Yes, you sign in again |
+| Shared Web API sign-in | `~/.local/state/fastpotify/shared_web_api_token.json` | Yes, you sign in again |
+| Personal Web API sign-in | `~/.local/state/fastpotify/personal_web_api_token.json` | Yes, personal acceleration is removed |
 | Playback credential | `~/.local/state/fastpotify/credentials/` | Yes, you approve playback again |
 | Last session | `~/.local/state/fastpotify/session.json` | Yes |
 | Audio cache | `~/.cache/fastpotify/audio/` | Always |
 | Artwork cache | `~/.cache/fastpotify/art/` | Always |
 | Lyrics cache | `~/.cache/fastpotify/lyrics/` | Always |
+| Account-scoped playlist cache | `~/.cache/fastpotify/playlists/<account-id>/` | Always |
 | Last run's log | `~/.local/state/fastpotify/fastpotify.log` | Always |
 | Crash log | `~/.local/state/fastpotify/panic.log` | Always |
 
 Clearing caches never signs you out; credentials live in *state*, not
-*cache*, precisely so cleanup tools cannot log you out. Both credential
-files are written with owner-only permissions. Signing out from Settings
-deletes both.
+*cache*. Web API token files are written with owner-only permissions.
+Signing out from Settings deletes both Web API grants and the separate
+playback credential.
 
 On macOS, settings, state, and the logs are in
 `~/Library/Application Support/me.paolino.fastpotify` and the caches in
@@ -49,7 +51,7 @@ One readable JSON file, written atomically. The interesting fields:
 | `accent_from_art` | `true` | Tint pages with album art |
 | `keep_playing_in_background` | `true` | Close to tray |
 | `check_for_updates` | `true` | Ask GitHub once a day for a newer release |
-| `web_client_id` | none | Your own Spotify app id, if you set one |
+| `web_client_id` | none | Optional personal Spotify app id used alongside shared coverage |
 
 ## Command line
 

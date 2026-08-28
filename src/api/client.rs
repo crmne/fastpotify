@@ -3,12 +3,9 @@
 //! The client is deliberately small: a handful of typed calls over one
 //! `request` helper that injects the bearer token, bounds concurrency,
 //! honours `Retry-After`, and maps error bodies to messages a person can
-//! read. Spotify reshaped several endpoints in 2026 (`/me/library`,
-//! `/playlists/{id}/items`, search limits); the client tries the current
-//! shape first and falls back to the classic one when Spotify answers that
-//! an endpoint is gone, remembering the answer for the rest of the session.
+//! read. The gateway supplies capability differences before dispatch.
 
-use std::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -18,25 +15,25 @@ use serde_json::{Value, json};
 use thiserror::Error;
 use tokio::sync::Semaphore;
 
+use super::ApiSource;
 use super::models::*;
 
 const BASE_URL: &str = "https://api.spotify.com/v1";
 const MAX_IN_FLIGHT: usize = 6;
 const RATE_LIMIT_RETRIES: u32 = 3;
-const MAX_RETRY_AFTER: Duration = Duration::from_secs(30);
 
-#[derive(Debug, Error)]
+#[derive(Clone, Debug, Error)]
 pub enum ApiError {
     #[error("not signed in")]
     NotSignedIn,
     #[error("{message}")]
     Status { status: u16, message: String },
-    #[error(
-        "Spotify is rate limiting the shared app; try again in a moment, or use your own app (Settings)"
-    )]
+    #[error("Spotify is rate limiting requests; try again in a moment")]
     RateLimited,
+    #[error("Spotify's Development Mode quota is exhausted; try again after the quota resets")]
+    QuotaExhausted,
     #[error("your Spotify sign-in expired; please sign in again")]
-    SignInExpired(String),
+    SignInExpired { api_source: ApiSource },
     #[error("network error: {0}")]
     Network(String),
     #[error("unexpected response from Spotify: {0}")]
@@ -49,10 +46,6 @@ impl ApiError {
             Self::Status { status, .. } => Some(*status),
             _ => None,
         }
-    }
-
-    fn is_gone(&self) -> bool {
-        matches!(self.status(), Some(404) | Some(410) | Some(405) | Some(400))
     }
 }
 
@@ -67,6 +60,13 @@ impl From<reqwest::Error> for ApiError {
 }
 
 pub type Result<T> = std::result::Result<T, ApiError>;
+
+fn is_quota_exhausted(body: &str) -> bool {
+    serde_json::from_str::<ApiErrorBody>(body)
+        .ok()
+        .and_then(|body| body.error.reason)
+        .is_some_and(|reason| reason == "QUOTA_EXCEEDED")
+}
 
 /// Where bearer tokens come from.
 ///
@@ -97,6 +97,7 @@ pub struct WebTokens {
     http: reqwest::Client,
     token: tokio::sync::Mutex<crate::auth::StoredToken>,
     path: std::path::PathBuf,
+    source: ApiSource,
 }
 
 impl WebTokens {
@@ -104,11 +105,13 @@ impl WebTokens {
         http: reqwest::Client,
         token: crate::auth::StoredToken,
         path: std::path::PathBuf,
+        source: ApiSource,
     ) -> std::sync::Arc<Self> {
         std::sync::Arc::new(Self {
             http,
             token: tokio::sync::Mutex::new(token),
             path,
+            source,
         })
     }
 
@@ -133,23 +136,15 @@ impl WebTokens {
                         log::warn!("token refresh returned an unusable response: {error}")
                     }
                 },
-                Err(error) => {
-                    // A hard refresh failure means the grant is gone.
-                    if force || guard.needs_refresh() {
-                        return Err(ApiError::SignInExpired(error.to_string()));
-                    }
-                    log::warn!("token refresh failed, using the current token: {error}");
+                Err(_) => {
+                    return Err(ApiError::SignInExpired {
+                        api_source: self.source,
+                    });
                 }
             }
         }
         Ok(guard.access_token.clone())
     }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum LibraryStyle {
-    Modern,
-    Classic,
 }
 
 /// What to start playing.
@@ -263,19 +258,29 @@ pub struct ApiClient {
     http: reqwest::Client,
     tokens: Mutex<Option<TokenProvider>>,
     limiter: Semaphore,
-    library_style: AtomicU8,
-    search_limit: AtomicU32,
+    cooldown_until: tokio::sync::Mutex<Instant>,
+    search_limit: u32,
+    artist_albums_limit: u32,
+    source: ApiSource,
     activity: Arc<NetActivity>,
 }
 
 impl ApiClient {
-    pub fn new(http: reqwest::Client, activity: Arc<NetActivity>) -> Self {
+    pub fn new(
+        http: reqwest::Client,
+        activity: Arc<NetActivity>,
+        search_limit: u32,
+        artist_albums_limit: u32,
+        source: ApiSource,
+    ) -> Self {
         Self {
             http,
             tokens: Mutex::new(None),
             limiter: Semaphore::new(MAX_IN_FLIGHT),
-            library_style: AtomicU8::new(LibraryStyle::Modern as u8),
-            search_limit: AtomicU32::new(20),
+            cooldown_until: tokio::sync::Mutex::new(Instant::now()),
+            search_limit,
+            artist_albums_limit,
+            source,
             activity,
         }
     }
@@ -292,17 +297,19 @@ impl ApiClient {
             .ok_or(ApiError::NotSignedIn)
     }
 
-    fn style(&self) -> LibraryStyle {
-        if self.library_style.load(Ordering::Relaxed) == LibraryStyle::Classic as u8 {
-            LibraryStyle::Classic
-        } else {
-            LibraryStyle::Modern
+    async fn wait_for_cooldown(&self) {
+        loop {
+            let until = *self.cooldown_until.lock().await;
+            let Some(wait) = until.checked_duration_since(Instant::now()) else {
+                return;
+            };
+            tokio::time::sleep(wait).await;
         }
     }
 
-    fn set_style(&self, style: LibraryStyle) {
-        log::info!("switching library endpoint style to {style:?}");
-        self.library_style.store(style as u8, Ordering::Relaxed);
+    async fn extend_cooldown(&self, wait: Duration) {
+        let mut until = self.cooldown_until.lock().await;
+        *until = (*until).max(Instant::now() + wait);
     }
 
     // ---- transport -------------------------------------------------------
@@ -320,17 +327,19 @@ impl ApiClient {
             format!("{BASE_URL}{path}")
         };
         let provider = self.provider()?;
-        self.activity.begin();
-        let _activity = ActivityGuard(&self.activity);
-        let _permit = self
-            .limiter
-            .acquire()
-            .await
-            .map_err(|_| ApiError::NotSignedIn)?;
+        let started = Instant::now();
 
         let mut attempt = 0;
         loop {
             attempt += 1;
+            self.wait_for_cooldown().await;
+            let permit = self
+                .limiter
+                .acquire()
+                .await
+                .map_err(|_| ApiError::NotSignedIn)?;
+            self.activity.begin();
+            let activity = ActivityGuard(&self.activity);
             let token = provider.access_token().await?;
             let mut request = self
                 .http
@@ -346,7 +355,8 @@ impl ApiClient {
             let status = response.status();
 
             if status == StatusCode::UNAUTHORIZED && attempt == 1 {
-                // The access token was rejected; force a refresh and retry once.
+                drop(activity);
+                drop(permit);
                 provider.invalidate().await;
                 continue;
             }
@@ -356,13 +366,25 @@ impl ApiClient {
                     .get(reqwest::header::RETRY_AFTER)
                     .and_then(|value| value.to_str().ok())
                     .and_then(|value| value.parse::<u64>().ok())
-                    .map_or(Duration::from_secs(1), Duration::from_secs)
-                    .min(MAX_RETRY_AFTER);
-                log::warn!("rate limited on {path}; waiting {wait:?}");
-                tokio::time::sleep(wait).await;
+                    .map_or(Duration::from_secs(1), Duration::from_secs);
+                let text = response.text().await.unwrap_or_default();
+                if is_quota_exhausted(&text) {
+                    return Err(ApiError::QuotaExhausted);
+                }
+                log::warn!("Spotify rate limit source={} wait={wait:?}", self.source);
+                log::info!(
+                    "Spotify cooldown source={} duration_ms={}",
+                    self.source,
+                    wait.as_millis()
+                );
+                drop(activity);
+                drop(permit);
+                self.extend_cooldown(wait).await;
                 continue;
             }
-            if status.is_server_error() && attempt == 1 {
+            if status.is_server_error() && method == Method::GET && attempt == 1 {
+                drop(activity);
+                drop(permit);
                 tokio::time::sleep(Duration::from_millis(800)).await;
                 continue;
             }
@@ -370,6 +392,13 @@ impl ApiClient {
                 return Err(ApiError::RateLimited);
             }
             let text = response.text().await?;
+            log::debug!(
+                "Spotify request source={} method={} status={} duration_ms={}",
+                self.source,
+                method,
+                status.as_u16(),
+                started.elapsed().as_millis()
+            );
             if status.is_success() {
                 return Ok(text);
             }
@@ -433,7 +462,10 @@ impl ApiClient {
         match serde_json::from_str(&text) {
             Ok(value) => Ok(Some(value)),
             Err(error) => {
-                log::debug!("{path} succeeded with a body that is not JSON: {error}");
+                log::debug!(
+                    "Spotify write source={} returned a non-JSON success body: {error}",
+                    self.source
+                );
                 Ok(None)
             }
         }
@@ -583,74 +615,32 @@ impl ApiClient {
         self.get(&format!("/playlists/{id}"), &[]).await
     }
 
-    fn playlist_items_path(&self, id: &str, style: LibraryStyle) -> String {
-        match style {
-            LibraryStyle::Modern => format!("/playlists/{id}/items"),
-            LibraryStyle::Classic => format!("/playlists/{id}/tracks"),
-        }
-    }
-
-    /// Runs `call` with the current endpoint style, switching styles once when
-    /// Spotify says the endpoint does not exist.
-    async fn with_style_fallback<T, F, Fut>(&self, call: F) -> Result<T>
-    where
-        F: Fn(LibraryStyle) -> Fut,
-        Fut: std::future::Future<Output = Result<T>>,
-    {
-        let style = self.style();
-        match call(style).await {
-            Err(error) if error.is_gone() => {
-                let other = match style {
-                    LibraryStyle::Modern => LibraryStyle::Classic,
-                    LibraryStyle::Classic => LibraryStyle::Modern,
-                };
-                match call(other).await {
-                    Ok(value) => {
-                        self.set_style(other);
-                        Ok(value)
-                    }
-                    Err(_) => Err(error),
-                }
-            }
-            result => result,
-        }
-    }
-
     pub async fn playlist_items(
         &self,
         id: &str,
         offset: u32,
         limit: u32,
     ) -> Result<Page<PlaylistItem>> {
-        self.with_style_fallback(|style| async move {
-            self.get(
-                &self.playlist_items_path(id, style),
-                &[
-                    ("limit", limit.to_string()),
-                    ("offset", offset.to_string()),
-                    ("additional_types", "track,episode".to_string()),
-                ],
-            )
-            .await
-        })
+        self.get(
+            &format!("/playlists/{id}/items"),
+            &[
+                ("limit", limit.to_string()),
+                ("offset", offset.to_string()),
+                ("additional_types", "track,episode".to_string()),
+            ],
+        )
         .await
     }
 
     pub async fn create_playlist(
         &self,
-        user_id: &str,
         name: &str,
         public: bool,
         description: &str,
     ) -> Result<Playlist> {
         let body = json!({ "name": name, "public": public, "description": description });
         let value = self
-            .write(
-                Method::POST,
-                &format!("/users/{user_id}/playlists"),
-                &[],
-                Some(&body),
-            )
+            .write(Method::POST, "/me/playlists", &[], Some(&body))
             .await?
             .unwrap_or(Value::Null);
         serde_json::from_value(value).map_err(|error| ApiError::Decode(error.to_string()))
@@ -694,18 +684,12 @@ impl ApiClient {
             body["position"] = json!(position);
         }
         let value = self
-            .with_style_fallback(|style| {
-                let body = body.clone();
-                async move {
-                    self.write(
-                        Method::POST,
-                        &self.playlist_items_path(id, style),
-                        &[],
-                        Some(&body),
-                    )
-                    .await
-                }
-            })
+            .write(
+                Method::POST,
+                &format!("/playlists/{id}/items"),
+                &[],
+                Some(&body),
+            )
             .await?;
         Ok(Self::snapshot(value))
     }
@@ -716,24 +700,18 @@ impl ApiClient {
         uris: &[String],
         snapshot_id: Option<&str>,
     ) -> Result<Option<String>> {
+        let entries: Vec<Value> = uris.iter().map(|uri| json!({ "uri": uri })).collect();
+        let mut body = json!({ "items": entries });
+        if let Some(snapshot) = snapshot_id {
+            body["snapshot_id"] = json!(snapshot);
+        }
         let value = self
-            .with_style_fallback(|style| async move {
-                let entries: Vec<Value> = uris.iter().map(|uri| json!({ "uri": uri })).collect();
-                let mut body = match style {
-                    LibraryStyle::Modern => json!({ "items": entries }),
-                    LibraryStyle::Classic => json!({ "tracks": entries }),
-                };
-                if let Some(snapshot) = snapshot_id {
-                    body["snapshot_id"] = json!(snapshot);
-                }
-                self.write(
-                    Method::DELETE,
-                    &self.playlist_items_path(id, style),
-                    &[],
-                    Some(&body),
-                )
-                .await
-            })
+            .write(
+                Method::DELETE,
+                &format!("/playlists/{id}/items"),
+                &[],
+                Some(&body),
+            )
             .await?;
         Ok(Self::snapshot(value))
     }
@@ -745,24 +723,21 @@ impl ApiClient {
         insert_before: u32,
         snapshot_id: Option<&str>,
     ) -> Result<Option<String>> {
+        let mut body = json!({
+            "range_start": range_start,
+            "insert_before": insert_before,
+            "range_length": 1,
+        });
+        if let Some(snapshot) = snapshot_id {
+            body["snapshot_id"] = json!(snapshot);
+        }
         let value = self
-            .with_style_fallback(|style| async move {
-                let mut body = json!({
-                    "range_start": range_start,
-                    "insert_before": insert_before,
-                    "range_length": 1,
-                });
-                if let Some(snapshot) = snapshot_id {
-                    body["snapshot_id"] = json!(snapshot);
-                }
-                self.write(
-                    Method::PUT,
-                    &self.playlist_items_path(id, style),
-                    &[],
-                    Some(&body),
-                )
-                .await
-            })
+            .write(
+                Method::PUT,
+                &format!("/playlists/{id}/items"),
+                &[],
+                Some(&body),
+            )
             .await?;
         Ok(Self::snapshot(value))
     }
@@ -774,55 +749,23 @@ impl ApiClient {
     }
 
     pub async fn follow_playlist(&self, id: &str) -> Result<()> {
-        self.with_style_fallback(|style| async move {
-            match style {
-                LibraryStyle::Modern => {
-                    self.write(
-                        Method::PUT,
-                        "/me/library",
-                        &[("uris", format!("spotify:playlist:{id}"))],
-                        None,
-                    )
-                    .await
-                }
-                LibraryStyle::Classic => {
-                    self.write(
-                        Method::PUT,
-                        &format!("/playlists/{id}/followers"),
-                        &[],
-                        Some(&json!({ "public": false })),
-                    )
-                    .await
-                }
-            }
-        })
+        self.write(
+            Method::PUT,
+            "/me/library",
+            &[("uris", format!("spotify:playlist:{id}"))],
+            None,
+        )
         .await?;
         Ok(())
     }
 
     pub async fn unfollow_playlist(&self, id: &str) -> Result<()> {
-        self.with_style_fallback(|style| async move {
-            match style {
-                LibraryStyle::Modern => {
-                    self.write(
-                        Method::DELETE,
-                        "/me/library",
-                        &[("uris", format!("spotify:playlist:{id}"))],
-                        None,
-                    )
-                    .await
-                }
-                LibraryStyle::Classic => {
-                    self.write(
-                        Method::DELETE,
-                        &format!("/playlists/{id}/followers"),
-                        &[],
-                        None,
-                    )
-                    .await
-                }
-            }
-        })
+        self.write(
+            Method::DELETE,
+            "/me/library",
+            &[("uris", format!("spotify:playlist:{id}"))],
+            None,
+        )
         .await?;
         Ok(())
     }
@@ -902,51 +845,9 @@ impl ApiClient {
         .await
     }
 
-    fn classic_library_path(uri: &str) -> Option<(&'static str, Vec<(&'static str, String)>)> {
-        let mut parts = uri.split(':');
-        let (_, kind, id) = (parts.next()?, parts.next()?, parts.next()?);
-        let id = id.to_string();
-        Some(match kind {
-            "track" => ("/me/tracks", vec![("ids", id)]),
-            "album" => ("/me/albums", vec![("ids", id)]),
-            "show" => ("/me/shows", vec![("ids", id)]),
-            "episode" => ("/me/episodes", vec![("ids", id)]),
-            "artist" => (
-                "/me/following",
-                vec![("type", "artist".to_string()), ("ids", id)],
-            ),
-            _ => return None,
-        })
-    }
-
     async fn library_write(&self, method: Method, uris: &[String]) -> Result<()> {
-        self.with_style_fallback(|style| {
-            let method = method.clone();
-            async move {
-                match style {
-                    LibraryStyle::Modern => {
-                        self.write(method, "/me/library", &[("uris", uris.join(","))], None)
-                            .await
-                    }
-                    LibraryStyle::Classic => {
-                        for uri in uris {
-                            if uri.starts_with("spotify:playlist:") {
-                                let id = uri.rsplit(':').next().unwrap_or_default();
-                                let path = format!("/playlists/{id}/followers");
-                                self.write(method.clone(), &path, &[], None).await?;
-                                continue;
-                            }
-                            let Some((path, query)) = Self::classic_library_path(uri) else {
-                                continue;
-                            };
-                            self.write(method.clone(), path, &query, None).await?;
-                        }
-                        Ok(None)
-                    }
-                }
-            }
-        })
-        .await?;
+        self.write(method, "/me/library", &[("uris", uris.join(","))], None)
+            .await?;
         Ok(())
     }
 
@@ -960,100 +861,33 @@ impl ApiClient {
     }
 
     /// Whether each URI is in the library, in the same order as `uris`.
-    pub async fn contains(&self, uris: &[String], user_id: &str) -> Result<Vec<bool>> {
-        self.with_style_fallback(|style| async move {
-            match style {
-                LibraryStyle::Modern => {
-                    self.get("/me/library/contains", &[("uris", uris.join(","))])
-                        .await
-                }
-                LibraryStyle::Classic => {
-                    let mut result = Vec::with_capacity(uris.len());
-                    for uri in uris {
-                        if uri.starts_with("spotify:playlist:") {
-                            let id = uri.rsplit(':').next().unwrap_or_default();
-                            let flags: Vec<bool> = self
-                                .get(
-                                    &format!("/playlists/{id}/followers/contains"),
-                                    &[("ids", user_id.to_string())],
-                                )
-                                .await?;
-                            result.push(flags.first().copied().unwrap_or(false));
-                            continue;
-                        }
-                        let Some((path, query)) = Self::classic_library_path(uri) else {
-                            result.push(false);
-                            continue;
-                        };
-                        let flags: Vec<bool> =
-                            self.get(&format!("{path}/contains"), &query).await?;
-                        result.push(flags.first().copied().unwrap_or(false));
-                    }
-                    Ok(result)
-                }
-            }
-        })
-        .await
+    pub async fn contains(&self, uris: &[String]) -> Result<Vec<bool>> {
+        self.get("/me/library/contains", &[("uris", uris.join(","))])
+            .await
     }
 
     // ---- catalog -----------------------------------------------------------
 
     pub async fn search(&self, query: &str, types: &[&str]) -> Result<SearchResults> {
-        let limit = self.search_limit.load(Ordering::Relaxed);
-        let run = |limit: u32| async move {
-            self.get(
-                "/search",
-                &[
-                    ("q", query.to_string()),
-                    ("type", types.join(",")),
-                    ("limit", limit.to_string()),
-                ],
-            )
-            .await
-        };
-        match run(limit).await {
-            Err(error) if limit > 10 && matches!(error.status(), Some(400) | Some(403)) => {
-                self.search_limit.store(10, Ordering::Relaxed);
-                run(10).await
-            }
-            result => result,
-        }
+        self.get(
+            "/search",
+            &[
+                ("q", query.to_string()),
+                ("type", types.join(",")),
+                ("limit", self.search_limit.to_string()),
+            ],
+        )
+        .await
     }
 
     pub async fn artist(&self, id: &str) -> Result<Artist> {
         self.get(&format!("/artists/{id}"), &[]).await
     }
 
-    /// The artist's most popular tracks. Spotify has retired this endpoint for
-    /// newer applications, so a catalog search ranked by popularity stands in
-    /// when it is unavailable.
-    pub async fn artist_top_tracks(&self, id: &str, name: &str) -> Result<Vec<Track>> {
-        match self
-            .get::<TopTracks>(&format!("/artists/{id}/top-tracks"), &[])
+    pub async fn artist_top_tracks(&self, id: &str) -> Result<Vec<Track>> {
+        self.get::<TopTracks>(&format!("/artists/{id}/top-tracks"), &[])
             .await
-        {
-            Ok(top) => Ok(top.tracks),
-            Err(error) if error.is_gone() || error.status() == Some(403) => {
-                let results = self
-                    .search(&format!("artist:\"{name}\""), &["track"])
-                    .await?;
-                let mut tracks: Vec<Track> = results
-                    .tracks
-                    .map(|page| page.items)
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter(|track| {
-                        track
-                            .artists
-                            .iter()
-                            .any(|artist| artist.id.as_deref() == Some(id))
-                    })
-                    .collect();
-                tracks.sort_by_key(|track| std::cmp::Reverse(track.popularity));
-                Ok(tracks)
-            }
-            Err(error) => Err(error),
-        }
+            .map(|top| top.tracks)
     }
 
     pub async fn artist_albums(
@@ -1063,6 +897,7 @@ impl ApiClient {
         offset: u32,
         limit: u32,
     ) -> Result<Page<Album>> {
+        let limit = limit.min(self.artist_albums_limit);
         self.get(
             &format!("/artists/{id}/albums"),
             &[
@@ -1146,29 +981,34 @@ mod tests {
     }
 
     #[test]
-    fn classic_library_paths() {
-        let (path, query) = ApiClient::classic_library_path("spotify:artist:abc").unwrap();
-        assert_eq!(path, "/me/following");
-        assert_eq!(query[1], ("ids", "abc".to_string()));
-        assert!(ApiClient::classic_library_path("spotify:user:abc").is_none());
+    fn quota_exhaustion_is_distinct_from_an_ordinary_rate_limit() {
+        assert!(is_quota_exhausted(
+            r#"{"error":{"status":429,"reason":"QUOTA_EXCEEDED"}}"#
+        ));
+        assert!(!is_quota_exhausted(
+            r#"{"error":{"status":429,"message":"Too many requests"}}"#
+        ));
     }
 
-    #[test]
-    fn gone_errors_trigger_fallback() {
-        assert!(
-            ApiError::Status {
-                status: 404,
-                message: String::new()
-            }
-            .is_gone()
+    #[tokio::test]
+    async fn cooldown_state_is_owned_by_one_session() {
+        let activity = Arc::new(NetActivity::default());
+        let shared = ApiClient::new(
+            reqwest::Client::new(),
+            activity.clone(),
+            20,
+            50,
+            ApiSource::Shared,
         );
-        assert!(
-            !ApiError::Status {
-                status: 500,
-                message: String::new()
-            }
-            .is_gone()
+        let personal = ApiClient::new(
+            reqwest::Client::new(),
+            activity,
+            10,
+            10,
+            ApiSource::Personal,
         );
-        assert!(!ApiError::RateLimited.is_gone());
+        shared.extend_cooldown(Duration::from_secs(10)).await;
+        assert!(*shared.cooldown_until.lock().await > Instant::now());
+        assert!(*personal.cooldown_until.lock().await <= Instant::now());
     }
 }

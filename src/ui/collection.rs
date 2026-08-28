@@ -531,9 +531,8 @@ pub fn playlist(app: &mut App, ui: &mut egui::Ui, id: &str) {
                 &app.user_names,
             );
             let count = playlist.track_total().max(items.len() as u32);
-            // The legacy collaborative flag covers only old-style secret
-            // collaborations; a playlist made together today is recognised
-            // by who added its songs.
+            // Spotify's collaborative flag covers secret collaborations; a
+            // playlist made together today is recognised by who added songs.
             let owner_id = playlist.owner.id.as_deref();
             let others = page
                 .contributors

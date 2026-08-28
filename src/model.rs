@@ -169,11 +169,10 @@ impl<T> PagedList<T> {
         if (offset as usize) < self.items.len() {
             self.items.truncate(offset as usize);
         }
-        let received = page.items.len() as u32;
+        let next_offset = page.next_offset();
         self.items.extend(page.items);
         self.total = Some(page.total);
-        let more = page.next.is_some() && received > 0;
-        self.next_offset = more.then_some(offset + received);
+        self.next_offset = next_offset;
         self.loading = false;
         self.error = None;
         self.loaded_once = true;
@@ -246,6 +245,9 @@ pub struct HomeData {
     pub top_songs_complete: bool,
     pub recommendations: Loadable<Vec<Track>>,
     pub discover: HashMap<String, Loadable<Vec<Playlist>>>,
+    pub discover_pending: HashMap<String, Loadable<Vec<Playlist>>>,
+    pub generation: u64,
+    pub top_songs_generation: u64,
     pub requested: bool,
     pub loaded_at: Option<Instant>,
 }
@@ -294,6 +296,7 @@ pub struct SearchState {
     pub committed: String,
     pub serial: u64,
     pub results: Loadable<SearchResults>,
+    pub refreshing: bool,
     pub filter: SearchFilter,
     pub typed_at: Option<Instant>,
     pub focus_requested: bool,
@@ -301,6 +304,7 @@ pub struct SearchState {
 
 #[derive(Default)]
 pub struct PlaylistPage {
+    pub generation: u64,
     pub playlist: Loadable<Playlist>,
     pub items: PagedList<PlaylistItem>,
     pub filter: String,
@@ -526,8 +530,8 @@ pub enum Action {
     SignIn,
     CancelSignIn,
     SignOut,
-    /// Sign in again with the Web API application named in Settings.
-    SwitchWebApp,
+    /// Add, replace, or remove the optional personal Web API app.
+    ConfigurePersonalWebApp,
     ToggleQueuePanel,
     ToggleLyricsPanel,
     ToggleDevicesPopup,

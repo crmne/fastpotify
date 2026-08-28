@@ -525,6 +525,7 @@ pub fn populate(app: &mut App) {
 
 /// Words to go with the sample track, timed so that the one being sung
 /// sits mid-panel at the demo's playback position.
+#[cfg(feature = "demo")]
 fn sample_lyrics() -> crate::lyrics::Lyrics {
     let lines = [
         (40_000, "Streetlights blinking down the river road"),

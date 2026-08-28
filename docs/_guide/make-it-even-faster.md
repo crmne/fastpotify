@@ -1,6 +1,6 @@
 ---
 title: Make It Even Faster
-description: "Fastpotify is quick; Spotify's API rate limits are not. A Spotify app of your own lifts them in five minutes."
+description: "Use a personal Spotify app for a separate quota while shared coverage stays active."
 nav_order: 4
 ---
 
@@ -13,19 +13,19 @@ open-source players, so at busy times its requests queue behind everyone
 else's. That is the spinner in the top bar, and pages that take a while
 to fill.
 
-An app of your own has that limit to itself. Fastpotify cannot ship one
-for everyone (Spotify allows a new app only a handful of users), but
-making yours is free and takes five minutes.
+An app of your own gives supported requests a separate Development Mode
+quota. Fastpotify cannot ship one for everyone, but making yours is free and
+takes a few minutes.
 
-## What a personal app cannot do
+## Shared coverage stays active
 
-Spotify keeps a personal app in Development Mode, and since February 2026
-that mode reads only the playlists you own or collaborate on. Anyone
-else's public playlist, and Spotify's own editorial ones, show their name
-and cover but not their songs; artist top tracks and browsing are gone
-too. The shared app has none of these limits, so this is reach traded for
-speed. Switching back is one click: clear the field and press **Switch
-now**.
+Spotify keeps a personal app in Development Mode, and since February 2026 that
+mode omits Spotify-owned playlists and reads playlist items only for playlists
+you own or collaborate on. Artist top tracks, related artists,
+recommendations, and some catalog fields are unavailable too. Fastpotify uses
+the shared app for the complete playlist library, playlist-bearing search,
+external playlist metadata and items, and those unavailable operations. Your
+app accelerates supported work without replacing shared coverage.
 
 ## Make a Spotify app
 
@@ -49,9 +49,9 @@ now**.
 
 1. Open **Settings**, find **Make it even faster**, and paste the
    Client ID.
-2. Click **Switch now**. Your browser opens Spotify's sign-in for your
-   app; approve it and you are back in Fastpotify, which now says
-   **Your app is in use**.
+2. Click **Authorize**. Your browser opens Spotify's sign-in for your app.
+   Fastpotify verifies that it belongs to the same Spotify account, then shows
+   **Personal acceleration is ready**.
 
-That is all. Playing music on this computer is unaffected. To go back to
-the shared app, clear the field and click **Switch now** again.
+That is all. Playing music on this computer is unaffected. Select **Remove**
+to delete only the personal grant; the shared session stays signed in.

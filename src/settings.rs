@@ -48,8 +48,8 @@ pub struct Settings {
     pub sidebar_width: f32,
     pub search_history: Vec<String>,
     pub show_shortcut_hints: bool,
-    /// A personal Spotify Web API application id, if the user registered one.
-    /// `None` uses the shared public application.
+    /// An optional personal Spotify Web API application id. The shared
+    /// application remains active for coverage when this is present.
     pub web_client_id: Option<String>,
     /// Local playback has been authorized at least once on this machine, so
     /// the app can resume it silently instead of prompting.

@@ -41,6 +41,13 @@ pub struct Page<T> {
     pub next: Option<String>,
 }
 
+impl<T> Page<T> {
+    pub fn next_offset(&self) -> Option<u32> {
+        let consumed = self.limit.max(self.items.len() as u32);
+        (self.next.is_some() && consumed > 0).then_some(self.offset + consumed)
+    }
+}
+
 /// A cursor-paginated collection (followed artists, recently played).
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(bound(deserialize = "T: Deserialize<'de>"))]
@@ -734,8 +741,10 @@ mod tests {
 
     #[test]
     fn search_playlists_skip_null_entries() {
-        let json = r#"{"playlists":{"items":[null,{"id":"p","name":"P","uri":"spotify:playlist:p"}],"total":2}}"#;
+        let json = r#"{"playlists":{"items":[null,{"id":"p","name":"P","uri":"spotify:playlist:p"}],"total":2,"limit":2,"offset":0,"next":"next page"}}"#;
         let results: SearchResults = serde_json::from_str(json).unwrap();
-        assert_eq!(results.playlists.unwrap().items.len(), 1);
+        let playlists = results.playlists.unwrap();
+        assert_eq!(playlists.items.len(), 1);
+        assert_eq!(playlists.next_offset(), Some(2));
     }
 }

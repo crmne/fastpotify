@@ -128,10 +128,11 @@ here, set up once") or Settings; it needs Spotify Premium, and librespot
 stores a reusable credential so it also never asks again. Browsing and
 remote control work on any account without this step.
 
-By default the Web API uses the shared public application also used by
-spotify-player, ncspot, and Omarchy Spotify. If you hit rate limits you can
-register your own (free) Spotify application and paste its Client ID in
-Settings → Account.
+The Web API always keeps shared catalog coverage. You can also register a
+personal Spotify Development Mode app and paste its Client ID in Settings →
+Account; supported requests use its separate quota while complete playlist
+views, playlist-bearing search, external playlists, and unavailable operations
+continue through the shared app.
 
 ## Keyboard shortcuts
 
@@ -197,9 +198,10 @@ any time without signing you out.
 - `src/player.rs`: the librespot session, player, mixer, and Spirc (Spotify
   Connect) wrapped into one engine that folds player events into a state
   snapshot for the interface.
-- `src/api/`: a small Web API client with bounded concurrency,
-  `Retry-After` handling, and automatic fallback between the 2026 endpoint
-  shapes (`/me/library`, `/playlists/{id}/items`) and the classic ones.
+- `src/api/`: one routing gateway over independent shared and personal Web API
+  sessions, each with bounded concurrency and coordinated `Retry-After`
+  handling. Capability profiles select current endpoint contracts before a
+  request is dispatched.
 - `src/backend.rs`: a tokio runtime on its own thread; the interface talks to
   it through channels and is woken with `request_repaint`, so the app is idle
   when nothing happens.
@@ -210,8 +212,8 @@ any time without signing you out.
 - `src/mpris.rs`: Linux media controls on a dedicated thread.
 
 Fastpotify pins its Rust toolchain in `rust-toolchain.toml`; `cargo test`
-covers the API models, the endpoint fallbacks, PKCE, the player state
-machine, and a headless render of every page, panel, and dialog.
+covers the API models, dual-session routing, PKCE, the player state machine,
+and a headless render of every page, panel, and dialog.
 
 To look at the interface without a Spotify account, build with the `demo`
 feature and start it with sample data:
