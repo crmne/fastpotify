@@ -595,21 +595,52 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
 
 /// The purple-to-blue Liked Songs tile.
 pub fn liked_cover(ui: &egui::Ui, rect: Rect, radius: f32) {
-    let top = egui::Color32::from_rgb(0x45, 0x0a, 0xf5);
-    let bottom = egui::Color32::from_rgb(0xc4, 0xef, 0xd9);
-    let mut mesh = egui::Mesh::default();
-    mesh.colored_vertex(rect.left_top(), top);
-    mesh.colored_vertex(rect.right_top(), egui::Color32::from_rgb(0x6a, 0x3a, 0xe8));
-    mesh.colored_vertex(rect.right_bottom(), bottom);
-    mesh.colored_vertex(
-        rect.left_bottom(),
-        egui::Color32::from_rgb(0x8e, 0x9f, 0xe5),
-    );
-    mesh.add_triangle(0, 1, 2);
-    mesh.add_triangle(0, 2, 3);
-    let painter = ui.painter().with_clip_rect(rect);
-    let _ = radius;
-    painter.add(egui::Shape::mesh(mesh));
+    let texture_id = egui::Id::new("liked-cover-gradient");
+    let texture = ui
+        .data(|data| data.get_temp::<egui::TextureHandle>(texture_id))
+        .unwrap_or_else(|| {
+            let size = 64;
+            let lerp = |a: u8, b: u8, t: f32| (a as f32 + (b as f32 - a as f32) * t) as u8;
+            let top_left = [0x45, 0x0a, 0xf5];
+            let top_right = [0x6a, 0x3a, 0xe8];
+            let bottom_left = [0x8e, 0x9f, 0xe5];
+            let bottom_right = [0xc4, 0xef, 0xd9];
+            let pixels = (0..size)
+                .flat_map(|y| {
+                    let y = y as f32 / (size - 1) as f32;
+                    (0..size).map(move |x| {
+                        let x = x as f32 / (size - 1) as f32;
+                        egui::Color32::from_rgb(
+                            lerp(
+                                lerp(top_left[0], top_right[0], x),
+                                lerp(bottom_left[0], bottom_right[0], x),
+                                y,
+                            ),
+                            lerp(
+                                lerp(top_left[1], top_right[1], x),
+                                lerp(bottom_left[1], bottom_right[1], x),
+                                y,
+                            ),
+                            lerp(
+                                lerp(top_left[2], top_right[2], x),
+                                lerp(bottom_left[2], bottom_right[2], x),
+                                y,
+                            ),
+                        )
+                    })
+                })
+                .collect();
+            let texture = ui.ctx().load_texture(
+                "liked-cover-gradient",
+                egui::ColorImage::new([size, size], pixels),
+                egui::TextureOptions::LINEAR,
+            );
+            ui.data_mut(|data| data.insert_temp(texture_id, texture.clone()));
+            texture
+        });
+    egui::Image::new(&texture)
+        .corner_radius(CornerRadius::same(radius.min(127.0) as u8))
+        .paint_at(ui, rect);
     let size = rect.width() * 0.45;
     let icon_rect = Rect::from_center_size(rect.center(), Vec2::splat(size));
     Icon::HeartFilled
