@@ -1,6 +1,6 @@
 //! Playlist, album, and Liked Songs pages: a hero, actions, and a track table.
 
-use egui::{Align, Layout, Rect, Sense, Vec2, pos2, vec2};
+use egui::{Align, Layout, Rect, Sense, UiBuilder, Vec2, pos2, vec2};
 
 use crate::api::models::{Album, PlayableItem, Playlist, pick_image};
 use crate::app::App;
@@ -260,6 +260,243 @@ pub struct Table<'a> {
     pub error: Option<&'a str>,
     pub can_load_more: bool,
     pub filter: &'a str,
+    pub sticky_title: Option<&'a str>,
+    pub sticky_play_uri: Option<&'a str>,
+}
+
+#[derive(Clone)]
+struct StickyHeader {
+    title: String,
+    play: StickyPlay,
+    page: Page,
+    show_album: bool,
+    show_cover: bool,
+    show_added: bool,
+    show_added_by: bool,
+    show_columns: bool,
+}
+
+#[derive(Clone)]
+enum StickyPlay {
+    Context(String),
+    Uris(Vec<String>),
+}
+
+#[derive(Clone, Default)]
+struct StickyState {
+    header: Option<StickyHeader>,
+    visible: bool,
+}
+
+fn sticky_id(page: &Page) -> egui::Id {
+    egui::Id::new(("collection-sticky", page.encode()))
+}
+
+const STICKY_ACTIONS_HEIGHT: f32 = 58.0;
+const STICKY_TABLE_HEIGHT: f32 = 88.0;
+
+impl StickyHeader {
+    fn height(&self) -> f32 {
+        if self.show_columns {
+            STICKY_TABLE_HEIGHT
+        } else {
+            STICKY_ACTIONS_HEIGHT
+        }
+    }
+}
+
+fn sticky_animation_id(page: &Page) -> egui::Id {
+    egui::Id::new(("collection-sticky-visible", page.encode()))
+}
+
+pub(super) fn sticky_height(ui: &egui::Ui, page: &Page) -> f32 {
+    let visible = ui
+        .data(|data| data.get_temp::<StickyState>(sticky_id(page)))
+        .is_some_and(|state| state.visible);
+    let height = ui
+        .data(|data| data.get_temp::<StickyState>(sticky_id(page)))
+        .and_then(|state| state.header)
+        .map_or(STICKY_TABLE_HEIGHT, |header| header.height());
+    height
+        * ui.ctx()
+            .animate_bool_with_time(sticky_animation_id(page), visible, 0.15)
+}
+
+pub(super) fn clear_sticky(ui: &mut egui::Ui, page: &Page) {
+    ui.data_mut(|data| {
+        let mut state = data
+            .get_temp::<StickyState>(sticky_id(page))
+            .unwrap_or_default();
+        state.visible = false;
+        data.insert_temp(sticky_id(page), state);
+    });
+}
+
+fn mark_sticky(ui: &mut egui::Ui, page: &Page, header: StickyHeader) {
+    ui.data_mut(|data| {
+        let mut state = data
+            .get_temp::<StickyState>(sticky_id(page))
+            .unwrap_or_default();
+        state.header = Some(header);
+        state.visible = true;
+        data.insert_temp(sticky_id(page), state);
+    });
+}
+
+pub(super) fn mark_artist_sticky(ui: &mut egui::Ui, page: Page, title: &str, uris: Vec<String>) {
+    mark_sticky(
+        ui,
+        &page,
+        StickyHeader {
+            title: title.to_string(),
+            play: StickyPlay::Uris(uris),
+            page: page.clone(),
+            show_album: false,
+            show_cover: true,
+            show_added: false,
+            show_added_by: false,
+            show_columns: false,
+        },
+    );
+}
+
+pub(super) fn show_sticky(
+    app: &mut App,
+    ui: &mut egui::Ui,
+    page: &Page,
+    viewport: Rect,
+    backdrop: &super::PageBackdrop,
+) {
+    let state = ui
+        .data(|data| data.get_temp::<StickyState>(sticky_id(page)))
+        .unwrap_or_default();
+    let progress = ui
+        .ctx()
+        .animate_bool_with_time(sticky_animation_id(page), state.visible, 0.15);
+    let Some(header) = state.header else {
+        return;
+    };
+    if progress <= 0.0 {
+        return;
+    }
+
+    let height = header.height();
+    let rect = Rect::from_min_size(
+        pos2(viewport.left(), viewport.top() - height * (1.0 - progress)),
+        vec2(viewport.width(), height),
+    );
+    let palette = app.palette;
+    let mut shadow_ui = ui.new_child(UiBuilder::new().max_rect(rect));
+    shadow_ui.shrink_clip_rect(viewport);
+    shadow_ui.painter().add(
+        egui::epaint::Shadow {
+            offset: [0, 4],
+            blur: 16,
+            spread: 0,
+            color: palette.shadow.gamma_multiply(progress),
+        }
+        .as_shape(rect, egui::CornerRadius::ZERO),
+    );
+    let mut backdrop_ui = ui.new_child(UiBuilder::new().max_rect(viewport));
+    backdrop_ui.shrink_clip_rect(viewport.intersect(rect));
+    backdrop.paint(&backdrop_ui);
+    let mut sticky = ui.new_child(
+        UiBuilder::new()
+            .id_salt(("sticky-table", &header.page))
+            .max_rect(rect.shrink2(vec2(widgets::PAGE_PADDING, 0.0))),
+    );
+    sticky.shrink_clip_rect(viewport);
+    sticky.set_opacity(progress);
+    sticky.add_space(4.0);
+    sticky.horizontal(|ui| {
+        let current = match &header.play {
+            StickyPlay::Context(uri) => app.playing_context_uri().as_deref() == Some(uri),
+            StickyPlay::Uris(uris) => {
+                app.playing_context_uri().is_none()
+                    && app
+                        .now_playing()
+                        .is_some_and(|now| uris.iter().any(|uri| uri == &now.uri))
+            }
+        };
+        let playing = current && app.believed_playing();
+        let pending = match &header.play {
+            StickyPlay::Context(uri) => app.play_pending(uri),
+            StickyPlay::Uris(uris) => uris.first().is_some_and(|uri| app.play_pending(uri)),
+        };
+        if pending {
+            theme::circle_spinner(ui, 40.0, palette.accent, palette.on_accent, "Starting…");
+        } else if theme::circle_button(
+            ui,
+            if playing {
+                Icon::PauseFilled
+            } else {
+                Icon::PlayFilled
+            },
+            40.0,
+            palette.accent,
+            palette.accent_hover,
+            palette.on_accent,
+            if playing { "Pause" } else { "Play" },
+        )
+        .clicked()
+        {
+            app.actions.push(if current {
+                Action::TogglePlay
+            } else {
+                match &header.play {
+                    StickyPlay::Context(uri) => Action::PlayContext {
+                        uri: uri.clone(),
+                        offset_uri: None,
+                        offset_index: None,
+                    },
+                    StickyPlay::Uris(uris) => Action::PlayUris {
+                        uris: uris.clone(),
+                        index: 0,
+                    },
+                }
+            });
+        }
+        theme::text(ui, &header.title, theme::bold(24.0), palette.text);
+    });
+    if header.show_columns {
+        let clicked = widgets::table_header(
+            &mut sticky,
+            &palette,
+            header.show_album,
+            header.show_added,
+            header.show_added_by,
+            header.show_cover,
+            app.table_sorts.get(&header.page).copied(),
+            false,
+        );
+        if let Some(column) = clicked {
+            apply_sort(app, &header.page, column);
+        }
+    }
+}
+
+fn apply_sort(app: &mut App, page: &Page, column: SortColumn) {
+    let sort = app.table_sorts.get(page).copied();
+    let next = match sort {
+        Some(sort) if sort.column == column && sort.ascending => Some(TableSort {
+            column,
+            ascending: false,
+        }),
+        Some(sort) if sort.column == column => None,
+        _ => Some(TableSort {
+            column,
+            ascending: true,
+        }),
+    };
+    match next {
+        Some(sort) => {
+            app.table_sorts.insert(page.clone(), sort);
+            app.actions.push(Action::LoadMore(page.clone()));
+        }
+        None => {
+            app.table_sorts.remove(page);
+        }
+    }
 }
 
 pub fn table(app: &mut App, ui: &mut egui::Ui, table: Table<'_>) {
@@ -331,8 +568,9 @@ pub fn table(app: &mut App, ui: &mut egui::Ui, table: Table<'_>) {
         });
     }
 
-    if !table.items.is_empty()
-        && let Some(column) = widgets::table_header(
+    let table_top = ui.cursor().top();
+    let clicked = if !table.items.is_empty() {
+        widgets::table_header(
             ui,
             &palette,
             table.show_album,
@@ -340,31 +578,11 @@ pub fn table(app: &mut App, ui: &mut egui::Ui, table: Table<'_>) {
             table.show_added_by,
             table.show_cover,
             sort,
+            true,
         )
-    {
-        // Ascending, descending, back to the list's own order.
-        let next = match sort {
-            Some(sort) if sort.column == column && sort.ascending => Some(TableSort {
-                column,
-                ascending: false,
-            }),
-            Some(sort) if sort.column == column => None,
-            _ => Some(TableSort {
-                column,
-                ascending: true,
-            }),
-        };
-        match next {
-            Some(sort) => {
-                app.table_sorts.insert(table.page.clone(), sort);
-                // A sort covers the whole list, so the rest must load.
-                app.actions.push(Action::LoadMore(table.page.clone()));
-            }
-            None => {
-                app.table_sorts.remove(&table.page);
-            }
-        }
-    }
+    } else {
+        None
+    };
     // What is displayed is what plays: a sorted view plays in its own
     // order, as a plain list of tracks, and its rows cannot edit server
     // positions that no longer match the screen.
@@ -399,6 +617,27 @@ pub fn table(app: &mut App, ui: &mut egui::Ui, table: Table<'_>) {
             },
         );
     });
+    if table_top < ui.clip_rect().top()
+        && let (Some(title), Some(uri)) = (table.sticky_title, table.sticky_play_uri)
+    {
+        mark_sticky(
+            ui,
+            &table.page,
+            StickyHeader {
+                title: title.to_string(),
+                play: StickyPlay::Context(uri.to_string()),
+                page: table.page.clone(),
+                show_album: table.show_album,
+                show_cover: table.show_cover,
+                show_added: table.show_added,
+                show_added_by: table.show_added_by,
+                show_columns: true,
+            },
+        );
+    }
+    if let Some(column) = clicked {
+        apply_sort(app, &table.page, column);
+    }
     if table.loading {
         ui.add_space(8.0);
         widgets::loading_row(ui, &palette);
@@ -511,6 +750,8 @@ pub fn top_songs(app: &mut App, ui: &mut egui::Ui) {
             error: None,
             can_load_more: false,
             filter: "",
+            sticky_title: None,
+            sticky_play_uri: None,
         },
     );
 }
@@ -625,6 +866,8 @@ pub fn playlist(app: &mut App, ui: &mut egui::Ui, id: &str) {
                     error: page.items.error.as_deref(),
                     can_load_more: page.items.can_load_more(),
                     filter: &page.filter,
+                    sticky_title: Some(&playlist.name),
+                    sticky_play_uri: Some(&playlist.uri),
                 },
             );
         }
@@ -700,6 +943,8 @@ pub fn album(app: &mut App, ui: &mut egui::Ui, id: &str) {
                     error: page.tracks.error.as_deref(),
                     can_load_more: page.tracks.can_load_more(),
                     filter: "",
+                    sticky_title: Some(&album.name),
+                    sticky_play_uri: Some(&album.uri),
                 },
             );
             ui.add_space(24.0);
@@ -848,9 +1093,9 @@ pub fn liked(app: &mut App, ui: &mut egui::Ui) {
         .iter()
         .map(|(item, _, _)| item.uri().to_string())
         .collect();
-    let context = match collection_uri {
+    let context = match collection_uri.as_ref() {
         Some(uri) if app.library.liked.is_complete() => RowContext::Context {
-            uri,
+            uri: uri.clone(),
             editable_playlist: None,
         },
         _ => RowContext::Uris(uris),
@@ -874,6 +1119,8 @@ pub fn liked(app: &mut App, ui: &mut egui::Ui) {
             error: error.as_deref(),
             can_load_more,
             filter: &filter,
+            sticky_title: Some("Liked Songs"),
+            sticky_play_uri: collection_uri.as_deref(),
         },
     );
 }

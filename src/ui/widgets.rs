@@ -838,7 +838,7 @@ pub fn explicit_badge(ui: &mut Ui, palette: &Palette) {
 /// The header row above a track table.
 /// The column headings above a track table. Answers with the heading that
 /// was clicked, so the table can sort by it.
-#[expect(clippy::fn_params_excessive_bools)]
+#[expect(clippy::fn_params_excessive_bools, clippy::too_many_arguments)]
 pub fn table_header(
     ui: &mut Ui,
     palette: &Palette,
@@ -847,6 +847,7 @@ pub fn table_header(
     show_added_by: bool,
     show_cover: bool,
     sort: Option<crate::model::TableSort>,
+    separator: bool,
 ) -> Option<crate::model::SortColumn> {
     use crate::model::SortColumn;
     let width = ui.available_width();
@@ -964,11 +965,13 @@ pub fn table_header(
     {
         clicked = Some(SortColumn::Duration);
     }
-    ui.painter().hline(
-        rect.x_range().shrink(8.0),
-        rect.bottom() - 0.5,
-        Stroke::new(1.0, palette.outline),
-    );
+    if separator {
+        ui.painter().hline(
+            rect.x_range().shrink(8.0),
+            rect.bottom() - 0.5,
+            Stroke::new(1.0, palette.outline),
+        );
+    }
     ui.add_space(6.0);
     clicked
 }

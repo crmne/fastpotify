@@ -6,7 +6,7 @@ use crate::model::{Action, DiscographyFilter, Loadable, Page, RowContext};
 use crate::theme::{self, Icon};
 use crate::util;
 
-use super::collection::{Hero, hero};
+use super::collection::{self, Hero, hero};
 use super::widgets::{self, TrackRow};
 
 pub fn show(app: &mut App, ui: &mut egui::Ui, id: &str) {
@@ -98,11 +98,20 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, id: &str) {
             ui.add_space(20.0);
 
             // Popular.
+            let popular_top = ui.cursor().top();
             theme::section_title(ui, &palette, "Popular");
             ui.add_space(4.0);
             match &page.top_tracks {
                 Loadable::Loaded(tracks) if !tracks.is_empty() => {
                     let uris: Vec<String> = tracks.iter().map(|track| track.uri.clone()).collect();
+                    if popular_top < ui.clip_rect().top() {
+                        collection::mark_artist_sticky(
+                            ui,
+                            Page::Artist(id.to_string()),
+                            &artist.name,
+                            uris.clone(),
+                        );
+                    }
                     let context = RowContext::Uris(uris);
                     let items: Vec<PlayableItem> =
                         tracks.iter().cloned().map(PlayableItem::Track).collect();

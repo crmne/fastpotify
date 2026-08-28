@@ -52,7 +52,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     toasts(app, ctx, theme::PLAYER_BAR_HEIGHT + 16.0);
 }
 
-fn page_tint(app: &mut App) -> Option<Color32> {
+pub(super) fn page_tint(app: &mut App) -> Option<Color32> {
     let page = app.page().clone();
     let image = match &page {
         Page::Playlist(id) => app
@@ -91,6 +91,37 @@ fn page_tint(app: &mut App) -> Option<Color32> {
     }
 }
 
+/// The single background treatment shared by a page and its sticky controls.
+pub(super) struct PageBackdrop {
+    rect: Rect,
+    top: Color32,
+    bottom: Color32,
+}
+
+impl PageBackdrop {
+    fn new(app: &App, rect: Rect, tint: Option<Color32>) -> Self {
+        let strength = if matches!(
+            app.page(),
+            Page::Home | Page::Search | Page::Settings | Page::Queue
+        ) {
+            0.45
+        } else {
+            0.85
+        };
+        Self {
+            rect,
+            top: tint.map_or(app.palette.window, |tint| {
+                blend(app.palette.window, tint, strength)
+            }),
+            bottom: app.palette.window,
+        }
+    }
+
+    pub(super) fn paint(&self, ui: &egui::Ui) {
+        widgets::paint_vertical_gradient(ui, self.rect, self.top, self.bottom);
+    }
+}
+
 fn central(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     let tint = page_tint(app);
@@ -98,25 +129,23 @@ fn central(app: &mut App, ui: &mut egui::Ui) {
         .frame(Frame::new().fill(palette.window))
         .show(ui, |ui| {
             let rect = ui.max_rect();
-            if let Some(tint) = tint {
-                let strength = if matches!(
-                    app.page(),
-                    Page::Home | Page::Search | Page::Settings | Page::Queue
-                ) {
-                    0.45
-                } else {
-                    0.85
-                };
-                let top = blend(palette.window, tint, strength);
-                let header = Rect::from_min_size(rect.min, vec2(rect.width(), 340.0));
-                widgets::paint_vertical_gradient(ui, header, top, palette.window);
-            }
+            let backdrop = PageBackdrop::new(
+                app,
+                Rect::from_min_size(rect.min, vec2(rect.width(), 340.0)),
+                tint,
+            );
+            backdrop.paint(ui);
             ui.spacing_mut().item_spacing = vec2(8.0, 6.0);
             topbar::show(app, ui);
             let page = app.page().clone();
-            egui::ScrollArea::vertical()
+            let mut scroll_bar_rect = ui.available_rect_before_wrap();
+            scroll_bar_rect.min.y += collection::sticky_height(ui, &page);
+            collection::clear_sticky(ui, &page);
+            let content_page = page.clone();
+            let scroll = egui::ScrollArea::vertical()
                 .id_salt(("page", page.encode()))
                 .auto_shrink([false, false])
+                .scroll_bar_rect(scroll_bar_rect)
                 .show(ui, |ui| {
                     Frame::new()
                         .inner_margin(Margin {
@@ -127,13 +156,13 @@ fn central(app: &mut App, ui: &mut egui::Ui) {
                         })
                         .show(ui, |ui| {
                             ui.set_min_width(ui.available_width());
-                            match page {
+                            match content_page {
                                 Page::Home => home::show(app, ui),
                                 Page::TopSongs => collection::top_songs(app, ui),
                                 Page::Search => search::show(app, ui),
                                 Page::LikedSongs => collection::liked(app, ui),
                                 Page::Albums | Page::Artists | Page::Podcasts | Page::Episodes => {
-                                    library::show(app, ui, page)
+                                    library::show(app, ui, page.clone())
                                 }
                                 Page::Playlist(id) => collection::playlist(app, ui, &id),
                                 Page::Album(id) => collection::album(app, ui, &id),
@@ -144,6 +173,7 @@ fn central(app: &mut App, ui: &mut egui::Ui) {
                             }
                         });
                 });
+            collection::show_sticky(app, ui, &page, scroll.inner_rect, &backdrop);
         });
 }
 

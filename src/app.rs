@@ -2441,6 +2441,8 @@ impl App {
                 shuffle: shuffle_first.then_some(true),
                 at: Instant::now(),
             });
+        } else {
+            self.assumed_context = None;
         }
         match self.target() {
             Target::Local => {
@@ -3636,5 +3638,19 @@ mod tests {
             "{:?}",
             app.actions
         );
+    }
+
+    #[test]
+    fn a_uri_queue_replaces_the_previous_context() {
+        let mut app = headless_app();
+        app.assumed_context = Some(AssumedContext {
+            uri: "spotify:album:old".into(),
+            shuffle: None,
+            at: Instant::now(),
+        });
+
+        app.play_request(PlayRequest::tracks(vec!["spotify:track:new".into()]), false);
+
+        assert!(app.assumed_context.is_none());
     }
 }
