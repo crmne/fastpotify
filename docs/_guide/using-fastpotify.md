@@ -15,6 +15,11 @@ The player bar at the bottom always shows what is playing, on this
 computer *or* on any other device. Click the title to open its album, the
 artist to open the artist, the heart to save it.
 
+## Home
+
+Home previews your most-played songs. Select **Your top songs** or **Show
+more top songs** to open the complete ranked list.
+
 ## Your Library
 
 The sidebar is your library: filter it by Playlists, Albums, Artists, or

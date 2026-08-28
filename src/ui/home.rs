@@ -310,12 +310,20 @@ fn track_list(
     title: &str,
     tracks: Loadable<Vec<crate::api::models::Track>>,
     limit: usize,
+    title_page: Option<Page>,
+    more_label: Option<&str>,
 ) {
     let palette = app.palette;
     let tracks = match tracks {
         Loadable::Loaded(tracks) => tracks,
         Loadable::Loading | Loadable::NotLoaded => {
-            theme::section_title(ui, &palette, title);
+            if let Some(page) = title_page {
+                if theme::link(ui, title, theme::bold(17.0), palette.text).clicked() {
+                    app.actions.push(Action::Open(page));
+                }
+            } else {
+                theme::section_title(ui, &palette, title);
+            }
             widgets::loading_row(ui, &palette);
             ui.add_space(12.0);
             return;
@@ -325,7 +333,13 @@ fn track_list(
     if tracks.is_empty() {
         return;
     }
-    theme::section_title(ui, &palette, title);
+    if let Some(page) = title_page {
+        if theme::link(ui, title, theme::bold(17.0), palette.text).clicked() {
+            app.actions.push(Action::Open(page));
+        }
+    } else {
+        theme::section_title(ui, &palette, title);
+    }
     ui.add_space(4.0);
     let uris: Vec<String> = tracks.iter().map(|track| track.uri.clone()).collect();
     let context = RowContext::Uris(uris);
@@ -346,15 +360,29 @@ fn track_list(
             },
         );
     }
+    if let Some(label) = more_label
+        && items.len() > limit
+        && theme::link(ui, label, theme::semibold(14.0), palette.secondary).clicked()
+    {
+        app.actions.push(Action::Open(Page::TopSongs));
+    }
     ui.add_space(16.0);
 }
 
 fn top_tracks(app: &mut App, ui: &mut egui::Ui) {
     let tracks = app.home.top_tracks.clone();
-    track_list(app, ui, "Your top songs", tracks, 10);
+    track_list(
+        app,
+        ui,
+        "Your top songs",
+        tracks,
+        10,
+        Some(Page::TopSongs),
+        Some("Show more top songs"),
+    );
 }
 
 fn recommendations(app: &mut App, ui: &mut egui::Ui) {
     let tracks = app.home.recommendations.clone();
-    track_list(app, ui, "Recommended for you", tracks, 20);
+    track_list(app, ui, "Recommended for you", tracks, 20, None, None);
 }

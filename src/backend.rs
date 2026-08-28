@@ -51,7 +51,10 @@ pub enum ApiRequest {
     PlaybackState,
     Queue,
     RecentlyPlayed,
-    TopTracks,
+    TopTracks {
+        offset: u32,
+        full: bool,
+    },
     TopArtists,
     Recommendations {
         seed_tracks: Vec<String>,
@@ -188,7 +191,11 @@ pub enum ApiResponse {
     PlaybackState(ApiResult<Option<PlaybackState>>),
     Queue(ApiResult<Queue>),
     RecentlyPlayed(ApiResult<Vec<PlayHistory>>),
-    TopTracks(ApiResult<Vec<Track>>),
+    TopTracks {
+        offset: u32,
+        full: bool,
+        result: ApiResult<Page<Track>>,
+    },
     TopArtists(ApiResult<Vec<Artist>>),
     Recommendations(ApiResult<Vec<Track>>),
     Discover {
@@ -1140,11 +1147,13 @@ async fn handle(api: &ApiClient, request: ApiRequest) -> ApiResponse {
         ApiRequest::RecentlyPlayed => {
             ApiResponse::RecentlyPlayed(api.recently_played(50).await.map(|page| page.items))
         }
-        ApiRequest::TopTracks => ApiResponse::TopTracks(
-            api.top_tracks("short_term", 20)
-                .await
-                .map(|page| page.items),
-        ),
+        ApiRequest::TopTracks { offset, full } => ApiResponse::TopTracks {
+            result: api
+                .top_tracks("short_term", if full { 50 } else { 20 }, offset)
+                .await,
+            offset,
+            full,
+        },
         ApiRequest::TopArtists => ApiResponse::TopArtists(
             api.top_artists("medium_term", 20)
                 .await

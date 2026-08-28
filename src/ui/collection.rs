@@ -352,6 +352,56 @@ fn items_of(
         .collect()
 }
 
+/// A complete, ranked view of the listener's current top tracks.
+pub fn top_songs(app: &mut App, ui: &mut egui::Ui) {
+    let palette = app.palette;
+    ui.add_space(12.0);
+    theme::text(ui, "Your top songs", theme::bold(30.0), palette.text);
+    ui.add_space(4.0);
+    theme::text(
+        ui,
+        "Your most-listened tracks from the last four weeks.",
+        theme::regular(13.5),
+        palette.secondary,
+    );
+    ui.add_space(18.0);
+
+    let tracks = match &app.home.top_songs {
+        Loadable::Loaded(tracks) => tracks.clone(),
+        Loadable::Loading | Loadable::NotLoaded => {
+            widgets::loading_row(ui, &palette);
+            return;
+        }
+        Loadable::Failed(error) => {
+            let error = error.clone();
+            widgets::error_row(ui, app, &error, Some(Page::TopSongs));
+            return;
+        }
+    };
+    let items: Vec<(PlayableItem, Option<String>)> = tracks
+        .iter()
+        .cloned()
+        .map(|track| (PlayableItem::Track(track), None))
+        .collect();
+    let uris = tracks.into_iter().map(|track| track.uri).collect();
+    table(
+        app,
+        ui,
+        Table {
+            items: &items,
+            context: RowContext::Uris(uris),
+            show_album: true,
+            show_cover: true,
+            show_added: false,
+            page: Page::TopSongs,
+            loading: app.home.top_songs_loading,
+            error: None,
+            can_load_more: false,
+            filter: "",
+        },
+    );
+}
+
 pub fn playlist(app: &mut App, ui: &mut egui::Ui, id: &str) {
     let Some(mut page) = app.playlist_pages.remove(id) else {
         app.ensure_loaded(Page::Playlist(id.to_string()));

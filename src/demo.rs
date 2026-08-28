@@ -421,6 +421,8 @@ pub fn populate(app: &mut App) {
     );
     app.home.top_artists = Loadable::Loaded((0..8).map(artist).collect());
     app.home.top_tracks = Loadable::Loaded(tracks.iter().skip(10).take(10).cloned().collect());
+    app.home.top_songs = Loadable::Loaded(tracks.iter().skip(10).cloned().collect());
+    app.home.top_songs_complete = true;
     app.home.recommendations = Loadable::Loaded(tracks.iter().skip(20).take(10).cloned().collect());
     for term in DISCOVER_TERMS {
         let matching: Vec<Playlist> = playlists
@@ -594,6 +596,7 @@ mod tests {
 
         let pages = [
             Page::Home,
+            Page::TopSongs,
             Page::Search,
             Page::LikedSongs,
             Page::Albums,

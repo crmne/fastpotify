@@ -9,6 +9,7 @@ use crate::api::models::*;
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Page {
     Home,
+    TopSongs,
     Search,
     LikedSongs,
     Albums,
@@ -27,6 +28,7 @@ impl Page {
     pub fn encode(&self) -> String {
         match self {
             Page::Home => "home".into(),
+            Page::TopSongs => "top-songs".into(),
             Page::Search => "search".into(),
             Page::LikedSongs => "liked".into(),
             Page::Albums => "albums".into(),
@@ -45,6 +47,7 @@ impl Page {
     pub fn decode(text: &str) -> Option<Self> {
         Some(match text {
             "home" => Page::Home,
+            "top-songs" => Page::TopSongs,
             "search" => Page::Search,
             "liked" => Page::LikedSongs,
             "albums" => Page::Albums,
@@ -235,7 +238,12 @@ pub struct Library {
 pub struct HomeData {
     pub recently_played: Loadable<Vec<PlayHistory>>,
     pub top_artists: Loadable<Vec<Artist>>,
+    /// The 20-track preview shown on Home.
     pub top_tracks: Loadable<Vec<Track>>,
+    /// The separately loaded, complete ranking shown by the Top Songs page.
+    pub top_songs: Loadable<Vec<Track>>,
+    pub top_songs_loading: bool,
+    pub top_songs_complete: bool,
     pub recommendations: Loadable<Vec<Track>>,
     pub discover: HashMap<String, Loadable<Vec<Playlist>>>,
     pub requested: bool,
