@@ -261,7 +261,14 @@ fn native_options(fullscreen: bool) -> eframe::NativeOptions {
             .with_inner_size([1240.0, 800.0])
             .with_min_inner_size([760.0, 520.0])
             .with_fullscreen(fullscreen)
-            .with_icon(app_icon()),
+            // macOS takes the dock icon from the bundle's .icns, which is the
+            // 1024px drawing with the platform's rounding. Setting a window
+            // icon there replaces it with this flat 128px square.
+            .with_icon(if cfg!(target_os = "macos") {
+                egui::IconData::default()
+            } else {
+                app_icon()
+            }),
         // A Wayland compositor stops sending frame callbacks to a hidden
         // window; waiting for vsync there would block the event loop.
         // Repaints are event-driven, so nothing spins.
