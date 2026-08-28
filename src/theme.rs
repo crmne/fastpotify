@@ -6,7 +6,7 @@
 //! through a [`Palette`] so light and dark stay coherent and album-art tints
 //! can be blended in without hunting for hard-coded colours.
 
-use egui::{Color32, CornerRadius, Response, Sense, Stroke, Vec2};
+use egui::{Color32, CornerRadius, Response, Rgba, Sense, Stroke, Vec2};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Palette {
@@ -346,7 +346,9 @@ pub enum Icon {
     Loader,
     Lock,
     LogOut,
+    Maximize2,
     Mic,
+    Minimize2,
     Minus,
     Monitor,
     Moon,
@@ -431,7 +433,9 @@ const ICONS: &[(Icon, &str, &[u8])] = icons! {
     Loader => "loader-circle",
     Lock => "lock",
     LogOut => "log-out",
+    Maximize2 => "maximize-2",
     Mic => "mic",
+    Minimize2 => "minimize-2",
     Minus => "minus",
     Monitor => "monitor",
     Moon => "moon",
@@ -551,11 +555,22 @@ pub fn circle_button(
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(diameter), Sense::click());
     if ui.is_rect_visible(rect) {
         let hovered = response.hovered();
-        let grow = if hovered { 1.05 } else { 1.0 };
-        let radius = diameter / 2.0 * grow;
+        // Hover and press both animate; the press shrink is brief and snappy
+        // while the hover grow is a slow settle, so the play button feels
+        // alive instead of jumping between sizes.
+        let hover_t =
+            ui.ctx()
+                .animate_bool_with_time(response.id.with("circle-hover"), hovered, 0.18);
+        let press_t = ui.ctx().animate_bool_with_time(
+            response.id.with("circle-press"),
+            response.is_pointer_button_down_on(),
+            0.09,
+        );
+        let grow = 1.0 + 0.05 * ease_out(hover_t);
+        let radius = diameter / 2.0 * grow * (1.0 - 0.08 * press_t);
         let fill = if hovered { fill_hover } else { fill };
         ui.painter().circle_filled(rect.center(), radius, fill);
-        let icon_size = diameter * 0.46;
+        let icon_size = diameter * 0.46 * (1.0 + 0.04 * hover_t) * (1.0 - 0.08 * press_t);
         // A right-pointing triangle's visual mass sits left of its bounding
         // box, so a geometrically centred glyph reads as pushed left and a
         // full optical shift reads as pushed right. Lucide bakes about one
@@ -745,4 +760,19 @@ pub fn section_title(ui: &mut egui::Ui, palette: &Palette, label: &str) -> Respo
 
 pub fn subtle(ui: &mut egui::Ui, palette: &Palette, label: &str) -> Response {
     text(ui, label, regular(13.0), palette.secondary)
+}
+
+/// A smooth curve for the interface's short animations: quick to start,
+/// gentle at the end.
+pub fn ease_out(t: f32) -> f32 {
+    1.0 - (1.0 - t).powi(3)
+}
+
+/// Linear interpolation between two colours, `t` in 0..=1.
+pub fn lerp_color(from: Color32, to: Color32, t: f32) -> Color32 {
+    let from = Rgba::from(from);
+    let to = Rgba::from(to);
+    let mut color = Color32::from(from * (1.0 - t) + to * t);
+    color[3] = 255;
+    color
 }
