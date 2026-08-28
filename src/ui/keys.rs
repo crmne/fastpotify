@@ -17,7 +17,17 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
         key(Modifiers::COMMAND, Key::F, Action::FocusSearch);
         key(Modifiers::COMMAND, Key::Comma, Action::Open(Page::Settings));
         key(Modifiers::COMMAND, Key::Q, Action::Quit);
-        key(Modifiers::COMMAND, Key::H, Action::Open(Page::Home));
+        // winit installs its own macOS app menu, whose Hide item owns Cmd+H
+        // before the window is offered the key.
+        if cfg!(target_os = "macos") {
+            key(
+                Modifiers::COMMAND | Modifiers::SHIFT,
+                Key::H,
+                Action::Open(Page::Home),
+            );
+        } else {
+            key(Modifiers::COMMAND, Key::H, Action::Open(Page::Home));
+        }
         key(Modifiers::COMMAND, Key::L, Action::Open(Page::LikedSongs));
         key(
             Modifiers::COMMAND,
@@ -40,11 +50,16 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
             Key::B,
             Action::OpenUri("album".into()),
         );
-        key(
-            Modifiers::COMMAND | Modifiers::SHIFT,
-            Key::Q,
-            Action::ToggleQueuePanel,
-        );
+        // Cmd+Shift+Q is Log Out, taken by the window server.
+        if cfg!(target_os = "macos") {
+            key(Modifiers::COMMAND, Key::U, Action::ToggleQueuePanel);
+        } else {
+            key(
+                Modifiers::COMMAND | Modifiers::SHIFT,
+                Key::Q,
+                Action::ToggleQueuePanel,
+            );
+        }
         if !typing {
             key(Modifiers::SHIFT, Key::ArrowLeft, Action::SeekBy(-10_000));
             key(Modifiers::SHIFT, Key::ArrowRight, Action::SeekBy(10_000));
@@ -99,7 +114,14 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("Q", "Show the queue"),
     ("Ctrl+F  or  /", "Search"),
     ("Alt+←  /  Alt+→", "Back or forward"),
-    ("Ctrl+H", "Home"),
+    (
+        if cfg!(target_os = "macos") {
+            "Ctrl+Shift+H"
+        } else {
+            "Ctrl+H"
+        },
+        "Home",
+    ),
     ("Ctrl+L", "Liked Songs"),
     ("Ctrl+Shift+A", "Go to the playing artist"),
     ("Ctrl+Shift+B", "Go to the playing album"),
