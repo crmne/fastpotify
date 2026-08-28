@@ -495,4 +495,58 @@ fn extras(app: &mut App, ui: &mut egui::Ui, now: Option<&NowPlaying>) {
     {
         app.actions.push(Action::ToggleLyricsPanel);
     }
+    sleep_timer_button(app, ui);
+}
+
+fn sleep_timer_button(app: &mut App, ui: &mut egui::Ui) {
+    let palette = app.palette;
+    let active = app.sleep_timer_end.is_some();
+    let tooltip = match app.sleep_timer_left() {
+        Some(left) => format!(
+            "Sleep timer: {} remaining — click to change",
+            crate::util::format_duration_ms((left.as_secs() * 1000) as u32)
+        ),
+        None => "Sleep timer — pause playback after a while".into(),
+    };
+    let button = theme::icon_button(
+        ui,
+        Icon::Moon,
+        18.0,
+        if active {
+            palette.accent
+        } else {
+            palette.secondary
+        },
+        palette.text,
+        &tooltip,
+    );
+    egui::Popup::menu(&button)
+        .frame(super::widgets::menu_frame(&palette))
+        .show(|ui| {
+            ui.set_min_width(200.0);
+            ui.add_space(4.0);
+            theme::text(ui, "Sleep timer", theme::semibold(14.0), palette.text);
+            ui.add_space(2.0);
+            for minutes in [15u64, 30, 60, 90] {
+                let label = match minutes {
+                    60 => "1 hour".to_string(),
+                    _ => format!("{minutes} minutes"),
+                };
+                if super::widgets::menu_item(ui, &palette, None, &label) {
+                    app.set_sleep_timer(minutes);
+                    app.toast(format!("Sleep timer: {label}."));
+                }
+            }
+            super::widgets::menu_separator(ui, &palette);
+            if super::widgets::menu_item_enabled(
+                ui,
+                &palette,
+                Some(Icon::X),
+                "Cancel sleep timer",
+                active,
+            ) {
+                app.cancel_sleep_timer();
+                app.toast("Sleep timer cancelled.");
+            }
+        });
 }

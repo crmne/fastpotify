@@ -211,6 +211,8 @@ pub struct App {
     remote_recheck_at: Option<Instant>,
     pub seek_preview: Option<f32>,
     pub volume_preview: Option<f32>,
+    /// When playback should pause automatically, or `None` without a timer.
+    pub sleep_timer_end: Option<Instant>,
     last_eviction: Instant,
     pub sign_in_url: Option<String>,
     /// The Web API application the current sign-in belongs to, so Settings
@@ -372,6 +374,7 @@ impl App {
             remote_recheck_at: None,
             seek_preview: None,
             volume_preview: None,
+            sleep_timer_end: None,
             last_eviction: Instant::now(),
             sign_in_url: None,
             web_app: None,
@@ -953,6 +956,12 @@ impl App {
 
     fn tick(&mut self, ctx: &egui::Context) {
         let now = Instant::now();
+        self.tick_sleep_timer();
+        if let Some(end) = self.sleep_timer_end {
+            let remaining = end.saturating_duration_since(Instant::now());
+            // Wake exactly when the timer fires, not every 250 ms for 90 min.
+            ctx.request_repaint_after(remaining);
+        }
         self.toasts
             .retain(|toast| toast.created.elapsed() < TOAST_LIFETIME);
 
@@ -3231,6 +3240,40 @@ impl App {
             kind: ToastKind::Error,
             created: Instant::now(),
         });
+    }
+
+    /// Arms the sleep timer for `minutes` from now. A paused track stays
+    /// paused; the timer pauses whatever is playing when it expires.
+    pub fn set_sleep_timer(&mut self, minutes: u64) {
+        self.sleep_timer_end = Some(Instant::now() + Duration::from_secs(minutes * 60));
+    }
+
+    pub fn cancel_sleep_timer(&mut self) {
+        self.sleep_timer_end = None;
+    }
+
+    /// Remaining sleep-timer time, or `None` when no timer is armed.
+    pub fn sleep_timer_left(&self) -> Option<Duration> {
+        self.sleep_timer_end
+            .map(|end| end.saturating_duration_since(Instant::now()))
+    }
+
+    /// Pauses playback when the sleep timer expires. Called from both the
+    /// windowed frame and the headless background frame so it fires while
+    /// the app is closed to the tray.
+    pub fn tick_sleep_timer(&mut self) {
+        let expired = self
+            .sleep_timer_end
+            .is_some_and(|end| Instant::now() >= end);
+        if !expired {
+            return;
+        }
+        self.sleep_timer_end = None;
+        let was_playing = self.now_playing().is_some_and(|now| now.playing);
+        if was_playing {
+            self.actions.push(Action::TogglePlay);
+        }
+        self.toast("Sleep timer: playback paused.");
     }
 
     /// Playlists the signed-in user can add to.
