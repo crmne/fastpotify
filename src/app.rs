@@ -211,6 +211,12 @@ pub struct App {
     remote_recheck_at: Option<Instant>,
     pub seek_preview: Option<f32>,
     pub volume_preview: Option<f32>,
+    /// Window geometry to restore on next attach, from the session file.
+    session_window_size: Option<[f32; 2]>,
+    session_window_pos: Option<[f32; 2]>,
+    /// Last observed window geometry, updated each frame for saving.
+    last_window_size: Option<[f32; 2]>,
+    last_window_pos: Option<[f32; 2]>,
     last_eviction: Instant,
     pub sign_in_url: Option<String>,
     /// The Web API application the current sign-in belongs to, so Settings
@@ -355,7 +361,7 @@ impl App {
             accents: HashMap::new(),
             accent_pending: HashSet::new(),
             dialog: None,
-            show_queue_panel: false,
+            show_queue_panel: session.queue_open.unwrap_or(false),
             show_lyrics_panel: false,
             lyrics_uri: None,
             lyrics: Loadable::NotLoaded,
@@ -372,6 +378,10 @@ impl App {
             remote_recheck_at: None,
             seek_preview: None,
             volume_preview: None,
+            session_window_size: session.window_size,
+            session_window_pos: session.window_pos,
+            last_window_size: None,
+            last_window_pos: None,
             last_eviction: Instant::now(),
             sign_in_url: None,
             web_app: None,
@@ -425,6 +435,25 @@ impl App {
         self.wants_show = false;
         if let Some(tray) = &mut self.tray {
             tray.attach();
+        }
+        if let Some(size) = self.session_window_size.take() {
+            // Clamp to a sane range so a stale session never creates an
+            // unusable window; the OS will further clamp to the monitor.
+            if (400.0..=3000.0).contains(&size[0]) && (300.0..=2000.0).contains(&size[1]) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
+                    size[0], size[1],
+                )));
+            }
+        }
+        if let Some(pos) = self.session_window_pos.take() {
+            // On Wayland this is a no-op. Validate against a large virtual
+            // desktop so a window that was on a now-disconnected monitor
+            // doesn't open off-screen.
+            if (-1000.0..=5000.0).contains(&pos[0]) && (-1000.0..=5000.0).contains(&pos[1]) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(
+                    pos[0], pos[1],
+                )));
+            }
         }
         // egui's consensus wheel speed is 40 points per line, about a third
         // of what every other player scrolls per notch; trackpads report
@@ -3276,6 +3305,13 @@ impl App {
         self.apply_actions(ctx);
         self.sync_media_controls();
 
+        if let Some(rect) = ctx.input(|input| input.viewport().inner_rect) {
+            self.last_window_size = Some([rect.width(), rect.height()]);
+        }
+        if let Some(rect) = ctx.input(|input| input.viewport().outer_rect) {
+            self.last_window_pos = Some([rect.min.x, rect.min.y]);
+        }
+
         let playing = self.now_playing().is_some_and(|now| now.playing);
         if playing {
             ctx.request_repaint_after(Duration::from_millis(250));
@@ -3417,6 +3453,9 @@ impl App {
                 last_context: self.resume_context.clone(),
                 last_track: self.resume_track.clone(),
                 last_position_ms: self.resume_position_ms,
+                window_size: self.last_window_size.or(self.session_window_size),
+                window_pos: self.last_window_pos.or(self.session_window_pos),
+                queue_open: Some(self.show_queue_panel),
             }
             .save(&self.dirs.session_file());
         }

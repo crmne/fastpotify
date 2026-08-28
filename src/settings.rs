@@ -151,6 +151,12 @@ pub struct SessionState {
     pub last_context: Option<String>,
     pub last_track: Option<String>,
     pub last_position_ms: u32,
+    /// Last window inner size, to restore on next launch.
+    pub window_size: Option<[f32; 2]>,
+    /// Last window outer position, to restore on next launch.
+    pub window_pos: Option<[f32; 2]>,
+    /// Whether the queue panel was open.
+    pub queue_open: Option<bool>,
 }
 
 impl SessionState {
