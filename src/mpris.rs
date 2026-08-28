@@ -12,77 +12,25 @@ use std::time::{Duration, Instant};
 use mpris_server::{LoopStatus, Metadata, PlaybackStatus, Player, Time, TrackId};
 use tokio::sync::mpsc as tokio_mpsc;
 
+use crate::media::{MediaCommand, MediaState, MediaTrack};
 use crate::player::{Playback, RepeatMode};
 
 const PLAYING_POSITION_INTERVAL: Duration = Duration::from_millis(1000);
 const TRACK_OBJECT_PATH_PREFIX: &str = "/me/paolino/Fastpotify/Track/";
 
-#[derive(Clone, Debug, PartialEq)]
-pub enum MprisCommand {
-    Play,
-    Pause,
-    PlayPause,
-    Stop,
-    Next,
-    Previous,
-    SeekBy(i64),
-    SetPosition { track_uri: String, position_ms: u32 },
-    SetVolume(f64),
-    SetShuffle(bool),
-    SetRepeat(RepeatMode),
-    OpenUri(String),
-    Raise,
-    Quit,
-}
-
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct MprisTrack {
-    pub uri: String,
-    pub title: String,
-    pub artists: Vec<String>,
-    pub album: String,
-    pub art_url: Option<String>,
-    pub duration_ms: u32,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct MprisState {
-    pub playback: Playback,
-    pub track: Option<MprisTrack>,
-    pub position_ms: u32,
-    pub volume: f64,
-    pub shuffle: bool,
-    pub repeat: RepeatMode,
-    pub can_control: bool,
-}
-
-impl Default for MprisState {
-    fn default() -> Self {
-        Self {
-            playback: Playback::Stopped,
-            track: None,
-            position_ms: 0,
-            volume: 1.0,
-            shuffle: false,
-            repeat: RepeatMode::Off,
-            can_control: true,
-        }
-    }
-}
-
 enum Update {
-    State(MprisState),
+    State(MediaState),
     Seeked(u32),
 }
 
-pub struct MprisService {
+pub struct MediaService {
     updates: tokio_mpsc::UnboundedSender<Update>,
-    commands: Receiver<MprisCommand>,
-    published: Option<MprisState>,
+    commands: Receiver<MediaCommand>,
+    published: Option<MediaState>,
     last_position_update: Instant,
 }
 
-impl MprisService {
+impl MediaService {
     pub fn spawn(wake: impl Fn() + Send + Sync + 'static) -> Self {
         let (updates, update_rx) = tokio_mpsc::unbounded_channel();
         let (command_tx, commands) = std::sync::mpsc::channel();
@@ -117,13 +65,13 @@ impl MprisService {
         }
     }
 
-    pub fn drain_commands(&self) -> Vec<MprisCommand> {
+    pub fn drain_commands(&self) -> Vec<MediaCommand> {
         self.commands.try_iter().collect()
     }
 
     /// Publishes structural changes immediately; the position once a second
     /// while playing, since clients interpolate between updates.
-    pub fn update(&mut self, state: MprisState) {
+    pub fn update(&mut self, state: MediaState) {
         let structural = self
             .published
             .as_ref()
@@ -148,7 +96,7 @@ impl MprisService {
     }
 }
 
-fn same_except_position(left: &MprisState, right: &MprisState) -> bool {
+fn same_except_position(left: &MediaState, right: &MediaState) -> bool {
     left.playback == right.playback
         && left.track == right.track
         && (left.volume - right.volume).abs() < 0.005
@@ -159,7 +107,7 @@ fn same_except_position(left: &MprisState, right: &MprisState) -> bool {
 
 async fn run(
     mut updates: tokio_mpsc::UnboundedReceiver<Update>,
-    commands: Sender<MprisCommand>,
+    commands: Sender<MediaCommand>,
     wake: std::sync::Arc<dyn Fn() + Send + Sync>,
 ) -> mpris_server::zbus::Result<()> {
     let player = Player::builder("fastpotify")
@@ -180,7 +128,7 @@ async fn run(
     let send = {
         let commands = commands.clone();
         let wake = wake.clone();
-        move |command: MprisCommand| {
+        move |command: MediaCommand| {
             if commands.send(command).is_ok() {
                 wake();
             }
@@ -188,37 +136,37 @@ async fn run(
     };
     {
         let send = send.clone();
-        player.connect_play(move |_| send(MprisCommand::Play));
+        player.connect_play(move |_| send(MediaCommand::Play));
     }
     {
         let send = send.clone();
-        player.connect_pause(move |_| send(MprisCommand::Pause));
+        player.connect_pause(move |_| send(MediaCommand::Pause));
     }
     {
         let send = send.clone();
-        player.connect_play_pause(move |_| send(MprisCommand::PlayPause));
+        player.connect_play_pause(move |_| send(MediaCommand::PlayPause));
     }
     {
         let send = send.clone();
-        player.connect_stop(move |_| send(MprisCommand::Stop));
+        player.connect_stop(move |_| send(MediaCommand::Stop));
     }
     {
         let send = send.clone();
-        player.connect_next(move |_| send(MprisCommand::Next));
+        player.connect_next(move |_| send(MediaCommand::Next));
     }
     {
         let send = send.clone();
-        player.connect_previous(move |_| send(MprisCommand::Previous));
+        player.connect_previous(move |_| send(MediaCommand::Previous));
     }
     {
         let send = send.clone();
-        player.connect_seek(move |_, offset| send(MprisCommand::SeekBy(offset.as_millis())));
+        player.connect_seek(move |_, offset| send(MediaCommand::SeekBy(offset.as_millis())));
     }
     {
         let send = send.clone();
         player.connect_set_position(move |_, track_id, position| {
             if let Some(uri) = uri_from_object_path(track_id.as_str()) {
-                send(MprisCommand::SetPosition {
+                send(MediaCommand::SetPosition {
                     track_uri: uri,
                     position_ms: position.as_millis().max(0) as u32,
                 });
@@ -227,16 +175,16 @@ async fn run(
     }
     {
         let send = send.clone();
-        player.connect_set_volume(move |_, volume| send(MprisCommand::SetVolume(volume)));
+        player.connect_set_volume(move |_, volume| send(MediaCommand::SetVolume(volume)));
     }
     {
         let send = send.clone();
-        player.connect_set_shuffle(move |_, shuffle| send(MprisCommand::SetShuffle(shuffle)));
+        player.connect_set_shuffle(move |_, shuffle| send(MediaCommand::SetShuffle(shuffle)));
     }
     {
         let send = send.clone();
         player.connect_set_loop_status(move |_, status| {
-            send(MprisCommand::SetRepeat(match status {
+            send(MediaCommand::SetRepeat(match status {
                 LoopStatus::None => RepeatMode::Off,
                 LoopStatus::Track => RepeatMode::Track,
                 LoopStatus::Playlist => RepeatMode::Context,
@@ -245,20 +193,20 @@ async fn run(
     }
     {
         let send = send.clone();
-        player.connect_open_uri(move |_, uri| send(MprisCommand::OpenUri(uri.to_string())));
+        player.connect_open_uri(move |_, uri| send(MediaCommand::OpenUri(uri.to_string())));
     }
     {
         let send = send.clone();
-        player.connect_raise(move |_| send(MprisCommand::Raise));
+        player.connect_raise(move |_| send(MediaCommand::Raise));
     }
     {
         let send = send.clone();
-        player.connect_quit(move |_| send(MprisCommand::Quit));
+        player.connect_quit(move |_| send(MediaCommand::Quit));
     }
 
     let server = player.run();
     let apply = async {
-        let mut published: Option<MprisState> = None;
+        let mut published: Option<MediaState> = None;
         while let Some(update) = updates.recv().await {
             match update {
                 Update::Seeked(position_ms) => {
@@ -313,7 +261,7 @@ fn loop_status(mode: RepeatMode) -> LoopStatus {
     }
 }
 
-fn metadata(track: Option<&MprisTrack>) -> Metadata {
+fn metadata(track: Option<&MediaTrack>) -> Metadata {
     let Some(track) = track else {
         return Metadata::new();
     };

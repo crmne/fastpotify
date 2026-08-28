@@ -18,97 +18,45 @@ use souvlaki::{
     SeekDirection,
 };
 
-use crate::player::{Playback, RepeatMode};
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum MprisCommand {
-    Play,
-    Pause,
-    PlayPause,
-    Stop,
-    Next,
-    Previous,
-    SeekBy(i64),
-    SetPosition { track_uri: String, position_ms: u32 },
-    SetVolume(f64),
-    SetShuffle(bool),
-    SetRepeat(RepeatMode),
-    OpenUri(String),
-    Raise,
-    Quit,
-}
-
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct MprisTrack {
-    pub uri: String,
-    pub title: String,
-    pub artists: Vec<String>,
-    pub album: String,
-    pub art_url: Option<String>,
-    pub duration_ms: u32,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct MprisState {
-    pub playback: Playback,
-    pub track: Option<MprisTrack>,
-    pub position_ms: u32,
-    pub volume: f64,
-    pub shuffle: bool,
-    pub repeat: RepeatMode,
-    pub can_control: bool,
-}
-
-impl Default for MprisState {
-    fn default() -> Self {
-        Self {
-            playback: Playback::Stopped,
-            track: None,
-            position_ms: 0,
-            volume: 1.0,
-            shuffle: false,
-            repeat: RepeatMode::Off,
-            can_control: true,
-        }
-    }
-}
+use crate::media::{MediaCommand, MediaState};
+use crate::player::Playback;
 
 type Wake = Arc<dyn Fn() + Send + Sync>;
 
 /// How far a seek button without an amount moves.
 const SEEK_STEP_MS: i64 = 10_000;
 
-fn command_for(event: MediaControlEvent, track_uri: &str) -> Option<MprisCommand> {
+fn command_for(event: MediaControlEvent, track_uri: &str) -> Option<MediaCommand> {
     let step = |direction: SeekDirection, ms: i64| match direction {
-        SeekDirection::Forward => MprisCommand::SeekBy(ms),
-        SeekDirection::Backward => MprisCommand::SeekBy(-ms),
+        SeekDirection::Forward => MediaCommand::SeekBy(ms),
+        SeekDirection::Backward => MediaCommand::SeekBy(-ms),
     };
     Some(match event {
-        MediaControlEvent::Play => MprisCommand::Play,
-        MediaControlEvent::Pause => MprisCommand::Pause,
-        MediaControlEvent::Toggle => MprisCommand::PlayPause,
-        MediaControlEvent::Next => MprisCommand::Next,
-        MediaControlEvent::Previous => MprisCommand::Previous,
-        MediaControlEvent::Stop => MprisCommand::Stop,
+        MediaControlEvent::Play => MediaCommand::Play,
+        MediaControlEvent::Pause => MediaCommand::Pause,
+        MediaControlEvent::Toggle => MediaCommand::PlayPause,
+        MediaControlEvent::Next => MediaCommand::Next,
+        MediaControlEvent::Previous => MediaCommand::Previous,
+        MediaControlEvent::Stop => MediaCommand::Stop,
         MediaControlEvent::Seek(direction) => step(direction, SEEK_STEP_MS),
         MediaControlEvent::SeekBy(direction, amount) => {
             step(direction, amount.as_millis().min(i64::MAX as u128) as i64)
         }
-        MediaControlEvent::SetPosition(position) => MprisCommand::SetPosition {
+        MediaControlEvent::SetPosition(position) => MediaCommand::SetPosition {
             track_uri: track_uri.to_string(),
             position_ms: position.0.as_millis().min(u32::MAX as u128) as u32,
         },
-        MediaControlEvent::SetVolume(volume) => MprisCommand::SetVolume(volume),
-        MediaControlEvent::OpenUri(uri) => MprisCommand::OpenUri(uri),
-        MediaControlEvent::Raise => MprisCommand::Raise,
-        MediaControlEvent::Quit => MprisCommand::Quit,
+        MediaControlEvent::SetVolume(volume) => MediaCommand::SetVolume(volume),
+        MediaControlEvent::OpenUri(uri) => MediaCommand::OpenUri(uri),
+        MediaControlEvent::Raise => MediaCommand::Raise,
+        MediaControlEvent::Quit => MediaCommand::Quit,
     })
 }
 
 /// The controls, and what they were last told, so only changes are sent.
 struct Bridge {
     controls: MediaControls,
-    last: MprisState,
+    last: MediaState,
     /// The playing track, for a "set position" request to name.
     track_uri: Arc<std::sync::Mutex<String>>,
 }
@@ -116,7 +64,7 @@ struct Bridge {
 impl Bridge {
     fn new(
         hwnd: Option<*mut std::ffi::c_void>,
-        sender: Sender<MprisCommand>,
+        sender: Sender<MediaCommand>,
         wake: Wake,
     ) -> Result<Self, String> {
         let mut controls = MediaControls::new(PlatformConfig {
@@ -139,12 +87,12 @@ impl Bridge {
             .map_err(|error| error.to_string())?;
         Ok(Self {
             controls,
-            last: MprisState::default(),
+            last: MediaState::default(),
             track_uri,
         })
     }
 
-    fn apply(&mut self, state: MprisState) {
+    fn apply(&mut self, state: MediaState) {
         let track_changed = state.track != self.last.track;
         if track_changed {
             let artist = state
@@ -197,7 +145,7 @@ impl Bridge {
 
 /// What the app sends to the controls.
 enum Update {
-    State(MprisState),
+    State(MediaState),
     Seeked(u32),
 }
 
@@ -264,7 +212,7 @@ mod host {
     /// Runs the controls on their own thread. Answers with the thread's id
     /// once they exist, or with why they could not be made.
     pub fn start(
-        sender: Sender<MprisCommand>,
+        sender: Sender<MediaCommand>,
         wake: Wake,
         updates: Receiver<Update>,
     ) -> Result<u32, String> {
@@ -322,15 +270,15 @@ mod host {
 }
 
 #[cfg(windows)]
-pub struct MprisService {
-    commands: Receiver<MprisCommand>,
+pub struct MediaService {
+    commands: Receiver<MediaCommand>,
     /// Where updates go, and the thread to wake for them; `None` when the
     /// controls could not be made.
     updates: Option<(Sender<Update>, u32)>,
 }
 
 #[cfg(windows)]
-impl MprisService {
+impl MediaService {
     pub fn spawn(wake: impl Fn() + Send + Sync + 'static) -> Self {
         let (sender, commands) = std::sync::mpsc::channel();
         let (update_tx, update_rx) = std::sync::mpsc::channel();
@@ -344,11 +292,11 @@ impl MprisService {
         Self { commands, updates }
     }
 
-    pub fn drain_commands(&self) -> Vec<MprisCommand> {
+    pub fn drain_commands(&self) -> Vec<MediaCommand> {
         self.commands.try_iter().collect()
     }
 
-    pub fn update(&mut self, state: MprisState) {
+    pub fn update(&mut self, state: MediaState) {
         self.send(Update::State(state));
     }
 
@@ -366,13 +314,13 @@ impl MprisService {
 }
 
 #[cfg(target_os = "macos")]
-pub struct MprisService {
-    commands: Receiver<MprisCommand>,
+pub struct MediaService {
+    commands: Receiver<MediaCommand>,
     bridge: std::sync::Mutex<Option<Bridge>>,
 }
 
 #[cfg(target_os = "macos")]
-impl MprisService {
+impl MediaService {
     pub fn spawn(wake: impl Fn() + Send + Sync + 'static) -> Self {
         let (sender, commands) = std::sync::mpsc::channel();
         let bridge = match Bridge::new(None, sender, Arc::new(wake)) {
@@ -388,11 +336,11 @@ impl MprisService {
         }
     }
 
-    pub fn drain_commands(&self) -> Vec<MprisCommand> {
+    pub fn drain_commands(&self) -> Vec<MediaCommand> {
         self.commands.try_iter().collect()
     }
 
-    pub fn update(&mut self, state: MprisState) {
+    pub fn update(&mut self, state: MediaState) {
         self.with_bridge(|bridge| bridge.apply(state));
     }
 

@@ -585,7 +585,7 @@ mod tests {
             dirs,
             Settings::default(),
             AppOptions {
-                mpris: false,
+                media_controls: false,
                 tray: false,
             },
         );

@@ -13,8 +13,9 @@ use crate::backend::{
     ApiRequest, ApiResponse, AuthStatus, Backend, Command, Event, LocalPlayback, RemoteAction,
     Waker,
 };
+use crate::media::{MediaCommand, MediaState, MediaTrack};
+use crate::media_controls::MediaService;
 use crate::model::*;
-use crate::mpris::{MprisCommand, MprisService, MprisState, MprisTrack};
 use crate::paths::AppDirs;
 use crate::player::{EngineConfig, LoadSpec, LocalState, Playback, PlayerCommand, RepeatMode};
 use crate::settings::{SessionState, Settings, ThemeChoice};
@@ -79,7 +80,7 @@ pub enum Target {
 #[derive(Clone, Copy, Debug)]
 pub struct AppOptions {
     /// Register the MPRIS media-control service (Linux).
-    pub mpris: bool,
+    pub media_controls: bool,
     /// Register the system-tray item (Linux).
     pub tray: bool,
 }
@@ -87,7 +88,7 @@ pub struct AppOptions {
 impl Default for AppOptions {
     fn default() -> Self {
         Self {
-            mpris: true,
+            media_controls: true,
             tray: true,
         }
     }
@@ -99,7 +100,7 @@ pub struct App {
     settings_dirty: bool,
     last_settings_save: Instant,
     pub backend: Backend,
-    mpris: Option<MprisService>,
+    media_controls: Option<MediaService>,
     tray: Option<TrayService>,
     pub window_hidden: bool,
     /// The window should close but the process should stay in the tray.
@@ -214,9 +215,9 @@ impl App {
             waker.clone(),
         );
         let wake = waker.clone();
-        let mpris = options
-            .mpris
-            .then(|| MprisService::spawn(move || wake.wake()));
+        let media_controls = options
+            .media_controls
+            .then(|| MediaService::spawn(move || wake.wake()));
         let wake = waker.clone();
         let tray = options
             .tray
@@ -237,7 +238,7 @@ impl App {
             settings_dirty: false,
             last_settings_save: Instant::now(),
             backend,
-            mpris,
+            media_controls,
             tray,
             window_hidden: false,
             hide_intent: false,
@@ -703,9 +704,9 @@ impl App {
             self.settings_dirty = true;
         }
         if state.seek_sequence != self.local.seek_sequence
-            && let Some(mpris) = &self.mpris
+            && let Some(controls) = &self.media_controls
         {
-            mpris.seeked(state.position_ms);
+            controls.seeked(state.position_ms);
         }
         if let Some(error) = &state.error
             && self.local.error.as_deref() != Some(error.as_str())
@@ -856,38 +857,42 @@ impl App {
         }
     }
 
-    fn handle_mpris(&mut self) {
-        let Some(commands) = self.mpris.as_ref().map(MprisService::drain_commands) else {
+    fn handle_media_commands(&mut self) {
+        let Some(commands) = self
+            .media_controls
+            .as_ref()
+            .map(MediaService::drain_commands)
+        else {
             return;
         };
         for command in commands {
             let playing = self.now_playing().is_some_and(|now| now.playing);
             let action = match command {
-                MprisCommand::Play => (!playing).then_some(Action::TogglePlay),
-                MprisCommand::Pause | MprisCommand::Stop => playing.then_some(Action::TogglePlay),
-                MprisCommand::PlayPause => Some(Action::TogglePlay),
-                MprisCommand::Next => Some(Action::Next),
-                MprisCommand::Previous => Some(Action::Previous),
-                MprisCommand::SeekBy(offset) => Some(Action::SeekBy(offset)),
-                MprisCommand::SetPosition {
+                MediaCommand::Play => (!playing).then_some(Action::TogglePlay),
+                MediaCommand::Pause | MediaCommand::Stop => playing.then_some(Action::TogglePlay),
+                MediaCommand::PlayPause => Some(Action::TogglePlay),
+                MediaCommand::Next => Some(Action::Next),
+                MediaCommand::Previous => Some(Action::Previous),
+                MediaCommand::SeekBy(offset) => Some(Action::SeekBy(offset)),
+                MediaCommand::SetPosition {
                     track_uri,
                     position_ms,
                 } => self
                     .now_playing()
                     .filter(|now| now.uri == track_uri)
                     .map(|_| Action::Seek(position_ms)),
-                MprisCommand::SetVolume(volume) => Some(Action::SetVolume(
+                MediaCommand::SetVolume(volume) => Some(Action::SetVolume(
                     (volume.clamp(0.0, 1.0) * 100.0).round() as u8,
                 )),
-                MprisCommand::SetShuffle(shuffle) => Some(Action::SetShuffle(shuffle)),
-                MprisCommand::SetRepeat(mode) => Some(Action::SetRepeat(mode)),
-                MprisCommand::OpenUri(uri) => Some(Action::PlayContext {
+                MediaCommand::SetShuffle(shuffle) => Some(Action::SetShuffle(shuffle)),
+                MediaCommand::SetRepeat(mode) => Some(Action::SetRepeat(mode)),
+                MediaCommand::OpenUri(uri) => Some(Action::PlayContext {
                     uri,
                     offset_uri: None,
                     offset_index: None,
                 }),
-                MprisCommand::Raise => Some(Action::ShowWindow),
-                MprisCommand::Quit => Some(Action::Quit),
+                MediaCommand::Raise => Some(Action::ShowWindow),
+                MediaCommand::Quit => Some(Action::Quit),
             };
             if let Some(action) = action {
                 self.actions.push(action);
@@ -895,9 +900,9 @@ impl App {
         }
     }
 
-    fn sync_mpris(&mut self) {
+    fn sync_media_controls(&mut self) {
         let state = match self.now_playing() {
-            Some(now) => MprisState {
+            Some(now) => MediaState {
                 playback: if now.playing {
                     Playback::Playing
                 } else if now.loading {
@@ -905,7 +910,7 @@ impl App {
                 } else {
                     Playback::Paused
                 },
-                track: Some(MprisTrack {
+                track: Some(MediaTrack {
                     uri: now.uri.clone(),
                     title: now.title.clone(),
                     artists: now
@@ -923,10 +928,10 @@ impl App {
                 repeat: now.repeat,
                 can_control: now.can_control,
             },
-            None => MprisState::default(),
+            None => MediaState::default(),
         };
-        if let Some(mpris) = &mut self.mpris {
-            mpris.update(state);
+        if let Some(controls) = &mut self.media_controls {
+            controls.update(state);
         }
         let playing = self.now_playing().is_some_and(|now| now.playing);
         if let Some(tray) = &mut self.tray {
@@ -2699,11 +2704,11 @@ impl App {
             self.actions.push(Action::ShowWindow);
         }
         self.handle_events();
-        self.handle_mpris();
+        self.handle_media_commands();
         self.handle_tray();
         self.tick(ctx);
         self.apply_actions(ctx);
-        self.sync_mpris();
+        self.sync_media_controls();
     }
 
     pub fn frame_ui(&mut self, ui: &mut egui::Ui) {
@@ -2713,7 +2718,7 @@ impl App {
         self.lock_scroll_axis(ctx);
         crate::ui::show(self, ui);
         self.apply_actions(ctx);
-        self.sync_mpris();
+        self.sync_media_controls();
 
         let playing = self.now_playing().is_some_and(|now| now.playing);
         if playing {
@@ -2878,7 +2883,7 @@ mod tests {
             dirs,
             Settings::default(),
             AppOptions {
-                mpris: false,
+                media_controls: false,
                 tray: false,
             },
         );
