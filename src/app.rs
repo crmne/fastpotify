@@ -590,16 +590,30 @@ impl App {
         self.sleep_timer_end = None;
     }
 
-    /// Toggles the compact single-line player. When it opens, the window is
-    /// resized to just fit it; leaving restores the previous size.
+    /// Toggles the compact square player. When it opens, the window is
+    /// resized to fit it and pinned above other windows; leaving restores
+    /// the previous size and minimum.
     pub fn toggle_mini_player(&mut self, ctx: &egui::Context) {
         self.mini_player = !self.mini_player;
-        let size = if self.mini_player {
-            egui::vec2(520.0, 96.0)
+        if self.mini_player {
+            ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(
+                theme::MINI_PLAYER_SIZE.into(),
+            ));
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(
+                theme::MINI_PLAYER_SIZE.into(),
+            ));
+            ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(
+                egui::WindowLevel::AlwaysOnTop,
+            ));
         } else {
-            egui::vec2(1240.0, 800.0)
-        };
-        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
+            ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(egui::vec2(
+                760.0, 520.0,
+            )));
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(1240.0, 800.0)));
+            ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(
+                egui::WindowLevel::Normal,
+            ));
+        }
     }
 
     /// Remaining sleep-timer time, or `None` when no timer is armed.

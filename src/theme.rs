@@ -101,6 +101,8 @@ pub const ROW_HEIGHT: f32 = 56.0;
 pub const COMPACT_ROW_HEIGHT: f32 = 48.0;
 pub const PLAYER_BAR_HEIGHT: f32 = 88.0;
 pub const TOP_BAR_HEIGHT: f32 = 56.0;
+/// Size of the square mini-player window.
+pub const MINI_PLAYER_SIZE: [f32; 2] = [320.0, 320.0];
 
 const INTER_MEDIUM: &str = "inter-medium";
 const INTER_SEMIBOLD: &str = "inter-semibold";
