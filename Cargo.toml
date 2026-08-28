@@ -31,6 +31,13 @@ directories = "6"
 eframe = { version = "0.36", default-features = false, features = ["glow", "default_fonts", "links", "wayland", "x11", "persistence"] }
 egui = "0.36"
 egui_extras = { version = "0.36", features = ["image", "svg"] }
+# Reading what a system font covers, so the app can borrow a face for a script
+# Inter cannot draw. skrifa is the parser epaint already rasterizes with, and
+# the version has to track epaint's or the binary compiles two copies of it;
+# memmap2 keeps the probe to the few pages of each font that answer the
+# question.
+skrifa = "0.44"
+memmap2 = "0.9"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 # Spotify playback and Connect. rustls everywhere so the client links one TLS
 # stack and builds without OpenSSL on every platform.

@@ -90,12 +90,14 @@ and on Debian or Ubuntu:
 sudo apt install libasound2-dev libpulse-dev libxkbcommon-dev libwayland-dev
 ```
 
-Fastpotify draws Chinese and Japanese text with a font borrowed from the
-system rather than bundling one, which would cost more than ten megabytes.
-macOS and Windows ship a suitable face; on Linux install `noto-fonts-cjk`
-(Arch) or `fonts-noto-cjk` (Debian or Ubuntu) if those titles appear as empty
-boxes. Noto CJK covers Korean as well, which the faces macOS and Windows ship
-do not.
+Titles in a script the interface font does not cover -- Chinese, Japanese,
+Korean, Arabic, Hebrew, Thai, the Indic scripts and a dozen more -- are drawn
+with a face borrowed from the system rather than bundled, which would cost
+more than ten megabytes for Chinese alone. macOS and Windows carry faces for
+the common ones; on Linux install the Noto families for the scripts you
+listen to, for example `noto-fonts` and `noto-fonts-cjk` (Arch) or
+`fonts-noto` and `fonts-noto-cjk` (Debian or Ubuntu). A script with no face
+installed still shows as empty boxes.
 
 A desktop entry is provided in `packaging/applications/fastpotify.desktop`.
 
