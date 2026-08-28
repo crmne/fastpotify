@@ -42,17 +42,29 @@ pub fn paint_cover(
     let corner = CornerRadius::same(radius.min(127.0) as u8);
     let painter = ui.painter();
     let loaded = url.is_some_and(|url| {
-        let image = egui::Image::new(url)
-            .fit_to_exact_size(rect.size())
+        let image = egui::Image::new(url).show_loading_spinner(false);
+        let Ok(egui::load::TexturePoll::Ready { texture }) =
+            image.load_for_size(ui.ctx(), rect.size())
+        else {
+            return false;
+        };
+
+        let image_aspect = texture.size.x / texture.size.y;
+        let rect_aspect = rect.width() / rect.height();
+        let uv = if image_aspect > rect_aspect {
+            let visible_width = rect_aspect / image_aspect;
+            let inset = (1.0 - visible_width) / 2.0;
+            Rect::from_min_max(pos2(inset, 0.0), pos2(1.0 - inset, 1.0))
+        } else {
+            let visible_height = image_aspect / rect_aspect;
+            let inset = (1.0 - visible_height) / 2.0;
+            Rect::from_min_max(pos2(0.0, inset), pos2(1.0, 1.0 - inset))
+        };
+        egui::Image::new(texture)
+            .uv(uv)
             .corner_radius(corner)
-            .show_loading_spinner(false);
-        matches!(
-            image.load_for_size(ui.ctx(), rect.size()),
-            Ok(egui::load::TexturePoll::Ready { .. })
-        ) && {
-            image.paint_at(ui, rect);
-            true
-        }
+            .paint_at(ui, rect);
+        true
     });
     if !loaded {
         let fill = if palette.dark {
