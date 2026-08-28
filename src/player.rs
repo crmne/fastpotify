@@ -24,7 +24,7 @@ use librespot_core::{
     session::Session,
     spotify_id::SpotifyId,
 };
-use librespot_metadata::audio::{AudioItem, UniqueFields};
+use librespot_metadata::audio::{AudioFileFormat, AudioItem, UniqueFields};
 use librespot_playback::{
     audio_backend::{self, Sink},
     config::{AudioFormat, Bitrate, NormalisationType, PlayerConfig, VolumeCtrl},
@@ -139,6 +139,12 @@ pub struct LocalTrack {
     pub art_small_url: Option<String>,
     pub duration_ms: u32,
     pub is_episode: bool,
+    /// Human-readable quality of the file the player actually streams for
+    /// this item, e.g. "320 kbps OGG". The format is the first one the
+    /// configured bitrate's preference list offers, so it can fall below the
+    /// configured bitrate (podcasts, unavailable higher formats). `None`
+    /// while unknown and for local files, whose quality is the file's own.
+    pub stream_quality: Option<String>,
 }
 
 impl LocalTrack {
@@ -276,7 +282,12 @@ impl Engine {
             sink_builder(config, Arc::clone(&state), Arc::clone(&notify), &mixer);
         let player = Player::new(player_config, session.clone(), volume, sink_builder);
         let events = player.get_player_event_channel();
-        tokio::spawn(run_events(events, Arc::clone(&state), Arc::clone(&notify)));
+        tokio::spawn(run_events(
+            events,
+            Arc::clone(&state),
+            Arc::clone(&notify),
+            config.bitrate_kbps,
+        ));
 
         let connect_config = ConnectConfig {
             name: config.device_name.clone(),
@@ -489,6 +500,7 @@ async fn run_events(
     mut events: tokio::sync::mpsc::UnboundedReceiver<PlayerEvent>,
     state: Arc<Mutex<LocalState>>,
     notify: Notify,
+    bitrate_kbps: u16,
 ) {
     let mut play_request_id = None;
     while let Some(event) = events.recv().await {
@@ -506,7 +518,7 @@ async fn run_events(
         }
         let snapshot = {
             let mut current = state.lock().unwrap_or_else(|p| p.into_inner());
-            if apply_event(&mut current, event) {
+            if apply_event(&mut current, event, bitrate_kbps) {
                 Some(current.clone())
             } else {
                 None
@@ -527,7 +539,7 @@ fn set<T: PartialEq>(target: &mut T, value: T) -> bool {
     }
 }
 
-fn apply_event(state: &mut LocalState, event: PlayerEvent) -> bool {
+fn apply_event(state: &mut LocalState, event: PlayerEvent, bitrate_kbps: u16) -> bool {
     match event {
         PlayerEvent::Stopped { .. } => {
             let mut changed = set(&mut state.playback, Playback::Stopped);
@@ -575,7 +587,10 @@ fn apply_event(state: &mut LocalState, event: PlayerEvent) -> bool {
             true
         }
         PlayerEvent::TrackChanged { audio_item } => {
-            let mut changed = set(&mut state.track, Some(local_track(&audio_item)));
+            let mut changed = set(
+                &mut state.track,
+                Some(local_track(&audio_item, bitrate_kbps)),
+            );
             changed |= set(&mut state.error, None);
             changed
         }
@@ -620,7 +635,7 @@ fn apply_event(state: &mut LocalState, event: PlayerEvent) -> bool {
     }
 }
 
-fn local_track(item: &AudioItem) -> LocalTrack {
+fn local_track(item: &AudioItem, bitrate_kbps: u16) -> LocalTrack {
     let (artists, album, is_episode) = match &item.unique_fields {
         UniqueFields::Track { artists, album, .. } => (
             artists.iter().map(|artist| artist.name.clone()).collect(),
@@ -645,6 +660,19 @@ fn local_track(item: &AudioItem) -> LocalTrack {
         .find(|cover| cover.width >= 64)
         .or(covers.last())
         .map(|cover| cover.url.clone());
+    // The first file librespot's own format list would pick for the
+    // configured bitrate: it walks this preference list and takes the first
+    // format the item offers. Episodes and unavailable tracks fall below
+    // the configured bitrate, so this shows the real quality, not the
+    // configured one. Local files are the file's own quality.
+    let stream_quality = if matches!(item.unique_fields, UniqueFields::Local { .. }) {
+        None
+    } else {
+        preferred_formats(bitrate_kbps)
+            .iter()
+            .find(|format| item.files.contains_key(format))
+            .map(|format| format_quality_label(*format))
+    };
     LocalTrack {
         uri: item.uri.clone(),
         title: item.name.clone(),
@@ -654,7 +682,60 @@ fn local_track(item: &AudioItem) -> LocalTrack {
         art_small_url,
         duration_ms: item.duration_ms,
         is_episode,
+        stream_quality,
     }
+}
+
+/// librespot's format preference list for a configured bitrate
+/// (`playback/src/player.rs`): the first format the item offers is the file
+/// that gets streamed.
+fn preferred_formats(bitrate_kbps: u16) -> &'static [AudioFileFormat] {
+    use AudioFileFormat::*;
+    match bitrate_kbps {
+        96 => &[
+            OGG_VORBIS_96,
+            MP3_96,
+            OGG_VORBIS_160,
+            MP3_160,
+            MP3_256,
+            OGG_VORBIS_320,
+            MP3_320,
+        ],
+        160 => &[
+            OGG_VORBIS_160,
+            MP3_160,
+            OGG_VORBIS_96,
+            MP3_96,
+            MP3_256,
+            OGG_VORBIS_320,
+            MP3_320,
+        ],
+        _ => &[
+            OGG_VORBIS_320,
+            MP3_320,
+            MP3_256,
+            OGG_VORBIS_160,
+            MP3_160,
+            OGG_VORBIS_96,
+            MP3_96,
+        ],
+    }
+}
+
+/// Human-readable quality for a streaming format, e.g. "320 kbps OGG".
+pub fn format_quality_label(format: AudioFileFormat) -> String {
+    use AudioFileFormat::*;
+    let (codec, kbps) = match format {
+        OGG_VORBIS_320 => ("OGG", 320),
+        OGG_VORBIS_160 => ("OGG", 160),
+        OGG_VORBIS_96 => ("OGG", 96),
+        MP3_320 => ("MP3", 320),
+        MP3_256 => ("MP3", 256),
+        MP3_160 => ("MP3", 160),
+        MP3_96 => ("MP3", 96),
+        _ => return format!("{format:?}"),
+    };
+    format!("{kbps} kbps {codec}")
 }
 
 #[cfg(test)]
@@ -692,6 +773,7 @@ mod tests {
                 track_id: uri(),
                 position_ms: 0,
             },
+            320,
         );
         assert_eq!(state.playback, Playback::Playing);
     }

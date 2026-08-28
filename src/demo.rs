@@ -565,6 +565,36 @@ pub fn apply_flags(app: &mut App, page: Option<&str>, show: Option<&str>) {
         match surface {
             "queue" => app.show_queue_panel = true,
             "devices" => app.show_devices = true,
+            // Playback handed to this computer's own player, so the
+            // playback-info popup shows the file it streams.
+            "local" => {
+                let first = track(0);
+                let album = first.album.clone().unwrap_or_default();
+                let cover = album.images.first().map(|image| image.url.clone());
+                let small = album.images.last().map(|image| image.url.clone());
+                app.local.track = Some(crate::player::LocalTrack {
+                    uri: first.uri.clone(),
+                    title: first.name.clone(),
+                    artists: first
+                        .artists
+                        .iter()
+                        .map(|artist| artist.name.clone())
+                        .collect(),
+                    album: album.name.clone(),
+                    art_url: cover,
+                    art_small_url: small,
+                    duration_ms: first.duration_ms,
+                    is_episode: false,
+                    stream_quality: Some("320 kbps OGG".into()),
+                });
+                app.local.playback = crate::player::Playback::Playing;
+                app.local.position_ms = 42_000;
+                app.local.position_at = Some(Instant::now());
+                app.local.volume = crate::app::percent_to_volume(70);
+                for device in &mut app.devices {
+                    device.is_active = device.id.as_deref() == Some("local-demo");
+                }
+            }
             "shortcuts" => app.dialog = Some(Dialog::Shortcuts),
             "create" => {
                 app.dialog = Some(Dialog::CreatePlaylist {

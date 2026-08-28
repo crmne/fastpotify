@@ -84,6 +84,8 @@ pub struct NowPlaying {
     pub volume_percent: u8,
     pub can_control: bool,
     pub is_episode: bool,
+    /// Streaming quality of the local player, e.g. "320 kbps OGG".
+    pub quality: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -590,6 +592,7 @@ impl App {
                 volume_percent: volume_to_percent(self.local.volume),
                 can_control: true,
                 is_episode: track.is_episode,
+                quality: track.stream_quality.clone(),
             });
         }
         let remote = self.remote_fresh()?;
@@ -663,6 +666,7 @@ impl App {
             volume_percent: volume,
             can_control: device.is_none_or(|device| !device.is_restricted),
             is_episode,
+            quality: None,
         })
     }
 
