@@ -63,7 +63,7 @@ librespot-protocol = { version = "0.8", default-features = false }
 rodio = { version = "0.21", default-features = false, features = ["playback"] }
 cpal = "0.16"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "json", "gzip", "http2", "blocking"] }
-tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "fs"] }
 sha1 = "0.10"
 sha2 = "0.10"
 base64 = "0.22"
