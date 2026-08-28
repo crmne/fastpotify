@@ -31,6 +31,13 @@ const CACHE_LIFETIME: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 const MAX_QUERY: usize = 6000;
 /// Romanization is asked per line; this many lines may ask at once.
 const ROMANIZE_AT_ONCE: usize = 5;
+/// A refused request is tried again this many times, waiting a little
+/// longer between tries, since an answer a moment late still spares the
+/// next play of the song every request at all.
+const ATTEMPTS: u32 = 3;
+/// The wait before the first retry, and the ceiling it doubles towards.
+const FIRST_RETRY: Duration = Duration::from_millis(500);
+const MAX_RETRY: Duration = Duration::from_secs(4);
 
 /// Per-line aids for the lyrics panel, aligned with the track's lyric lines.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -90,27 +97,47 @@ async fn ask(http: &reqwest::Client, lines: &[&str], target: &str) -> Result<Opt
     }))
 }
 
-/// One call to the endpoint the Google Translate page itself uses. `text`
-/// may hold several lines joined with newlines.
+/// One call to the endpoint the Google Translate page itself uses, tried
+/// again on a refusal: a little later each time, with a dash of randomness
+/// so concurrent lines do not knock together, and for as long as Google's
+/// own `Retry-After` asks when it sends one. `text` may hold several lines
+/// joined with newlines.
 async fn request(http: &reqwest::Client, target: &str, text: &str) -> Result<serde_json::Value> {
     let url = format!(
         "{API}?client=dict-chrome-ex&dt=t&dt=rm&sl=auto&tl={}&q={}",
         urlencoding::encode(target),
         urlencoding::encode(text),
     );
-    let response = http
-        .get(url)
-        .send()
-        .await
-        .context("cannot reach Google Translate")?;
-    let status = response.status();
-    if !status.is_success() {
-        anyhow::bail!("Google Translate answered {status}");
+    let mut wait = FIRST_RETRY;
+    for attempt in 0..ATTEMPTS {
+        let response = http
+            .get(&url)
+            .send()
+            .await
+            .context("cannot reach Google Translate")?;
+        let status = response.status();
+        if status.is_success() {
+            return response
+                .json()
+                .await
+                .context("unexpected answer from Google Translate");
+        }
+        if attempt + 1 == ATTEMPTS {
+            anyhow::bail!("Google Translate answered {status}");
+        }
+        let asked = response
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<u64>().ok())
+            .map(Duration::from_secs)
+            .unwrap_or(wait);
+        let pause = asked + Duration::from_millis(rand::random::<u64>() % 250);
+        log::debug!("Google Translate answered {status}; trying again in {pause:?}");
+        tokio::time::sleep(pause).await;
+        wait = (wait * 2).min(MAX_RETRY);
     }
-    response
-        .json()
-        .await
-        .context("unexpected answer from Google Translate")
+    unreachable!("the loop returns or bails on its last attempt")
 }
 
 /// The translated text of an answer — every segment's first words, joined —
