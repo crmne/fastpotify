@@ -179,6 +179,10 @@ pub struct App {
     pub sign_in_url: Option<String>,
     pending_remote_position: Option<(u32, Instant)>,
     pending_remote_volume: Option<(u8, Instant)>,
+    /// A local volume set here that the engine has not echoed back yet. It
+    /// reports `VolumeChanged` asynchronously while position snapshots land
+    /// every second, so a snapshot must not undo the change on its way past.
+    pending_local_volume: Option<(u16, Instant)>,
     optimistic_playing: Option<(bool, Instant)>,
     last_now_playing_uri: Option<String>,
     pub playlist_busy: bool,
@@ -291,6 +295,7 @@ impl App {
             sign_in_url: None,
             pending_remote_position: None,
             pending_remote_volume: None,
+            pending_local_volume: None,
             optimistic_playing: None,
             last_now_playing_uri: None,
             playlist_busy: false,
@@ -678,7 +683,8 @@ impl App {
         if state.track != self.local.track {
             self.clear_play_pending();
         }
-        if state.volume != self.local.volume {
+        let held_volume = self.held_local_volume(state.volume);
+        if held_volume.is_none() && state.volume != self.settings.volume {
             self.settings.volume = state.volume;
             self.settings_dirty = true;
         }
@@ -693,6 +699,9 @@ impl App {
             self.toast_error(error.clone());
         }
         self.local = state;
+        if let Some(volume) = held_volume {
+            self.local.volume = volume;
+        }
         if track_changed {
             self.on_now_playing_changed();
         }
@@ -2042,6 +2051,20 @@ impl App {
         }
     }
 
+    /// The volume this side set that the engine has yet to confirm, if the
+    /// hold is still good. Clears itself once the engine agrees or it expires.
+    fn held_local_volume(&mut self, reported: u16) -> Option<u16> {
+        match self.pending_local_volume {
+            Some((volume, at)) if volume != reported && at.elapsed() < OPTIMISTIC_HOLD => {
+                Some(volume)
+            }
+            _ => {
+                self.pending_local_volume = None;
+                None
+            }
+        }
+    }
+
     /// `settle` is false while the slider is still moving: the level is heard
     /// at once, and Spotify is told where it ended up on release.
     fn set_volume(&mut self, percent: u8, settle: bool) {
@@ -2050,6 +2073,14 @@ impl App {
             Target::Local => {
                 let volume = percent_to_volume(percent);
                 self.local.volume = volume;
+                self.pending_local_volume = Some((volume, Instant::now()));
+                // The engine echoes `VolumeChanged` only while this device
+                // holds the Connect session, so the snapshot that would
+                // otherwise persist this may never arrive.
+                if self.settings.volume != volume {
+                    self.settings.volume = volume;
+                    self.settings_dirty = true;
+                }
                 self.backend.player(if settle {
                     PlayerCommand::Volume(volume)
                 } else {
@@ -2818,5 +2849,65 @@ mod tests {
         assert_eq!(volume_to_percent(0), 0);
         assert_eq!(volume_to_percent(percent_to_volume(70)), 70);
         assert_eq!(percent_to_volume(200), u16::MAX);
+    }
+
+    fn headless_app() -> App {
+        let root =
+            std::env::temp_dir().join(format!("fastpotify-volume-test-{}", std::process::id()));
+        let dirs = AppDirs {
+            config: root.join("config"),
+            state: root.join("state"),
+            cache: root.join("cache"),
+        };
+        let mut app = App::new(
+            &Waker::default(),
+            dirs,
+            Settings::default(),
+            AppOptions {
+                mpris: false,
+                tray: false,
+            },
+        );
+        app.local_ready = true;
+        app
+    }
+
+    fn snapshot_at(percent: u8) -> LocalState {
+        LocalState {
+            volume: percent_to_volume(percent),
+            ..LocalState::default()
+        }
+    }
+
+    #[test]
+    fn a_volume_set_here_is_saved_immediately() {
+        let mut app = headless_app();
+        app.set_volume(80, true);
+        assert_eq!(volume_to_percent(app.settings.volume), 80);
+        assert!(app.settings_dirty);
+    }
+
+    #[test]
+    fn a_stale_engine_snapshot_does_not_pull_the_volume_back() {
+        let mut app = headless_app();
+        app.set_volume(80, true);
+
+        // The engine reports `VolumeChanged` asynchronously, so its next
+        // snapshot still carries the volume from before the change.
+        app.handle_local(snapshot_at(20));
+        assert_eq!(volume_to_percent(app.local.volume), 80);
+        assert_eq!(volume_to_percent(app.settings.volume), 80);
+
+        // Once it has caught up, its snapshots are trusted again.
+        app.handle_local(snapshot_at(80));
+        assert_eq!(volume_to_percent(app.local.volume), 80);
+    }
+
+    #[test]
+    fn a_volume_changed_outside_the_app_is_adopted() {
+        let mut app = headless_app();
+        app.handle_local(snapshot_at(35));
+        assert_eq!(volume_to_percent(app.local.volume), 35);
+        assert_eq!(volume_to_percent(app.settings.volume), 35);
     }
 }

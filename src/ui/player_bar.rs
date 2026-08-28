@@ -405,7 +405,7 @@ fn extras(app: &mut App, ui: &mut egui::Ui, now: Option<&NowPlaying>) {
         ui,
         &palette,
         egui::Id::new("volume-slider"),
-        volume as f32 / 100.0,
+        shown as f32 / 100.0,
         92.0,
         palette.accent,
     ) {
