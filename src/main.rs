@@ -152,6 +152,15 @@ fn main() -> eframe::Result<()> {
                     .unwrap_or_else(|p| p.into_inner())
                     .take()
                     .expect("application state present");
+                // Built once per window, before the first frame; the handler
+                // wakes the loop so a menu pick is not held until the next
+                // repaint.
+                #[cfg(target_os = "macos")]
+                {
+                    fastpotify::mac_menu::init();
+                    let ctx = cc.egui_ctx.clone();
+                    fastpotify::mac_menu::set_waker(move || ctx.request_repaint());
+                }
                 app.attach(&cc.egui_ctx);
                 Ok(Box::new(Shell {
                     app: Some(app),
@@ -348,6 +357,38 @@ impl Shell {
 impl eframe::App for Shell {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         if let Some(app) = self.app.as_mut() {
+            #[cfg(target_os = "macos")]
+            for command in fastpotify::mac_menu::drain_commands() {
+                use fastpotify::mac_menu::MenuCommand;
+                use fastpotify::model::{Action, Dialog, Page};
+                let action = match command {
+                    MenuCommand::PlayPause => Action::TogglePlay,
+                    MenuCommand::Next => Action::Next,
+                    MenuCommand::Previous => Action::Previous,
+                    MenuCommand::SeekForward => Action::SeekBy(10_000),
+                    MenuCommand::SeekBackward => Action::SeekBy(-10_000),
+                    MenuCommand::ToggleShuffle => Action::ToggleShuffle,
+                    MenuCommand::CycleRepeat => Action::CycleRepeat,
+                    MenuCommand::VolumeUp => Action::VolumeBy(5),
+                    MenuCommand::VolumeDown => Action::VolumeBy(-5),
+                    MenuCommand::ToggleMute => Action::ToggleMute,
+                    MenuCommand::Home => Action::Open(Page::Home),
+                    MenuCommand::Search => Action::FocusSearch,
+                    MenuCommand::LikedSongs => Action::Open(Page::LikedSongs),
+                    MenuCommand::Queue => Action::ToggleQueuePanel,
+                    MenuCommand::Settings => Action::Open(Page::Settings),
+                    MenuCommand::Shortcuts => Action::ShowDialog(Dialog::Shortcuts),
+                    MenuCommand::Back => Action::Back,
+                    MenuCommand::Forward => Action::Forward,
+                    MenuCommand::OpenRepo => {
+                        ctx.open_url(egui::OpenUrl::new_tab(
+                            "https://github.com/crmne/fastpotify",
+                        ));
+                        continue;
+                    }
+                };
+                app.actions.push(action);
+            }
             app.background_frame(ctx);
         }
         #[cfg(feature = "demo")]
