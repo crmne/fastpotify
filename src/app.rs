@@ -11,7 +11,7 @@ use crate::api::models::{
 };
 use crate::backend::{
     ApiRequest, ApiResponse, AuthStatus, Backend, Command, Event, LocalPlayback, LyricsRequest,
-    RemoteAction, Waker,
+    RemoteAction, TranslateRequest, Waker,
 };
 use crate::media::{MediaCommand, MediaState, MediaTrack};
 use crate::media_controls::MediaService;
@@ -185,6 +185,10 @@ pub struct App {
     pub lyrics_uri: Option<String>,
     /// `Loaded(None)` when nobody has transcribed the track.
     pub lyrics: Loadable<Option<crate::lyrics::Lyrics>>,
+    /// The per-line translation and romanization of the lyrics, once they are in.
+    pub translation: Loadable<Option<crate::translate::Translation>>,
+    translation_uri: Option<String>,
+    translation_target: Option<String>,
     /// Whether the panel scrolls to the line being sung. Off once the
     /// reader scrolls by hand, on again with the Follow button or a new
     /// track.
@@ -359,6 +363,9 @@ impl App {
             show_lyrics_panel: false,
             lyrics_uri: None,
             lyrics: Loadable::NotLoaded,
+            translation: Loadable::NotLoaded,
+            translation_uri: None,
+            translation_target: None,
             lyrics_following: true,
             lyrics_line_shown: None,
             show_devices: false,
@@ -756,6 +763,23 @@ impl App {
                             Ok(found) => Loadable::Loaded(found),
                             Err(error) => Loadable::Failed(error),
                         };
+                        if matches!(self.lyrics, Loadable::Loaded(Some(_))) {
+                            self.request_translation();
+                        }
+                    }
+                }
+                Event::Translate {
+                    uri,
+                    target,
+                    result,
+                } => {
+                    if self.translation_uri.as_deref() == Some(uri.as_str())
+                        && self.translation_target.as_deref() == Some(target.as_str())
+                    {
+                        self.translation = match result {
+                            Ok(found) => Loadable::Loaded(found),
+                            Err(error) => Loadable::Failed(error),
+                        };
                     }
                 }
                 Event::PlaylistCache {
@@ -936,6 +960,7 @@ impl App {
             return;
         }
         self.lyrics = Loadable::Loading;
+        self.translation = Loadable::NotLoaded;
         self.backend.send(Command::Lyrics(Box::new(LyricsRequest {
             uri: now.uri,
             query: crate::lyrics::Query {
@@ -949,6 +974,59 @@ impl App {
                 duration_ms: now.duration_ms,
             },
         })));
+    }
+
+    /// The translation and romanization for the lyrics being shown, when it is
+    /// current: same track and same target language as what was asked for.
+    pub fn current_translation(&self) -> Option<&crate::translate::Translation> {
+        let uri = self.lyrics_uri.as_deref()?;
+        if self.translation_uri.as_deref() != Some(uri) {
+            return None;
+        }
+        if self.translation_target.as_deref() != Some(self.settings.lyrics_language.as_str()) {
+            return None;
+        }
+        match &self.translation {
+            Loadable::Loaded(Some(translation)) => Some(translation),
+            _ => None,
+        }
+    }
+
+    /// Asks for the panel's translation and romanization unless they are here
+    /// or on the way. One request covers both; the lyrics must be in first.
+    pub fn request_translation(&mut self) {
+        if !self.settings.lyrics_show_translation && !self.settings.lyrics_romanize {
+            return;
+        }
+        let Some(lyrics) = (match &self.lyrics {
+            Loadable::Loaded(Some(lyrics)) if !lyrics.instrumental => Some(lyrics),
+            _ => None,
+        }) else {
+            return;
+        };
+        let Some(now) = self.now_playing() else {
+            return;
+        };
+        let uri = now.uri.clone();
+        let target = self.settings.lyrics_language.clone();
+        if self.translation_uri.as_deref() == Some(uri.as_str())
+            && self.translation_target.as_deref() == Some(target.as_str())
+            && matches!(self.translation, Loadable::Loaded(_) | Loadable::Loading)
+        {
+            return;
+        }
+        if now.is_episode || self.offline {
+            return;
+        }
+        self.translation_uri = Some(uri.clone());
+        self.translation_target = Some(target.clone());
+        self.translation = Loadable::Loading;
+        self.backend
+            .send(Command::Translate(Box::new(TranslateRequest {
+                uri,
+                lines: lyrics.lines.iter().map(|line| line.text.clone()).collect(),
+                target,
+            })));
     }
 
     fn tick(&mut self, ctx: &egui::Context) {
@@ -3135,6 +3213,7 @@ impl App {
                     self.show_queue_panel = false;
                     self.lyrics_following = true;
                     self.request_lyrics();
+                    self.request_translation();
                 }
             }
             Action::ToggleDevicesPopup => {
