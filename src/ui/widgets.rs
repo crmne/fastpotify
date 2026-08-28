@@ -488,7 +488,11 @@ fn columns(width: f32, row: &TrackRow<'_>) -> Columns {
     let medium = width > 560.0;
     Columns {
         number: if row.compact { 0.0 } else { 44.0 },
-        cover: if row.show_cover { 52.0 } else { 0.0 },
+        cover: if row.show_cover {
+            if row.compact { 44.0 } else { 52.0 }
+        } else {
+            0.0
+        },
         album: if row.show_album && medium {
             (width * 0.28).clamp(140.0, 360.0)
         } else {
@@ -504,9 +508,9 @@ fn columns(width: f32, row: &TrackRow<'_>) -> Columns {
         } else {
             0.0
         },
-        heart: 36.0,
-        duration: 56.0,
-        more: 36.0,
+        heart: if row.compact { 0.0 } else { 36.0 },
+        duration: if row.compact { 44.0 } else { 56.0 },
+        more: if row.compact { 0.0 } else { 36.0 },
     }
 }
 
@@ -732,30 +736,32 @@ pub fn track_row(ui: &mut Ui, app: &mut App, row: TrackRow<'_>) {
     }
 
     // Heart.
-    let saved = app.is_saved(row.item.uri());
-    let heart_rect = Rect::from_min_size(pos2(x, rect.top()), vec2(cols.heart, row_height));
-    if row.item.is_track() && (hovered || saved == Some(true)) {
-        let mut child = ui.new_child(
-            UiBuilder::new()
-                .max_rect(heart_rect)
-                .layout(Layout::centered_and_justified(egui::Direction::LeftToRight)),
-        );
-        let (icon, color) = if saved == Some(true) {
-            (Icon::HeartFilled, palette.accent)
-        } else {
-            (Icon::Heart, palette.secondary)
-        };
-        let tooltip = if saved == Some(true) {
-            "Remove from Liked Songs"
-        } else {
-            "Save to Liked Songs"
-        };
-        if theme::icon_button(&mut child, icon, 16.0, color, palette.text, tooltip).clicked() {
-            app.actions
-                .push(Action::ToggleSaved(row.item.uri().to_string()));
+    if cols.heart > 0.0 {
+        let saved = app.is_saved(row.item.uri());
+        let heart_rect = Rect::from_min_size(pos2(x, rect.top()), vec2(cols.heart, row_height));
+        if row.item.is_track() && (hovered || saved == Some(true)) {
+            let mut child = ui.new_child(
+                UiBuilder::new()
+                    .max_rect(heart_rect)
+                    .layout(Layout::centered_and_justified(egui::Direction::LeftToRight)),
+            );
+            let (icon, color) = if saved == Some(true) {
+                (Icon::HeartFilled, palette.accent)
+            } else {
+                (Icon::Heart, palette.secondary)
+            };
+            let tooltip = if saved == Some(true) {
+                "Remove from Liked Songs"
+            } else {
+                "Save to Liked Songs"
+            };
+            if theme::icon_button(&mut child, icon, 16.0, color, palette.text, tooltip).clicked() {
+                app.actions
+                    .push(Action::ToggleSaved(row.item.uri().to_string()));
+            }
         }
+        x += cols.heart;
     }
-    x += cols.heart;
 
     // Duration.
     let duration_rect = Rect::from_min_size(pos2(x, rect.top()), vec2(cols.duration, row_height));
@@ -769,8 +775,8 @@ pub fn track_row(ui: &mut Ui, app: &mut App, row: TrackRow<'_>) {
     x += cols.duration;
 
     // More.
-    let more_rect = Rect::from_min_size(pos2(x, rect.top()), vec2(cols.more, row_height));
-    if hovered {
+    if cols.more > 0.0 && hovered {
+        let more_rect = Rect::from_min_size(pos2(x, rect.top()), vec2(cols.more, row_height));
         let mut child = ui.new_child(
             UiBuilder::new()
                 .max_rect(more_rect)
