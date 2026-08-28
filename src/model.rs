@@ -378,6 +378,7 @@ pub struct TableSort {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SortColumn {
+    Index,
     Title,
     Album,
     Added,

@@ -310,6 +310,7 @@ pub fn table(app: &mut App, ui: &mut egui::Ui, table: Table<'_>) {
             let (item_a, added_a, adder_a) = &table.items[*a];
             let (item_b, added_b, adder_b) = &table.items[*b];
             let ordering = match sort.column {
+                SortColumn::Index => a.cmp(b),
                 SortColumn::Title => item_a
                     .name()
                     .to_lowercase()
@@ -349,6 +350,11 @@ pub fn table(app: &mut App, ui: &mut egui::Ui, table: Table<'_>) {
                 ascending: false,
             }),
             Some(sort) if sort.column == column => None,
+            Some(_) if column == SortColumn::Index => None,
+            None if column == SortColumn::Index => Some(TableSort {
+                column: SortColumn::Index,
+                ascending: false,
+            }),
             _ => Some(TableSort {
                 column,
                 ascending: true,

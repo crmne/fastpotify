@@ -854,7 +854,7 @@ pub fn table_header(
     let font = theme::regular(12.0);
     let color = palette.secondary;
     let mut clicked = None;
-    let mut heading = |ui: &mut Ui, x: f32, text: &str, column: SortColumn| {
+    let heading = |ui: &mut Ui, x: f32, text: &str, column: SortColumn| -> Option<SortColumn> {
         let active = sort.filter(|sort| sort.column == column);
         let galley =
             ui.painter()
@@ -896,22 +896,71 @@ pub fn table_header(
             .on_hover_cursor(egui::CursorIcon::PointingHand)
             .clicked()
         {
-            clicked = Some(column);
+            Some(column)
+        } else {
+            None
         }
     };
     let mut x = rect.left() + 8.0;
+    let number_rect = Rect::from_min_size(pos2(x, rect.top()), vec2(44.0, rect.height()));
+    let number_active = sort.filter(|s| s.column == SortColumn::Index);
+    let number_response = ui.interact(
+        number_rect,
+        ui.id().with("table-header-number"),
+        Sense::click(),
+    );
+    let number_color = if number_active.is_some() {
+        palette.accent
+    } else if number_response.hovered() {
+        palette.text
+    } else {
+        color
+    };
+    let center_x = if number_active.is_some() {
+        x + 18.0
+    } else {
+        x + 22.0
+    };
     ui.painter().text(
-        pos2(x + 22.0, rect.center().y),
+        pos2(center_x, rect.center().y),
         egui::Align2::CENTER_CENTER,
         "#",
         font.clone(),
-        color,
+        number_color,
     );
+    if let Some(sort) = number_active {
+        let center = pos2(center_x + 10.0, rect.center().y);
+        let (wing, tip) = if sort.ascending {
+            (2.8, -3.2)
+        } else {
+            (-2.8, 3.2)
+        };
+        ui.painter().add(egui::Shape::convex_polygon(
+            vec![
+                center + vec2(-4.0, wing),
+                center + vec2(4.0, wing),
+                center + vec2(0.0, tip),
+            ],
+            number_color,
+            egui::Stroke::NONE,
+        ));
+    }
+    if number_response
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text(if sort.is_some() {
+            "Reset to original order"
+        } else {
+            "Sort by track number"
+        })
+        .clicked()
+    {
+        clicked = Some(SortColumn::Index);
+    }
     x += 44.0;
     if show_cover {
         x += 52.0;
     }
-    heading(ui, x, "TITLE", SortColumn::Title);
+    clicked = clicked.or_else(|| heading(ui, x, "TITLE", SortColumn::Title));
     let medium = width > 560.0;
     let wide = width > 760.0;
     let album_width = if show_album && medium {
@@ -929,27 +978,32 @@ pub fn table_header(
     let right_fixed = 36.0 + 56.0 + 36.0 + 8.0;
     let mut cx = rect.right() - right_fixed - added_width - added_by_width - album_width;
     if album_width > 0.0 {
-        heading(ui, cx, "ALBUM", SortColumn::Album);
+        clicked = clicked.or_else(|| heading(ui, cx, "ALBUM", SortColumn::Album));
         cx += album_width;
     }
     if added_by_width > 0.0 {
-        heading(ui, cx, "ADDED BY", SortColumn::AddedBy);
+        clicked = clicked.or_else(|| heading(ui, cx, "ADDED BY", SortColumn::AddedBy));
         cx += added_by_width;
     }
     if added_width > 0.0 {
-        heading(ui, cx, "DATE ADDED", SortColumn::Added);
+        clicked = clicked.or_else(|| heading(ui, cx, "DATE ADDED", SortColumn::Added));
     }
-    let clock = Rect::from_center_size(
-        pos2(rect.right() - 36.0 - 56.0 / 2.0 - 6.0, rect.center().y),
-        Vec2::splat(15.0),
-    );
-    let duration_active = sort.is_some_and(|sort| sort.column == SortColumn::Duration);
+    let duration_active = sort.filter(|sort| sort.column == SortColumn::Duration);
+    let clock_center = if duration_active.is_some() {
+        pos2(rect.right() - 36.0 - 56.0 / 2.0 - 12.0, rect.center().y)
+    } else {
+        pos2(rect.right() - 36.0 - 56.0 / 2.0 - 6.0, rect.center().y)
+    };
+    let clock = Rect::from_center_size(clock_center, Vec2::splat(15.0));
     let response = ui.interact(
-        clock.expand(8.0),
+        clock.expand2(vec2(
+            if duration_active.is_some() { 16.0 } else { 8.0 },
+            8.0,
+        )),
         ui.id().with("table-header-duration"),
         Sense::click(),
     );
-    let clock_color = if duration_active {
+    let clock_color = if duration_active.is_some() {
         palette.accent
     } else if response.hovered() {
         palette.text
@@ -957,6 +1011,23 @@ pub fn table_header(
         color
     };
     Icon::Clock.image(clock_color, 15.0).paint_at(ui, clock);
+    if let Some(sort) = duration_active {
+        let arrow_center = pos2(clock.right() + 8.0, rect.center().y);
+        let (wing, tip) = if sort.ascending {
+            (2.8, -3.2)
+        } else {
+            (-2.8, 3.2)
+        };
+        ui.painter().add(egui::Shape::convex_polygon(
+            vec![
+                arrow_center + vec2(-4.0, wing),
+                arrow_center + vec2(4.0, wing),
+                arrow_center + vec2(0.0, tip),
+            ],
+            clock_color,
+            egui::Stroke::NONE,
+        ));
+    }
     if response
         .on_hover_cursor(egui::CursorIcon::PointingHand)
         .on_hover_text("Sort by duration")
