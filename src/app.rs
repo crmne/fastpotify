@@ -2105,7 +2105,13 @@ impl App {
                             Some("track") => {
                                 if self.library.liked.loaded_once {
                                     if saved {
+                                        let total = self
+                                            .library
+                                            .liked
+                                            .total
+                                            .map(|total| total.saturating_add(1));
                                         self.library.liked.reset();
+                                        self.library.liked.total = total;
                                         if matches!(self.page(), Page::LikedSongs) {
                                             self.load_more(Page::LikedSongs);
                                         }
