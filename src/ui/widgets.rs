@@ -195,11 +195,14 @@ pub fn menu_item_enabled(
         }
         // A playlist can be named a paragraph; the label ends at the menu's
         // edge instead of running past it.
+        let display = crate::bidi::display_text(label);
+        let halign = crate::bidi::halign_for(label);
         let mut job = egui::text::LayoutJob::simple_singleline(
-            label.to_string(),
+            display.into_owned(),
             theme::regular(13.5),
             color,
         );
+        job.halign = halign;
         job.wrap = egui::text::TextWrapping {
             max_width: (rect.right() - 10.0 - x).max(0.0),
             max_rows: 1,
@@ -207,11 +210,14 @@ pub fn menu_item_enabled(
             overflow_character: Some('\u{2026}'),
         };
         let galley = ui.painter().layout_job(job);
-        ui.painter().galley(
-            pos2(x, rect.center().y - galley.size().y / 2.0),
-            galley,
-            color,
-        );
+        let pos = match halign {
+            Align::RIGHT => pos2(
+                rect.right() - 10.0,
+                rect.center().y - galley.size().y / 2.0,
+            ),
+            _ => pos2(x, rect.center().y - galley.size().y / 2.0),
+        };
+        ui.painter().galley(pos, galley, color);
     }
     let clicked = enabled && response.clicked();
     if clicked {
@@ -982,7 +988,10 @@ pub fn ellipsized(
     width: f32,
     max_rows: usize,
 ) -> std::sync::Arc<egui::Galley> {
-    let mut job = egui::text::LayoutJob::simple(text.to_string(), font, color, width);
+    let display = crate::bidi::display_text(text);
+    let halign = crate::bidi::halign_for(text);
+    let mut job = egui::text::LayoutJob::simple(display.into_owned(), font, color, width);
+    job.halign = halign;
     job.wrap.max_rows = max_rows;
     job.wrap.break_anywhere = false;
     job.wrap.overflow_character = Some('…');
@@ -1045,8 +1054,13 @@ pub fn card(
             pos2(text_left, image_rect.bottom() + 10.0),
             vec2(text_width, 20.0),
         );
+        let title_pos = match title_galley.job.halign {
+            Align::RIGHT => pos2(title_rect.right(), title_rect.top()),
+            Align::Center => pos2(title_rect.center().x, title_rect.top()),
+            _ => title_rect.min,
+        };
         ui.painter()
-            .galley(title_rect.min, title_galley, palette.text);
+            .galley(title_pos, title_galley, palette.text);
         let subtitle_galley = ellipsized(
             ui,
             subtitle,
@@ -1059,8 +1073,13 @@ pub fn card(
             pos2(text_left, title_rect.bottom() + 2.0),
             vec2(text_width, 34.0),
         );
+        let subtitle_pos = match subtitle_galley.job.halign {
+            Align::RIGHT => pos2(subtitle_rect.right(), subtitle_rect.top()),
+            Align::Center => pos2(subtitle_rect.center().x, subtitle_rect.top()),
+            _ => subtitle_rect.min,
+        };
         ui.painter()
-            .galley(subtitle_rect.min, subtitle_galley, palette.secondary);
+            .galley(subtitle_pos, subtitle_galley, palette.secondary);
 
         if playable && hovered {
             let button_rect = Rect::from_center_size(

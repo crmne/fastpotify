@@ -30,6 +30,7 @@ pub mod tray;
 #[cfg(not(target_os = "linux"))]
 #[path = "tray_native.rs"]
 pub mod tray;
+pub mod bidi;
 pub mod ui;
 pub mod updates;
 pub mod util;

@@ -102,10 +102,23 @@ fn quick_access(app: &mut App, ui: &mut egui::Ui) {
                         pos2(cover.right() + 12.0, rect.top()),
                         pos2(rect.right() - play_room, rect.bottom()),
                     );
+                    let display = crate::bidi::display_text(name);
+                    let is_rtl = crate::bidi::is_rtl(name);
+                    let (pos, anchor) = if is_rtl {
+                        (
+                            pos2(text_rect.right(), rect.center().y),
+                            egui::Align2::RIGHT_CENTER,
+                        )
+                    } else {
+                        (
+                            pos2(text_rect.left(), rect.center().y),
+                            egui::Align2::LEFT_CENTER,
+                        )
+                    };
                     ui.painter().with_clip_rect(text_rect).text(
-                        pos2(text_rect.left(), rect.center().y),
-                        egui::Align2::LEFT_CENTER,
-                        name,
+                        pos,
+                        anchor,
+                        display.into_owned(),
                         theme::bold(14.5),
                         palette.text,
                     );

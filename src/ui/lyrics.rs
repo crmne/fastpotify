@@ -155,9 +155,14 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
                 } else {
                     Sense::hover()
                 };
+                let display = crate::bidi::display_text(text);
+                let halign = crate::bidi::halign_for(text);
                 let response = ui.add(
-                    egui::Label::new(egui::RichText::new(text).font(font).color(color))
-                        .sense(sense),
+                    egui::Label::new(
+                        egui::RichText::new(display.into_owned()).font(font).color(color),
+                    )
+                    .halign(halign)
+                    .sense(sense),
                 );
                 let rect = response.rect;
                 if lyrics.synced {

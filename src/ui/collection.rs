@@ -52,9 +52,11 @@ pub fn hero(app: &mut App, ui: &mut egui::Ui, hero: Hero<'_>) {
             ui.add_space(cover_size * 0.08);
             theme::text(ui, hero.kind, theme::medium(12.5), palette.text);
             let mut size = if cover_size > 200.0 { 56.0 } else { 40.0 };
+            // RTL-aware measuring: use display text and halign
+            let display_title = crate::bidi::display_text(hero.title);
             loop {
                 let galley = ui.painter().layout_no_wrap(
-                    hero.title.to_string(),
+                    display_title.to_string(),
                     theme::bold(size),
                     palette.text,
                 );
@@ -63,24 +65,31 @@ pub fn hero(app: &mut App, ui: &mut egui::Ui, hero: Hero<'_>) {
                 }
                 size -= 6.0;
             }
-            ui.add(
-                egui::Label::new(
-                    egui::RichText::new(hero.title)
-                        .font(theme::bold(size))
-                        .color(palette.text),
-                )
-                .truncate()
-                .selectable(false),
-            );
+            {
+                let halign = crate::bidi::halign_for(hero.title);
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(display_title.into_owned())
+                            .font(theme::bold(size))
+                            .color(palette.text),
+                    )
+                    .halign(halign)
+                    .truncate()
+                    .selectable(false),
+                );
+            }
             if let Some(description) = &hero.description
                 && !description.is_empty()
             {
+                let halign = crate::bidi::halign_for(description);
+                let display = crate::bidi::display_text(description);
                 ui.add(
                     egui::Label::new(
-                        egui::RichText::new(description)
+                        egui::RichText::new(display.into_owned())
                             .font(theme::regular(13.5))
                             .color(palette.secondary),
                     )
+                    .halign(halign)
                     .truncate()
                     .selectable(false),
                 );

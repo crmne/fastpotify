@@ -711,8 +711,12 @@ pub fn text(
     font: egui::FontId,
     color: Color32,
 ) -> Response {
+    let text = text.into();
+    let halign = crate::bidi::halign_for(&text);
+    let display = crate::bidi::display_text(&text);
     ui.add(
-        egui::Label::new(egui::RichText::new(text).font(font).color(color))
+        egui::Label::new(egui::RichText::new(display.into_owned()).font(font).color(color))
+            .halign(halign)
             .truncate()
             .selectable(false),
     )
@@ -725,8 +729,12 @@ pub fn link(
     font: egui::FontId,
     color: Color32,
 ) -> Response {
+    let text = text.into();
+    let halign = crate::bidi::halign_for(&text);
+    let display = crate::bidi::display_text(&text);
     let response = ui.add(
-        egui::Label::new(egui::RichText::new(text).font(font).color(color))
+        egui::Label::new(egui::RichText::new(display.into_owned()).font(font).color(color))
+            .halign(halign)
             .truncate()
             .selectable(false)
             .sense(Sense::click()),
