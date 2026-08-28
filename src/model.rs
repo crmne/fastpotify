@@ -528,6 +528,7 @@ pub enum Action {
     SignOut,
     /// Sign in again with the Web API application named in Settings.
     SwitchWebApp,
+    ToggleSidebar,
     ToggleQueuePanel,
     ToggleLyricsPanel,
     ToggleDevicesPopup,

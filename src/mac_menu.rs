@@ -15,6 +15,7 @@ pub enum MenuCommand {
     Home,
     Search,
     LikedSongs,
+    Sidebar,
     Queue,
     Settings,
     Shortcuts,
@@ -155,6 +156,11 @@ mod mac_impl {
             #[unsafe(method(openLikedSongs:))]
             fn open_liked_songs(&self, _sender: &NSObject) {
                 push_command(MenuCommand::LikedSongs);
+            }
+
+            #[unsafe(method(toggleSidebar:))]
+            fn toggle_sidebar(&self, _sender: &NSObject) {
+                push_command(MenuCommand::Sidebar);
             }
 
             #[unsafe(method(toggleQueue:))]
@@ -459,6 +465,14 @@ mod mac_impl {
             ns_string!("Liked Songs"),
             Some(sel!(openLikedSongs:)),
             ns_string!("l"),
+            Some(NSEventModifierFlags::Command),
+            Some(target),
+        ));
+        view_menu.addItem(&create_item(
+            mtm,
+            ns_string!("Toggle Sidebar"),
+            Some(sel!(toggleSidebar:)),
+            ns_string!("b"),
             Some(NSEventModifierFlags::Command),
             Some(target),
         ));

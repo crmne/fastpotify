@@ -33,7 +33,7 @@ struct Cli {
     demo_page: Option<String>,
 
     /// Extra demo surfaces: a comma-separated list of `queue`, `devices`,
-    /// `shortcuts`, `create`, `light`.
+    /// `shortcuts`, `create`, `light`, `focus`.
     #[cfg(feature = "demo")]
     #[arg(long)]
     demo_show: Option<String>,
@@ -506,6 +506,7 @@ impl eframe::App for Shell {
                     MenuCommand::Home => Action::Open(Page::Home),
                     MenuCommand::Search => Action::FocusSearch,
                     MenuCommand::LikedSongs => Action::Open(Page::LikedSongs),
+                    MenuCommand::Sidebar => Action::ToggleSidebar,
                     MenuCommand::Queue => Action::ToggleQueuePanel,
                     MenuCommand::Settings => Action::Open(Page::Settings),
                     MenuCommand::Shortcuts => Action::ShowDialog(Dialog::Shortcuts),

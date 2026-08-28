@@ -145,6 +145,7 @@ Settings → Account.
 | `S` / `R` | Shuffle / cycle repeat |
 | `Q` | Queue panel |
 | `Ctrl+F` or `/` | Search |
+| `Ctrl+B` | Show or hide the sidebar |
 | `Alt+←` / `Alt+→` | Back or forward |
 | `Ctrl+H` / `Ctrl+L` | Home / Liked Songs |
 | `Ctrl+Shift+A` / `Ctrl+Shift+B` | Playing artist / album |
@@ -186,8 +187,8 @@ through its own script commands.
 Everything lives in one readable JSON file (`~/.config/fastpotify/settings.json`
 on Linux): the Connect device name, bitrate, normalisation, autoplay, gapless
 playback, the audio backend (PulseAudio/PipeWire or ALSA on Linux), audio
-cache size, theme, and whether pages take colour from artwork. Playback
-settings apply when you press **Apply and restart playback**.
+cache size, theme, sidebar state, and whether pages take colour from artwork.
+Playback settings apply when you press **Apply and restart playback**.
 
 Caches (audio, artwork) live under the cache directory and can be deleted at
 any time without signing you out.

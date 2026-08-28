@@ -3122,6 +3122,10 @@ impl App {
                 self.history = vec![Page::Home];
                 self.history_index = 0;
             }
+            Action::ToggleSidebar => {
+                self.settings.sidebar_visible = !self.settings.sidebar_visible;
+                self.settings_dirty = true;
+            }
             Action::ToggleQueuePanel => {
                 self.show_queue_panel = !self.show_queue_panel;
                 if self.show_queue_panel {

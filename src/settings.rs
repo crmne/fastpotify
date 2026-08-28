@@ -45,6 +45,8 @@ pub struct Settings {
     pub accent_from_art: bool,
     /// Last local volume, 0..=65535.
     pub volume: u16,
+    /// Whether the library sidebar is visible.
+    pub sidebar_visible: bool,
     pub sidebar_width: f32,
     pub search_history: Vec<String>,
     pub show_shortcut_hints: bool,
@@ -77,6 +79,7 @@ impl Default for Settings {
             theme: ThemeChoice::Dark,
             accent_from_art: true,
             volume: (u16::MAX as u32 * 70 / 100) as u16,
+            sidebar_visible: true,
             sidebar_width: 250.0,
             search_history: Vec::new(),
             show_shortcut_hints: true,
@@ -137,6 +140,28 @@ impl Settings {
         self.search_history.retain(|entry| entry != query);
         self.search_history.insert(0, query.to_string());
         self.search_history.truncate(12);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Settings;
+
+    #[test]
+    fn older_settings_keep_the_sidebar_visible() {
+        let settings: Settings = serde_json::from_str("{}").unwrap();
+        assert!(settings.sidebar_visible);
+    }
+
+    #[test]
+    fn hidden_sidebar_round_trips() {
+        let settings = Settings {
+            sidebar_visible: false,
+            ..Settings::default()
+        };
+        let json = serde_json::to_string(&settings).unwrap();
+        let restored: Settings = serde_json::from_str(&json).unwrap();
+        assert!(!restored.sidebar_visible);
     }
 }
 

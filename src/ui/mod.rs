@@ -39,7 +39,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         return;
     }
     player_bar::show(app, ui);
-    sidebar::show(app, ui);
+    if app.settings.sidebar_visible {
+        sidebar::show(app, ui);
+    }
     if app.show_queue_panel {
         queue::side_panel(app, ui);
     }

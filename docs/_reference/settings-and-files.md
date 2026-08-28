@@ -73,7 +73,7 @@ interface work. Demo mode never writes settings.
 
 `--demo-page` opens a page, such as `home`, `playlist:pl1`, or `artist:art0`,
 and `--demo-show` adds surfaces on top of it: a comma separated list of
-`queue`, `devices`, `shortcuts`, `create`, and `light`.
+`queue`, `devices`, `shortcuts`, `create`, `light`, and `focus`.
 
 `--demo-shot <PATH>` writes the window to a PNG and exits, which is how the
 screenshots in these pages are made:

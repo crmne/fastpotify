@@ -15,6 +15,7 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
             }
         };
         key(Modifiers::COMMAND, Key::F, Action::FocusSearch);
+        key(Modifiers::COMMAND, Key::B, Action::ToggleSidebar);
         key(Modifiers::COMMAND, Key::Comma, Action::Open(Page::Settings));
         key(Modifiers::COMMAND, Key::Q, Action::Quit);
         // winit installs its own macOS app menu, whose Hide item owns Cmd+H
@@ -115,6 +116,7 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("Q", "Show the queue"),
     ("L", "Show the lyrics"),
     ("Ctrl+F  or  /", "Search"),
+    ("Ctrl+B", "Show or hide the sidebar"),
     ("Alt+←  /  Alt+→", "Back or forward"),
     (
         if cfg!(target_os = "macos") {
