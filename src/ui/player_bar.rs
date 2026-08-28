@@ -118,9 +118,11 @@ fn now_playing_block(app: &mut App, ui: &mut egui::Ui, region: Rect, now: Option
         }
     }
 
-    let heart_width = if now.is_episode { 0.0 } else { 42.0 };
+    // The heart and the info button sit just past the text, so the text
+    // region reserves room for whatever buttons will follow it.
+    let buttons_width = if now.is_episode { 42.0 } else { 84.0 };
     let text_left = cover_rect.right() + 12.0;
-    let text_width = (region.right() - text_left - heart_width).max(40.0);
+    let text_width = (region.right() - text_left - buttons_width).max(40.0);
     let text_rect = Rect::from_min_size(pos2(text_left, cy - 18.0), vec2(text_width, 36.0));
     let mut text_ui = ui.new_child(
         UiBuilder::new()
@@ -129,34 +131,22 @@ fn now_playing_block(app: &mut App, ui: &mut egui::Ui, region: Rect, now: Option
     );
     text_ui.set_clip_rect(text_rect.intersect(ui.clip_rect()));
     text_ui.spacing_mut().item_spacing.y = 2.0;
-    text_ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 6.0;
-        ui.set_max_width(text_width);
-        if theme::link(&mut *ui, &now.title, theme::medium(14.0), palette.text).clicked() {
-            if let Some(id) = &now.album_id {
-                app.actions.push(Action::Open(Page::Album(id.clone())));
-            } else if let Some(id) = &now.show_id {
-                app.actions.push(Action::Open(Page::Show(id.clone())));
-            }
+
+    let title_response = theme::link(&mut text_ui, &now.title, theme::medium(14.0), palette.text);
+    if title_response.clicked() {
+        if let Some(id) = &now.album_id {
+            app.actions.push(Action::Open(Page::Album(id.clone())));
+        } else if let Some(id) = &now.show_id {
+            app.actions.push(Action::Open(Page::Show(id.clone())));
         }
-        if let Some(quality) = &now.quality {
-            theme::text(
-                ui,
-                quality,
-                theme::regular(10.0),
-                palette.accent,
-            );
-        }
-    });
+    }
+
     let subtitle_response = theme::link(
         &mut text_ui,
         &now.subtitle,
         theme::regular(12.0),
         palette.secondary,
     );
-    if let Some(quality) = &now.quality {
-        subtitle_response.clone().on_hover_text(format!("Streaming at {quality}"));
-    }
     if subtitle_response.clicked() {
         if let Some(id) = now.artists.first().and_then(|artist| artist.id.clone()) {
             app.actions.push(Action::Open(Page::Artist(id)));
@@ -165,6 +155,19 @@ fn now_playing_block(app: &mut App, ui: &mut egui::Ui, region: Rect, now: Option
         }
     }
 
+    let natural = {
+        let title =
+            ui.painter()
+                .layout_no_wrap(now.title.clone(), theme::medium(14.0), palette.text);
+        let subtitle = ui.painter().layout_no_wrap(
+            now.subtitle.clone(),
+            theme::regular(12.0),
+            palette.secondary,
+        );
+        title.size().x.max(subtitle.size().x).min(text_width)
+    };
+    let mut next_x = text_left + natural + 21.0;
+
     if !now.is_episode {
         let saved = app.is_saved(&now.uri).unwrap_or(false);
         let (icon, color, tooltip) = if saved {
@@ -172,20 +175,7 @@ fn now_playing_block(app: &mut App, ui: &mut egui::Ui, region: Rect, now: Option
         } else {
             (Icon::Heart, palette.secondary, "Save to Liked Songs")
         };
-        // Sit the heart just past the actual text, not at the region's far
-        // edge, so it stays visually attached to the title.
-        let natural = {
-            let title =
-                ui.painter()
-                    .layout_no_wrap(now.title.clone(), theme::medium(14.0), palette.text);
-            let subtitle = ui.painter().layout_no_wrap(
-                now.subtitle.clone(),
-                theme::regular(12.0),
-                palette.secondary,
-            );
-            title.size().x.max(subtitle.size().x).min(text_width)
-        };
-        let heart_x = (text_left + natural + 21.0).min(region.right() - 21.0);
+        let heart_x = next_x.min(region.right() - 63.0);
         let heart_rect = Rect::from_center_size(pos2(heart_x, cy), Vec2::splat(30.0));
         let mut heart_ui = ui.new_child(
             UiBuilder::new()
@@ -195,7 +185,124 @@ fn now_playing_block(app: &mut App, ui: &mut egui::Ui, region: Rect, now: Option
         if theme::icon_button(&mut heart_ui, icon, 17.0, color, palette.text, tooltip).clicked() {
             app.actions.push(Action::ToggleSaved(now.uri.clone()));
         }
+        next_x = heart_x + 36.0;
     }
+
+    let info_x = next_x.min(region.right() - 21.0);
+    let info_rect = Rect::from_center_size(pos2(info_x, cy), Vec2::splat(30.0));
+    let mut info_ui = ui.new_child(
+        UiBuilder::new()
+            .max_rect(info_rect)
+            .layout(Layout::centered_and_justified(egui::Direction::LeftToRight)),
+    );
+    info_button(app, &mut info_ui, now);
+}
+
+/// A quiet "i" that opens a popup with the technical readout: where the
+/// audio is playing, the real stream quality, loudness settings, and URI.
+/// The quality used to sit in the bar as a badge; it was louder than it
+/// deserved.
+fn info_button(app: &mut App, ui: &mut egui::Ui, now: &NowPlaying) {
+    let palette = app.palette;
+    let button = theme::icon_button(
+        ui,
+        Icon::Info,
+        16.0,
+        palette.secondary,
+        palette.text,
+        "Playback info",
+    );
+    egui::Popup::menu(&button)
+        .frame(super::widgets::menu_frame(&palette))
+        .show(|ui| {
+            // Fix both edges: popups auto-size to their content, and the
+            // truncating rows below want all the width they can get. Capping
+            // the max keeps the box from ballooning.
+            ui.set_min_width(220.0);
+            ui.set_max_width(220.0);
+            ui.spacing_mut().item_spacing.y = 2.0;
+            ui.add_space(2.0);
+            theme::text(ui, "Now playing", theme::semibold(13.0), palette.text);
+
+            let row = |ui: &mut egui::Ui, label: &str, value: String| {
+                // A fixed-size rect per row; labels and values are laid out
+                // manually so nothing can claim more than the box allows.
+                let (rect, _) =
+                    ui.allocate_exact_size(vec2(ui.available_width(), 18.0), Sense::hover());
+                let value_galley =
+                    ui.painter()
+                        .layout_no_wrap(value, theme::medium(12.0), palette.text);
+                let value_width = value_galley.size().x.min(rect.width() * 0.5);
+                let value_pos = pos2(
+                    rect.right() - value_width,
+                    rect.center().y - value_galley.size().y / 2.0,
+                );
+                ui.painter()
+                    .galley(value_pos, value_galley.clone(), palette.text);
+                let label_galley = ui.painter().layout_no_wrap(
+                    label.to_string(),
+                    theme::regular(12.0),
+                    palette.dim,
+                );
+                let label_clip = Rect::from_min_max(rect.min, pos2(value_pos.x - 6.0, rect.max.y));
+                ui.painter().with_clip_rect(label_clip).galley(
+                    pos2(rect.left(), rect.center().y - label_galley.size().y / 2.0),
+                    label_galley,
+                    palette.dim,
+                );
+            };
+
+            let source = if now.local {
+                "This computer".to_string()
+            } else {
+                now.device_name
+                    .clone()
+                    .unwrap_or_else(|| "Another device".to_string())
+            };
+            row(ui, "Playing on", source);
+            let quality = now.quality.clone().unwrap_or_else(|| {
+                if now.local {
+                    "Buffering…".to_string()
+                } else {
+                    "Up to the other device".to_string()
+                }
+            });
+            row(ui, "Stream quality", quality);
+            row(ui, "Duration", util::format_duration_ms(now.duration_ms));
+            row(ui, "Volume", format!("{}%", now.volume_percent));
+            if now.local {
+                let normalisation = if app.settings.normalisation {
+                    let pregain = app.settings.normalisation_pregain_db;
+                    if pregain.abs() < 0.05 {
+                        "On".to_string()
+                    } else {
+                        format!("On, {pregain:+.1} dB")
+                    }
+                } else {
+                    "Off".to_string()
+                };
+                row(ui, "Loudness normalisation", normalisation);
+                row(ui, "Max bitrate", format!("{} kbps", app.settings.bitrate));
+            }
+
+            super::widgets::menu_separator(ui, &palette);
+            let uri = ui.add(
+                egui::Label::new(
+                    egui::RichText::new(&now.uri)
+                        .monospace()
+                        .size(11.5)
+                        .color(palette.secondary),
+                )
+                .truncate()
+                .selectable(false)
+                .sense(Sense::click()),
+            );
+            uri.clone().on_hover_text("Click to copy the URI");
+            if uri.clicked() {
+                ui.ctx().copy_text(now.uri.clone());
+                app.toast("Track URI copied to clipboard.".to_string());
+            }
+        });
 }
 
 fn transport(app: &mut App, ui: &mut egui::Ui, now: Option<&NowPlaying>, region: Rect) {
