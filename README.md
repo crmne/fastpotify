@@ -96,6 +96,10 @@ and on Debian or Ubuntu:
 sudo apt install libasound2-dev libpulse-dev libxkbcommon-dev libwayland-dev
 ```
 
+With [Nix](https://nixos.org), `nix develop` provides all of it, along with
+the exact toolchain `rust-toolchain.toml` pins; with direnv, `direnv allow`
+enters the shell on `cd`.
+
 Titles in a script the interface font does not cover -- Chinese, Japanese,
 Korean, Arabic, Hebrew, Thai, the Indic scripts and a dozen more -- are drawn
 with a face borrowed from the system rather than bundled, which would cost
