@@ -20,45 +20,44 @@ fn blend(from: egui::Color32, to: egui::Color32, t: f32) -> egui::Color32 {
 
 pub fn side_panel(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
-    egui::Panel::right("lyrics-panel")
-        .exact_size(360.0)
-        .resizable(false)
+    let panel = egui::Panel::right("lyrics-panel")
+        .resizable(true)
+        .default_size(app.settings.lyrics_width)
+        .size_range(280.0..=640.0)
         .show_separator_line(false)
         .frame(
             Frame::new()
                 .fill(palette.panel)
                 .inner_margin(Margin::symmetric(12, 12)),
-        )
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.add_space(4.0);
-                theme::text(ui, "Lyrics", theme::bold(18.0), palette.text);
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if theme::icon_button(
-                        ui,
-                        Icon::X,
-                        18.0,
-                        palette.secondary,
-                        palette.text,
-                        "Close",
-                    )
+        );
+    let response = panel.show(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.add_space(4.0);
+            theme::text(ui, "Lyrics", theme::bold(18.0), palette.text);
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if theme::icon_button(ui, Icon::X, 18.0, palette.secondary, palette.text, "Close")
                     .clicked()
-                    {
-                        app.actions.push(Action::ToggleLyricsPanel);
-                    }
-                    let loaded = matches!(&app.lyrics, Loadable::Loaded(Some(_)));
-                    if loaded
-                        && !app.lyrics_following
-                        && theme::pill_button(ui, &palette, "Follow", false).clicked()
-                    {
-                        app.lyrics_following = true;
-                        app.lyrics_line_shown = None;
-                    }
-                });
+                {
+                    app.actions.push(Action::ToggleLyricsPanel);
+                }
+                let loaded = matches!(&app.lyrics, Loadable::Loaded(Some(_)));
+                if loaded
+                    && !app.lyrics_following
+                    && theme::pill_button(ui, &palette, "Follow", false).clicked()
+                {
+                    app.lyrics_following = true;
+                    app.lyrics_line_shown = None;
+                }
             });
-            ui.add_space(8.0);
-            contents(app, ui);
         });
+        ui.add_space(8.0);
+        contents(app, ui);
+    });
+    let current_width = response.response.rect.width();
+    if (app.settings.lyrics_width - current_width).abs() > 1.0 {
+        app.settings.lyrics_width = current_width;
+        app.actions.push(Action::SettingsChanged);
+    }
 }
 
 fn contents(app: &mut App, ui: &mut egui::Ui) {
