@@ -131,6 +131,13 @@ pub struct App {
     /// Where the now-playing snapshot goes for the control channel's
     /// `nowplaying` verb to answer from.
     control_now_playing: Option<std::sync::Arc<std::sync::Mutex<String>>>,
+    /// The same, for its `devices` verb.
+    control_devices: Option<std::sync::Arc<std::sync::Mutex<String>>>,
+    /// Whether that device slot still matches [`Self::devices`]. The
+    /// now-playing snapshot is rebuilt every frame because its position
+    /// moves every frame; a device list changes when Spotify answers, which
+    /// is seconds apart, so it is written when it changes instead.
+    control_devices_stale: bool,
     /// Sample data is loaded and nothing is asked of Spotify.
     pub offline: bool,
     pub palette: Palette,
@@ -318,6 +325,8 @@ impl App {
             wants_show: false,
             control_commands: None,
             control_now_playing: None,
+            control_devices: None,
+            control_devices_stale: true,
             offline: false,
             palette: Palette::dark(),
             applied_dark: None,
@@ -402,11 +411,12 @@ impl App {
         app
     }
 
-    /// Watches the queue control clients fill and keeps their now-playing
-    /// snapshot fresh.
+    /// Watches the queue control clients fill and keeps the snapshots they
+    /// read -- now playing, and the device list -- fresh.
     pub fn set_remote_control(&mut self, guard: &crate::single_instance::Guard) {
         self.control_commands = Some(guard.commands());
         self.control_now_playing = Some(guard.now_playing_slot());
+        self.control_devices = Some(guard.devices_slot());
     }
 
     /// Per-window setup: fonts, icons, loaders, theme. Called every time a
@@ -849,6 +859,7 @@ impl App {
         self.saved_pending.clear();
         self.queue = Loadable::NotLoaded;
         self.devices.clear();
+        self.control_devices_stale = true;
         self.devices_fetched_at = None;
         self.search.results = Loadable::NotLoaded;
         self.search.committed.clear();
@@ -1087,6 +1098,21 @@ impl App {
                 ControlCommand::ToggleMute => Some(Action::ToggleMute),
                 ControlCommand::ToggleShuffle => Some(Action::ToggleShuffle),
                 ControlCommand::CycleRepeat => Some(Action::CycleRepeat),
+                ControlCommand::SetShuffle(shuffle) => Some(Action::SetShuffle(shuffle)),
+                ControlCommand::SetRepeat(mode) => Some(Action::SetRepeat(mode)),
+                ControlCommand::SeekTo(position) => Some(Action::Seek(position)),
+                // Nothing playing is nothing to save, so the verb is a
+                // no-op rather than an error the client has to handle.
+                ControlCommand::ToggleSaved => {
+                    self.now_playing().map(|now| Action::ToggleSaved(now.uri))
+                }
+                ControlCommand::PlayUri(uri) => Some(Action::PlayContext {
+                    uri,
+                    offset_uri: None,
+                    offset_index: None,
+                }),
+                ControlCommand::Transfer(device_id) => Some(Action::Transfer(device_id)),
+                ControlCommand::RefreshDevices => Some(Action::RefreshDevices),
             };
             if let Some(action) = action {
                 self.actions.push(action);
@@ -1178,25 +1204,55 @@ impl App {
             let snapshot = self.control_snapshot();
             *slot.lock().unwrap_or_else(|p| p.into_inner()) = snapshot;
         }
+        if self.control_devices_stale
+            && let Some(slot) = self.control_devices.clone()
+        {
+            let snapshot = self.control_devices_snapshot();
+            *slot.lock().unwrap_or_else(|p| p.into_inner()) = snapshot;
+            self.control_devices_stale = false;
+        }
     }
 
     /// One line for the control channel's `nowplaying` verb: tab-separated
     /// `state, title, artists, album, position_ms, duration_ms, volume,
-    /// shuffle, repeat`, or [`crate::single_instance::NOTHING_PLAYING`].
+    /// shuffle, repeat, art_url, saved, device`, or
+    /// [`crate::single_instance::NOTHING_PLAYING`].
+    ///
+    /// The last three are what a Stream Deck key needs and a media key does
+    /// not: something to draw, whether the heart is filled, and where the
+    /// sound is coming out. They are appended rather than woven in, so a
+    /// script written against the older nine fields still reads correctly.
     fn control_snapshot(&self) -> String {
         let Some(now) = self.now_playing() else {
             return crate::single_instance::NOTHING_PLAYING.to_owned();
         };
         let state = if now.playing { "playing" } else { "paused" };
-        let repeat = match now.repeat {
-            RepeatMode::Off => "off",
-            RepeatMode::Context => "context",
-            RepeatMode::Track => "track",
+        // Not every track has been looked up yet; say so rather than
+        // claiming an unsaved track the client would draw as a hollow heart
+        // and then watch fill in a moment later.
+        let saved = match self.is_saved(&now.uri) {
+            Some(true) => "yes",
+            Some(false) => "no",
+            None => "unknown",
+        };
+        // Local playback is this computer, which Spotify has not named in
+        // the snapshot because it is not a remote device.
+        let device = match (&now.device_name, now.local) {
+            (Some(name), _) => name.as_str(),
+            (None, true) => self.settings.device_name.as_str(),
+            (None, false) => "",
         };
         // Tabs separate the fields, so a tab inside one would shift the rest.
-        let clean = |text: &str| text.replace('\t', " ");
+        // This runs every frame, and titles almost never contain one, so the
+        // usual answer borrows rather than allocating a copy per field.
+        fn clean(text: &str) -> std::borrow::Cow<'_, str> {
+            match text.contains('\t') {
+                true => std::borrow::Cow::Owned(text.replace('\t', " ")),
+                false => std::borrow::Cow::Borrowed(text),
+            }
+        }
         format!(
-            "{state}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{repeat}",
+            "{state}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{saved}\t{}",
             clean(&now.title),
             clean(&now.subtitle),
             clean(&now.album_name),
@@ -1204,7 +1260,34 @@ impl App {
             now.duration_ms,
             now.volume_percent,
             if now.shuffle { "on" } else { "off" },
+            now.repeat.api_name(),
+            clean(now.art_url.as_deref().unwrap_or_default()),
+            clean(device),
         )
+    }
+
+    /// One line for the control channel's `devices` verb: the Spotify
+    /// Connect devices the app last saw, as JSON.
+    ///
+    /// JSON rather than the tab-separated shape `nowplaying` uses because
+    /// there are several of them and a device carries a name its owner
+    /// chose, which is exactly the kind of free text a hand-rolled
+    /// separator gets wrong.
+    fn control_devices_snapshot(&self) -> String {
+        let devices: Vec<_> = self
+            .devices
+            .iter()
+            .filter_map(|device| {
+                Some(serde_json::json!({
+                    "id": device.id.as_deref()?,
+                    "name": device.name,
+                    "kind": device.kind,
+                    "active": device.is_active,
+                }))
+            })
+            .collect();
+        serde_json::to_string(&devices)
+            .unwrap_or_else(|_| crate::single_instance::NO_DEVICES.to_owned())
     }
 
     // ---- loading ---------------------------------------------------------------
@@ -1598,6 +1681,7 @@ impl App {
                 match result {
                     Ok(devices) => {
                         self.devices = devices;
+                        self.control_devices_stale = true;
                         if let Some((name, since)) = self.pending_transfer_to.clone() {
                             let matching = self
                                 .devices
@@ -3613,6 +3697,148 @@ mod tests {
             app.actions
         );
         assert!(queue.lock().expect("the queue").is_empty());
+    }
+
+    /// The verbs a Stream Deck key needs and a media key never asked for:
+    /// a state said outright rather than toggled, an absolute position, a
+    /// URI, and moving the sound to another device.
+    #[test]
+    fn a_key_can_ask_for_a_state_rather_than_a_toggle() {
+        // #given
+        let mut app = headless_app();
+        let queue: std::sync::Arc<std::sync::Mutex<Vec<ControlCommand>>> = Default::default();
+        app.control_commands = Some(std::sync::Arc::clone(&queue));
+
+        // #when
+        queue.lock().expect("the queue").extend([
+            ControlCommand::SetShuffle(true),
+            ControlCommand::SetRepeat(RepeatMode::Track),
+            ControlCommand::SeekTo(90_000),
+            ControlCommand::PlayUri("spotify:playlist:pl1".to_owned()),
+            ControlCommand::Transfer("abc123".to_owned()),
+            ControlCommand::RefreshDevices,
+            // Nothing is playing in a headless app, so there is no track to
+            // save and this one falls away rather than erroring.
+            ControlCommand::ToggleSaved,
+        ]);
+        app.handle_control_commands();
+
+        // #then
+        assert!(
+            matches!(
+                app.actions.as_slice(),
+                [
+                    Action::SetShuffle(true),
+                    Action::SetRepeat(RepeatMode::Track),
+                    Action::Seek(90_000),
+                    Action::PlayContext {
+                        offset_uri: None,
+                        offset_index: None,
+                        ..
+                    },
+                    Action::Transfer(_),
+                    Action::RefreshDevices,
+                ]
+            ),
+            "{:?}",
+            app.actions
+        );
+        assert!(queue.lock().expect("the queue").is_empty());
+    }
+
+    /// The snapshot a client polls keeps its first nine fields where they
+    /// were, so a script written against the older shape still reads them,
+    /// and says "unknown" rather than guessing at a saved flag nobody has
+    /// told it yet.
+    #[test]
+    fn the_snapshot_appends_what_a_key_needs_without_moving_what_was_there() {
+        // #given
+        let mut app = headless_app();
+        app.handle_local(LocalState {
+            playback: Playback::Playing,
+            track: Some(crate::player::LocalTrack {
+                uri: "spotify:track:t1".to_owned(),
+                title: "Go".to_owned(),
+                artists: vec!["The Band".to_owned()],
+                album: "First".to_owned(),
+                art_url: Some("https://i.scdn.co/image/abc".to_owned()),
+                duration_ms: 200_000,
+                ..Default::default()
+            }),
+            position_ms: 20_000,
+            volume: percent_to_volume(35),
+            shuffle: true,
+            repeat: RepeatMode::Track,
+            ..LocalState::default()
+        });
+
+        // #when
+        let snapshot = app.control_snapshot();
+        let fields: Vec<&str> = snapshot.split('\t').collect();
+
+        // #then
+        assert_eq!(
+            fields,
+            [
+                // The nine a media key or a Raycast script already read.
+                "playing",
+                "Go",
+                "The Band",
+                "First",
+                "20000",
+                "200000",
+                "35",
+                "on",
+                "track",
+                // The three a Stream Deck key needs, appended.
+                "https://i.scdn.co/image/abc",
+                // Not signed in, so nobody has said whether this is saved.
+                "unknown",
+                // Local playback is this computer, which Spotify has not
+                // named because it is not a remote device.
+                "Fastpotify",
+            ]
+        );
+        // No devices seen yet is an empty array, not an empty string, so a
+        // client never special-cases the answer.
+        assert_eq!(
+            app.control_devices_snapshot(),
+            crate::single_instance::NO_DEVICES
+        );
+    }
+
+    /// The device slot is written when Spotify answers rather than every
+    /// frame, so the thing to check is that an answer still reaches it.
+    #[test]
+    fn a_device_list_reaches_the_slot_when_spotify_answers() {
+        // #given
+        let mut app = headless_app();
+        let slot = std::sync::Arc::new(std::sync::Mutex::new(
+            crate::single_instance::NO_DEVICES.to_owned(),
+        ));
+        app.control_devices = Some(std::sync::Arc::clone(&slot));
+        app.control_devices_stale = false;
+
+        // #when
+        app.handle_api(ApiResponse::Devices(Ok(vec![Device {
+            id: Some("abc123".to_owned()),
+            name: "Kitchen\tspeaker".to_owned(),
+            kind: "Speaker".to_owned(),
+            is_active: true,
+            ..Device::default()
+        }])));
+        app.sync_media_controls();
+
+        // #then
+        let written = slot.lock().expect("the slot").clone();
+        assert_eq!(
+            written,
+            r#"[{"active":true,"id":"abc123","kind":"Speaker","name":"Kitchen\tspeaker"}]"#,
+            "a name is carried whole, tab and all, because JSON escapes it \
+             where the tab-separated snapshot could not"
+        );
+        // Written once and not again until the next answer.
+        assert!(!app.control_devices_stale);
     }
 
     /// `play` and `pause` say what state to end in, so the one that would

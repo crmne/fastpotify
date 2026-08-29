@@ -167,19 +167,40 @@ fastpotify play-pause          fastpotify volume 40
 fastpotify play                fastpotify volume-up [percent]
 fastpotify pause               fastpotify volume-down [percent]
 fastpotify next                fastpotify mute
-fastpotify previous            fastpotify shuffle
-fastpotify seek 15             fastpotify repeat
-fastpotify seek -- -15         fastpotify show
-fastpotify now-playing [--raw]
+fastpotify previous            fastpotify shuffle [on|off]
+fastpotify seek 15             fastpotify repeat [off|context|track]
+fastpotify seek -- -15         fastpotify like
+fastpotify seek-to 90          fastpotify play-uri spotify:playlist:37i9…
+fastpotify show                fastpotify transfer <device-id>
+fastpotify now-playing [--raw] fastpotify devices [--raw]
 ```
+
+`shuffle` and `repeat` toggle when asked for nothing in particular and set
+the state outright when given one, which is what a button that draws the
+current state wants: a missed update otherwise leaves the two disagreeing
+until the next press. `like` saves the playing track to your library, or
+takes it back out.
 
 `now-playing` prints one readable line; `--raw` prints the fields
 tab-separated — state, title, artists, album, position_ms, duration_ms,
-volume, shuffle, repeat — for a script that wants one of them. A verb exits
-non-zero when Fastpotify is not running.
+volume, shuffle, repeat, art_url, saved, device — for a script that wants
+one of them. `saved` is `yes`, `no`, or `unknown` while the answer is still
+on its way. The last three fields were added after the first nine, and
+appended rather than woven in, so a script written against the older shape
+still reads correctly.
+
+`devices` lists the Spotify Connect devices, id first, the active one
+marked with `*`; `--raw` prints them as JSON. The app only refreshes that
+list while its own picker is open, so asking for it also asks it to look
+again: on a cold list the first call can come back empty and the next one
+has it.
+
+A verb exits non-zero when Fastpotify is not running.
 
 That is enough for a launcher such as Raycast or Alfred to drive playback
-through its own script commands.
+through its own script commands — and it is the same channel the Stream
+Deck plugin speaks, which is why the verbs cover more than a media key can
+ask for.
 
 ## Settings
 
