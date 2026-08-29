@@ -203,7 +203,7 @@ fn same_language(source: &str, target: &str) -> bool {
 async fn romanize(http: &reqwest::Client, lines: &[&str], target: &str) -> Vec<Option<String>> {
     let mut distinct: Vec<&str> = Vec::new();
     for line in lines {
-        if line.chars().all(|c| c.is_ascii()) || distinct.contains(line) {
+        if line.is_ascii() || distinct.contains(line) {
             continue;
         }
         distinct.push(line);
