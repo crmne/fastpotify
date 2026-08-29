@@ -9,6 +9,66 @@
 use egui::{Color32, CornerRadius, Response, Sense, Stroke, Vec2};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PaletteColors {
+    pub window: Color32,
+    pub panel: Color32,
+    pub surface: Color32,
+    pub surface_hover: Color32,
+    pub surface_active: Color32,
+    pub outline: Color32,
+    pub text: Color32,
+    pub secondary: Color32,
+    pub dim: Color32,
+    pub accent: Color32,
+    pub accent_hover: Color32,
+    pub on_accent: Color32,
+    pub danger: Color32,
+    pub warning: Color32,
+    pub overlay: Color32,
+    pub shadow: Color32,
+}
+
+impl PaletteColors {
+    pub const DARK: Self = Self {
+        window: Color32::from_rgb(0x0f, 0x11, 0x14),
+        panel: Color32::from_rgb(0x15, 0x18, 0x1c),
+        surface: Color32::from_rgb(0x1d, 0x21, 0x27),
+        surface_hover: Color32::from_rgb(0x26, 0x2b, 0x33),
+        surface_active: Color32::from_rgb(0x2f, 0x35, 0x3f),
+        outline: Color32::from_rgb(0x2a, 0x30, 0x38),
+        text: Color32::from_rgb(0xf2, 0xf4, 0xf6),
+        secondary: Color32::from_rgb(0xa9, 0xb1, 0xbc),
+        dim: Color32::from_rgb(0x6e, 0x77, 0x84),
+        accent: Color32::from_rgb(0x1e, 0xd7, 0x60),
+        accent_hover: Color32::from_rgb(0x3c, 0xe8, 0x7a),
+        on_accent: Color32::from_rgb(0x0a, 0x14, 0x0e),
+        danger: Color32::from_rgb(0xf5, 0x71, 0x7f),
+        warning: Color32::from_rgb(0xf2, 0xb8, 0x5c),
+        overlay: Color32::from_rgb(0x22, 0x27, 0x2e),
+        shadow: Color32::from_black_alpha(140),
+    };
+
+    pub const LIGHT: Self = Self {
+        window: Color32::from_rgb(0xf8, 0xf9, 0xfb),
+        panel: Color32::from_rgb(0xff, 0xff, 0xff),
+        surface: Color32::from_rgb(0xee, 0xf0, 0xf3),
+        surface_hover: Color32::from_rgb(0xe3, 0xe6, 0xeb),
+        surface_active: Color32::from_rgb(0xd7, 0xdb, 0xe1),
+        outline: Color32::from_rgb(0xdd, 0xe1, 0xe6),
+        text: Color32::from_rgb(0x14, 0x17, 0x1a),
+        secondary: Color32::from_rgb(0x53, 0x5b, 0x66),
+        dim: Color32::from_rgb(0x8b, 0x93, 0x9e),
+        accent: Color32::from_rgb(0x15, 0xa6, 0x4a),
+        accent_hover: Color32::from_rgb(0x12, 0x8f, 0x40),
+        on_accent: Color32::WHITE,
+        danger: Color32::from_rgb(0xd6, 0x3b, 0x4c),
+        warning: Color32::from_rgb(0xb8, 0x7a, 0x14),
+        overlay: Color32::from_rgb(0xff, 0xff, 0xff),
+        shadow: Color32::from_black_alpha(50),
+    };
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Palette {
     pub dark: bool,
     pub window: Color32,
@@ -30,47 +90,54 @@ pub struct Palette {
 }
 
 impl Palette {
-    pub fn dark() -> Self {
+    pub const fn from_colors(dark: bool, colors: PaletteColors) -> Self {
         Self {
-            dark: true,
-            window: Color32::from_rgb(0x0f, 0x11, 0x14),
-            panel: Color32::from_rgb(0x15, 0x18, 0x1c),
-            surface: Color32::from_rgb(0x1d, 0x21, 0x27),
-            surface_hover: Color32::from_rgb(0x26, 0x2b, 0x33),
-            surface_active: Color32::from_rgb(0x2f, 0x35, 0x3f),
-            outline: Color32::from_rgb(0x2a, 0x30, 0x38),
-            text: Color32::from_rgb(0xf2, 0xf4, 0xf6),
-            secondary: Color32::from_rgb(0xa9, 0xb1, 0xbc),
-            dim: Color32::from_rgb(0x6e, 0x77, 0x84),
-            accent: Color32::from_rgb(0x1e, 0xd7, 0x60),
-            accent_hover: Color32::from_rgb(0x3c, 0xe8, 0x7a),
-            on_accent: Color32::from_rgb(0x0a, 0x14, 0x0e),
-            danger: Color32::from_rgb(0xf5, 0x71, 0x7f),
-            warning: Color32::from_rgb(0xf2, 0xb8, 0x5c),
-            overlay: Color32::from_rgb(0x22, 0x27, 0x2e),
-            shadow: Color32::from_black_alpha(140),
+            dark,
+            window: colors.window,
+            panel: colors.panel,
+            surface: colors.surface,
+            surface_hover: colors.surface_hover,
+            surface_active: colors.surface_active,
+            outline: colors.outline,
+            text: colors.text,
+            secondary: colors.secondary,
+            dim: colors.dim,
+            accent: colors.accent,
+            accent_hover: colors.accent_hover,
+            on_accent: colors.on_accent,
+            danger: colors.danger,
+            warning: colors.warning,
+            overlay: colors.overlay,
+            shadow: colors.shadow,
         }
     }
 
+    pub fn dark() -> Self {
+        Self::from_colors(true, PaletteColors::DARK)
+    }
+
     pub fn light() -> Self {
-        Self {
-            dark: false,
-            window: Color32::from_rgb(0xf8, 0xf9, 0xfb),
-            panel: Color32::from_rgb(0xff, 0xff, 0xff),
-            surface: Color32::from_rgb(0xee, 0xf0, 0xf3),
-            surface_hover: Color32::from_rgb(0xe3, 0xe6, 0xeb),
-            surface_active: Color32::from_rgb(0xd7, 0xdb, 0xe1),
-            outline: Color32::from_rgb(0xdd, 0xe1, 0xe6),
-            text: Color32::from_rgb(0x14, 0x17, 0x1a),
-            secondary: Color32::from_rgb(0x53, 0x5b, 0x66),
-            dim: Color32::from_rgb(0x8b, 0x93, 0x9e),
-            accent: Color32::from_rgb(0x15, 0xa6, 0x4a),
-            accent_hover: Color32::from_rgb(0x12, 0x8f, 0x40),
-            on_accent: Color32::WHITE,
-            danger: Color32::from_rgb(0xd6, 0x3b, 0x4c),
-            warning: Color32::from_rgb(0xb8, 0x7a, 0x14),
-            overlay: Color32::from_rgb(0xff, 0xff, 0xff),
-            shadow: Color32::from_black_alpha(50),
+        Self::from_colors(false, PaletteColors::LIGHT)
+    }
+
+    pub fn colors(&self) -> PaletteColors {
+        PaletteColors {
+            window: self.window,
+            panel: self.panel,
+            surface: self.surface,
+            surface_hover: self.surface_hover,
+            surface_active: self.surface_active,
+            outline: self.outline,
+            text: self.text,
+            secondary: self.secondary,
+            dim: self.dim,
+            accent: self.accent,
+            accent_hover: self.accent_hover,
+            on_accent: self.on_accent,
+            danger: self.danger,
+            warning: self.warning,
+            overlay: self.overlay,
+            shadow: self.shadow,
         }
     }
 
@@ -810,4 +877,34 @@ pub fn section_title(ui: &mut egui::Ui, palette: &Palette, label: &str) -> Respo
 
 pub fn subtle(ui: &mut egui::Ui, palette: &Palette, label: &str) -> Response {
     text(ui, label, regular(13.0), palette.secondary)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_palette_colors_round_trip() {
+        let dark = Palette::dark();
+        assert!(dark.dark);
+        assert_eq!(dark.colors(), PaletteColors::DARK);
+        assert_eq!(Palette::from_colors(true, PaletteColors::DARK), dark);
+
+        let light = Palette::light();
+        assert!(!light.dark);
+        assert_eq!(light.colors(), PaletteColors::LIGHT);
+        assert_eq!(Palette::from_colors(false, PaletteColors::LIGHT), light);
+    }
+
+    #[test]
+    fn test_palette_from_custom_colors() {
+        let custom_colors = PaletteColors {
+            accent: Color32::from_rgb(0xff, 0x00, 0xff),
+            ..PaletteColors::DARK
+        };
+        let custom_palette = Palette::from_colors(true, custom_colors);
+        assert_eq!(custom_palette.accent, Color32::from_rgb(0xff, 0x00, 0xff));
+        assert_eq!(custom_palette.window, PaletteColors::DARK.window);
+        assert!(custom_palette.dark);
+    }
 }
