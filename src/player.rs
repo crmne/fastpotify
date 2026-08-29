@@ -242,7 +242,6 @@ impl Engine {
         let device_id = config.device_id();
         let session_config = SessionConfig {
             device_id: device_id.clone(),
-            ap_port: Some(443),
             autoplay: Some(config.autoplay),
             ..SessionConfig::default()
         };

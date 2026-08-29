@@ -76,3 +76,8 @@ Playback runs on a dedicated runtime: librespot maintains the Spotify
 Connect session, exposes this computer as a device, receives transfers, and
 reports its playback position. If the session drops, the engine reconnects
 with the stored credential. This work does not block the interface.
+
+The engine discovers access points through `apresolve.spotify.com` and
+connects over TCP in the resolver's preference order: port 4070 first,
+falling back to 443 and 80. Only outbound connections are needed; no
+inbound ports have to be open.
