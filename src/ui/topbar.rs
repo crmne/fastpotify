@@ -50,8 +50,16 @@ fn nav_button(
 pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     let width = ui.available_width();
+    // Where the titlebar used to be: the bar grows upwards into that space and
+    // its empty parts drag the window.
+    let inset = theme::titlebar_inset(ui.ctx());
+    let height = theme::TOP_BAR_HEIGHT + inset;
+    super::titlebar_drag(
+        ui,
+        egui::Rect::from_min_size(ui.cursor().min, vec2(width, height)),
+    );
     ui.allocate_ui_with_layout(
-        vec2(width, theme::TOP_BAR_HEIGHT),
+        vec2(width, height),
         Layout::left_to_right(Align::Center),
         |ui| {
             ui.add_space(super::widgets::PAGE_PADDING);

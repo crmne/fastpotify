@@ -33,6 +33,9 @@ struct Entry {
 
 pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
+    // The traffic lights float over the top-left of the sidebar now, so the
+    // first nav row has to start below them.
+    let top = 12 + theme::titlebar_inset(ui.ctx()) as i8;
     let panel = egui::Panel::left("sidebar")
         .resizable(true)
         .default_size(app.settings.sidebar_width)
@@ -41,7 +44,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         .frame(Frame::new().fill(palette.panel).inner_margin(Margin {
             left: 12,
             right: 8,
-            top: 12,
+            top,
             bottom: 8,
         }));
     let response = panel.show(ui, |ui| {

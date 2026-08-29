@@ -546,6 +546,13 @@ fn native_options(fullscreen: bool, mini: Option<MiniWindow>) -> eframe::NativeO
             }
         }
         None => viewport
+            // macOS: no title bar strip above the app. The content runs to
+            // the top edge and the traffic lights float over it, the way
+            // every other music player on the platform looks; the interface
+            // leaves room for them with `theme::titlebar_inset`.
+            .with_fullsize_content_view(true)
+            .with_titlebar_shown(false)
+            .with_title_shown(false)
             .with_inner_size([1240.0, 800.0])
             .with_min_inner_size([760.0, 520.0])
             .with_fullscreen(fullscreen),

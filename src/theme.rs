@@ -102,6 +102,19 @@ pub const COMPACT_ROW_HEIGHT: f32 = 48.0;
 pub const PLAYER_BAR_HEIGHT: f32 = 88.0;
 pub const TOP_BAR_HEIGHT: f32 = 56.0;
 
+/// macOS hides the titlebar and draws the window content all the way to the
+/// top edge, so whatever sits at the top of the window has to leave room for
+/// the traffic lights. Zero everywhere else, and in fullscreen, where the
+/// buttons are gone.
+pub fn titlebar_inset(ctx: &egui::Context) -> f32 {
+    if cfg!(target_os = "macos") && !ctx.input(|input| input.viewport().fullscreen.unwrap_or(false))
+    {
+        28.0
+    } else {
+        0.0
+    }
+}
+
 const INTER_MEDIUM: &str = "inter-medium";
 const INTER_SEMIBOLD: &str = "inter-semibold";
 const INTER_BOLD: &str = "inter-bold";

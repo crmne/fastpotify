@@ -154,6 +154,29 @@ fn central(app: &mut App, ui: &mut egui::Ui) {
         });
 }
 
+/// Makes `rect` behave like the titlebar that is no longer there: dragging it
+/// moves the window. Register it before the widgets that sit on top of it, so
+/// they keep the clicks that are theirs.
+pub fn titlebar_drag(ui: &mut egui::Ui, rect: egui::Rect) {
+    if theme::titlebar_inset(ui.ctx()) == 0.0 {
+        return;
+    }
+    let response = ui.interact(
+        rect,
+        ui.id().with("titlebar-drag"),
+        egui::Sense::click_and_drag(),
+    );
+    // AppKit begins the move from the mouse-down event that is still live, so
+    // the command has to go out on the press itself. Waiting for egui's drag
+    // threshold leaves the event stale by the time it arrives, and the window
+    // stays put ("Window move completed without beginning"). There is no
+    // double-click-to-zoom to go with it: the press hands the rest of the
+    // gesture to the native drag loop, so a second click never comes back.
+    if response.is_pointer_button_down_on() && ui.input(|input| input.pointer.primary_pressed()) {
+        ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+    }
+}
+
 pub fn blend(base: Color32, tint: Color32, amount: f32) -> Color32 {
     let a = egui::Rgba::from(base);
     let b = egui::Rgba::from(tint);
