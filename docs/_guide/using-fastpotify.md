@@ -87,6 +87,17 @@ tracks Spotify has no words for, they come from
 they work for whatever is playing, on this computer or another device;
 podcasts and tracks nobody has transcribed say so.
 
+Two toggles in the panel's header go further than following along.
+**Translate** echoes every line in your language, small and quiet under
+the original, so a song in words you do not speak still makes sense; the
+language it echoes into is picked in Settings. **Romanize** rewrites the
+lines in Latin letters, for singing along to a song written in a script
+you cannot read: Japanese becomes romaji, Korean becomes romanized
+hangul. Both are off by default, and turning either on sends the song's
+words to Google Translate, which answers for free and without an
+account; the answers are kept in the cache, so a song asked once costs
+nothing to ask again.
+
 ![The lyrics panel beside a playlist, following the song](/assets/images/lyrics.png)
 
 ## The tray

@@ -43,7 +43,10 @@ how, in five minutes.
   Spotify itself has no words for the track, sending the track's artist,
   title, album, and length, and to
   api.github.com once a day to learn whether a newer release exists, which
-  Settings can turn off.
+  Settings can turn off. Turning on the lyrics panel's **Translate** or
+  **Romanize** also sends the song's words to Google Translate, which
+  returns them echoed in your language or spelled in Latin letters; this
+  is off by default, and the answers join the lyrics in the cache.
 
 ## When Spotify pushes back
 

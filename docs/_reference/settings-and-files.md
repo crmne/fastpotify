@@ -17,6 +17,7 @@ Fastpotify follows each platform's conventions. On Linux:
 | Audio cache | `~/.cache/fastpotify/audio/` | Always |
 | Artwork cache | `~/.cache/fastpotify/art/` | Always |
 | Lyrics cache | `~/.cache/fastpotify/lyrics/` | Always |
+| Translation cache | `~/.cache/fastpotify/translations/` | Always |
 | Last run's log | `~/.local/state/fastpotify/fastpotify.log` | Always |
 | Crash log | `~/.local/state/fastpotify/panic.log` | Always |
 
@@ -50,6 +51,9 @@ One readable JSON file, written atomically. The interesting fields:
 | `keep_playing_in_background` | `true` | Close to tray |
 | `check_for_updates` | `true` | Ask GitHub once a day for a newer release |
 | `web_client_id` | none | Your own Spotify app id, if you set one |
+| `lyrics_language` | `en` | Language the lyrics panel translates into |
+| `lyrics_show_translation` | `false` | Echo each lyric line in your language |
+| `lyrics_romanize` | `false` | Write lyric lines in Latin letters |
 
 ## Command line
 
@@ -73,7 +77,7 @@ interface work. Demo mode never writes settings.
 
 `--demo-page` opens a page, such as `home`, `playlist:pl1`, or `artist:art0`,
 and `--demo-show` adds surfaces on top of it: a comma separated list of
-`queue`, `devices`, `shortcuts`, `create`, and `light`.
+`queue`, `devices`, `lyrics`, `shortcuts`, `create`, and `light`.
 
 `--demo-shot <PATH>` writes the window to a PNG and exits, which is how the
 screenshots in these pages are made:
