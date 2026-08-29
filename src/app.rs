@@ -1039,6 +1039,15 @@ impl App {
         self.request_translation();
     }
 
+    /// Hands the panel a translation for the track whose lyrics are showing,
+    /// as an answer from the backend would. Demo mode and tests show one
+    /// this way without asking the network.
+    pub fn adopt_translation(&mut self, translation: crate::translate::Translation) {
+        self.translation_uri = self.lyrics_uri.clone();
+        self.translation_target = Some(self.settings.lyrics_language.clone());
+        self.translation = Loadable::Loaded(Some(translation));
+    }
+
     fn tick(&mut self, ctx: &egui::Context) {
         let now = Instant::now();
         self.toasts

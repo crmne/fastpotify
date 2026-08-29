@@ -612,7 +612,7 @@ pub fn apply_flags(app: &mut App, page: Option<&str>, show: Option<&str>) {
                 app.lyrics_following = true;
                 app.show_lyrics_panel = true;
                 app.settings.lyrics_show_translation = true;
-                app.translation = Loadable::Loaded(Some(sample_translation()));
+                app.adopt_translation(sample_translation());
             }
             // Titles in scripts the interface font does not cover.
             "scripts" => {
@@ -765,7 +765,7 @@ mod tests {
         app.show_lyrics_panel = true;
         app.lyrics_uri = app.now_playing().map(|now| now.uri);
         app.lyrics = Loadable::Loaded(Some(sample_lyrics()));
-        app.translation = Loadable::Loaded(Some(sample_translation()));
+        app.adopt_translation(sample_translation());
         app.settings.lyrics_romanize = true;
         app.settings.lyrics_show_translation = true;
         frame(&ctx, &mut app);

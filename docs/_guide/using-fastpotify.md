@@ -98,6 +98,8 @@ words to Google Translate, which answers for free and without an
 account; the answers are kept in the cache, so a song asked once costs
 nothing to ask again.
 
+![The lyrics panel with the translation echoing each line](/assets/images/lyrics-translate.png)
+
 ![The lyrics panel beside a playlist, following the song](/assets/images/lyrics.png)
 
 ## The tray
