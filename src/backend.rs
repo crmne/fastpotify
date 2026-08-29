@@ -997,9 +997,12 @@ impl Worker {
                 url: flow.url.clone(),
             }));
         }
-        if let Err(error) = open::that_detached(&flow.url) {
-            log::warn!("unable to open a browser: {error}");
-        }
+        let browser_url = flow.url.clone();
+        tokio::task::spawn_blocking(move || {
+            if let Err(error) = open::that(&browser_url) {
+                log::warn!("unable to open a browser: {error}");
+            }
+        });
         let http = self.http.clone();
         let events = self.events.clone();
         let waker = self.waker.clone();
@@ -1164,9 +1167,12 @@ impl Worker {
         let (cancel_tx, cancel_rx) = watch::channel(false);
         self.cancel_signin = Some(cancel_tx);
         self.emit(Event::Playback(LocalPlayback::Authorizing));
-        if let Err(error) = open::that_detached(&flow.url) {
-            log::warn!("unable to open a browser: {error}");
-        }
+        let browser_url = flow.url.clone();
+        tokio::task::spawn_blocking(move || {
+            if let Err(error) = open::that(&browser_url) {
+                log::warn!("unable to open a browser: {error}");
+            }
+        });
         let http = self.http.clone();
         let events = self.events.clone();
         let waker = self.waker.clone();
