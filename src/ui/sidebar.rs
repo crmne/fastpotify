@@ -7,7 +7,8 @@ use crate::app::App;
 use crate::model::{Action, Dialog, DragEntry, DragTrack, Loadable, Page};
 use crate::theme::{self, Icon, Palette};
 
-const ROW_HEIGHT: f32 = 60.0;
+const DEFAULT_ROW_HEIGHT: f32 = 60.0;
+const COMPACT_ROW_HEIGHT: f32 = 32.0;
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 enum Filter {
@@ -427,6 +428,12 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
                     },
                 );
             }
+            let compact = app.settings.sidebar_compact;
+            let row_height = if compact {
+                COMPACT_ROW_HEIGHT
+            } else {
+                DEFAULT_ROW_HEIGHT
+            };
             // While something is in hand, find where it hangs up front:
             // neighbours shift before that row draws, so the spot cannot
             // be discovered row by row. The fixed row height makes it
@@ -441,7 +448,7 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
             let drop_target = dragging_song
                 .then_some(pointer)
                 .flatten()
-                .map(|pos| ((pos.y - list_top) / ROW_HEIGHT).floor())
+                .map(|pos| ((pos.y - list_top) / row_height).floor())
                 .filter(|row| *row >= 0.0 && *row < entries.len() as f32)
                 .map(|row| row as usize)
                 .filter(|row| entries[*row].liked || entries[*row].owned);
@@ -449,10 +456,10 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
             // the pointer, never above Liked Songs.
             let reordering = egui::DragAndDrop::has_payload_of_type::<DragEntry>(ui.ctx());
             let reorder_slot = reordering.then_some(pointer).flatten().map(|pos| {
-                (((pos.y - list_top) / ROW_HEIGHT).round().max(0.0) as usize)
+                (((pos.y - list_top) / row_height).round().max(0.0) as usize)
                     .clamp(liked_rows, entries.len())
             });
-            super::widgets::virtual_rows(ui, entries.len(), ROW_HEIGHT, |ui, index| {
+            super::widgets::virtual_rows(ui, entries.len(), row_height, |ui, index| {
                 let entry = &entries[index];
                 let droppable = entry.liked || entry.owned;
                 let drop_hover = drop_target == Some(index);
@@ -463,7 +470,7 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
                 let pinned =
                     !entry.uri.is_empty() && app.settings.pinned_contexts.contains(&entry.uri);
                 let (rect, response) = ui.allocate_exact_size(
-                    vec2(ui.available_width(), ROW_HEIGHT),
+                    vec2(ui.available_width(), row_height),
                     Sense::click_and_drag(),
                 );
                 // Past the drag threshold the row itself is in hand, to be
@@ -524,51 +531,122 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
                             egui::StrokeKind::Inside,
                         );
                     }
-                    let cover_rect = Rect::from_center_size(
-                        pos2(rect.left() + 8.0 + 22.0, rect.center().y),
-                        Vec2::splat(44.0),
-                    );
-                    if entry.liked {
-                        liked_cover(ui, cover_rect, 6.0);
-                    } else {
-                        super::widgets::paint_cover(
-                            ui,
-                            &palette,
-                            entry.image.as_deref(),
-                            cover_rect,
-                            if entry.round { 22.0 } else { 6.0 },
-                            if entry.round { Icon::User } else { Icon::Music },
-                        );
-                    }
-                    let text_left = cover_rect.right() + 12.0;
-                    let text_right = rect.right() - if playing || pinned { 28.0 } else { 8.0 };
-                    let painter = ui.painter().with_clip_rect(Rect::from_min_max(
-                        pos2(text_left, rect.top()),
-                        pos2(text_right, rect.bottom()),
-                    ));
                     let name_color = if playing {
                         palette.accent
                     } else {
                         palette.text
                     };
-                    crate::bidi::paint_line(
-                        &painter,
-                        text_left,
-                        text_right,
-                        rect.center().y - 9.0,
-                        &entry.name,
-                        theme::medium(14.0),
-                        name_color,
-                    );
-                    crate::bidi::paint_line(
-                        &painter,
-                        text_left,
-                        text_right,
-                        rect.center().y + 10.0,
-                        &entry.subtitle,
-                        theme::regular(12.5),
-                        palette.secondary,
-                    );
+                    if compact {
+                        let text_left = rect.left() + 8.0;
+                        let text_right = rect.right() - if playing || pinned { 28.0 } else { 8.0 };
+                        let painter = ui.painter().with_clip_rect(Rect::from_min_max(
+                            pos2(text_left, rect.top()),
+                            pos2(text_right, rect.bottom()),
+                        ));
+                        crate::bidi::paint_line(
+                            &painter,
+                            text_left,
+                            text_right,
+                            rect.center().y,
+                            &entry.name,
+                            theme::medium(13.5),
+                            name_color,
+                        );
+                    } else {
+                        let cover_rect = Rect::from_center_size(
+                            pos2(rect.left() + 8.0 + 22.0, rect.center().y),
+                            Vec2::splat(44.0),
+                        );
+                        if entry.liked {
+                            liked_cover(ui, cover_rect, 6.0);
+                        } else {
+                            super::widgets::paint_cover(
+                                ui,
+                                &palette,
+                                entry.image.as_deref(),
+                                cover_rect,
+                                if entry.round { 22.0 } else { 6.0 },
+                                if entry.round { Icon::User } else { Icon::Music },
+                            );
+                        }
+                        let text_left = cover_rect.right() + 12.0;
+                        let text_right = rect.right() - if playing || pinned { 28.0 } else { 8.0 };
+                        let painter = ui.painter().with_clip_rect(Rect::from_min_max(
+                            pos2(text_left, rect.top()),
+                            pos2(text_right, rect.bottom()),
+                        ));
+                        crate::bidi::paint_line(
+                            &painter,
+                            text_left,
+                            text_right,
+                            rect.center().y - 9.0,
+                            &entry.name,
+                            theme::medium(14.0),
+                            name_color,
+                        );
+                        crate::bidi::paint_line(
+                            &painter,
+                            text_left,
+                            text_right,
+                            rect.center().y + 10.0,
+                            &entry.subtitle,
+                            theme::regular(12.5),
+                            palette.secondary,
+                        );
+                        // Hovering the art offers to play right from here.
+                        let can_play = !entry.uri.is_empty() || entry.liked;
+                        let play_response = can_play.then(|| {
+                            ui.interact(
+                                cover_rect,
+                                ui.id().with(("sidebar-play", index)),
+                                Sense::click(),
+                            )
+                        });
+                        let play_hover = play_response.as_ref().is_some_and(|play| play.hovered());
+                        if play_hover || (response.hovered() && can_play) {
+                            ui.painter().rect_filled(
+                                cover_rect,
+                                CornerRadius::same(if entry.round { 22 } else { 6 }),
+                                egui::Color32::from_black_alpha(120),
+                            );
+                            Icon::PlayFilled
+                                .image(
+                                    if play_hover {
+                                        palette.accent
+                                    } else {
+                                        egui::Color32::WHITE
+                                    },
+                                    18.0,
+                                )
+                                .paint_at(
+                                    ui,
+                                    Rect::from_center_size(
+                                        cover_rect.center()
+                                            + theme::play_glyph_offset(Icon::PlayFilled, 18.0),
+                                        Vec2::splat(18.0),
+                                    ),
+                                );
+                            if let Some(play) = &play_response {
+                                play.clone().on_hover_cursor(egui::CursorIcon::PointingHand);
+                            }
+                        }
+                        if play_response.is_some_and(|play| play.clicked()) {
+                            let uri = if entry.liked {
+                                app.user
+                                    .as_ref()
+                                    .map(|user| format!("spotify:user:{}:collection", user.id))
+                            } else {
+                                Some(entry.uri.clone())
+                            };
+                            if let Some(uri) = uri {
+                                app.actions.push(Action::PlayContext {
+                                    uri,
+                                    offset_uri: None,
+                                    offset_index: None,
+                                });
+                            }
+                        }
+                    }
                     if playing {
                         let icon_rect = Rect::from_center_size(
                             pos2(rect.right() - 16.0, rect.center().y),
@@ -585,59 +663,6 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
                         Icon::Pin
                             .image(palette.secondary, 13.0)
                             .paint_at(ui, icon_rect);
-                    }
-                    // Hovering the art offers to play right from here.
-                    let can_play = !entry.uri.is_empty() || entry.liked;
-                    let play_response = can_play.then(|| {
-                        ui.interact(
-                            cover_rect,
-                            ui.id().with(("sidebar-play", index)),
-                            Sense::click(),
-                        )
-                    });
-                    let play_hover = play_response.as_ref().is_some_and(|play| play.hovered());
-                    if play_hover || (response.hovered() && can_play) {
-                        ui.painter().rect_filled(
-                            cover_rect,
-                            CornerRadius::same(if entry.round { 22 } else { 6 }),
-                            egui::Color32::from_black_alpha(120),
-                        );
-                        Icon::PlayFilled
-                            .image(
-                                if play_hover {
-                                    palette.accent
-                                } else {
-                                    egui::Color32::WHITE
-                                },
-                                18.0,
-                            )
-                            .paint_at(
-                                ui,
-                                Rect::from_center_size(
-                                    cover_rect.center()
-                                        + theme::play_glyph_offset(Icon::PlayFilled, 18.0),
-                                    Vec2::splat(18.0),
-                                ),
-                            );
-                        if let Some(play) = &play_response {
-                            play.clone().on_hover_cursor(egui::CursorIcon::PointingHand);
-                        }
-                    }
-                    if play_response.is_some_and(|play| play.clicked()) {
-                        let uri = if entry.liked {
-                            app.user
-                                .as_ref()
-                                .map(|user| format!("spotify:user:{}:collection", user.id))
-                        } else {
-                            Some(entry.uri.clone())
-                        };
-                        if let Some(uri) = uri {
-                            app.actions.push(Action::PlayContext {
-                                uri,
-                                offset_uri: None,
-                                offset_index: None,
-                            });
-                        }
                     }
                     // Rows that cannot take the song step back a little.
                     if dragging_song && !droppable {
@@ -742,7 +767,7 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
             if let Some(slot) = reorder_slot {
                 // A line in the gap the rows opened, so the eye lands
                 // where the row will.
-                let y = list_top + slot as f32 * ROW_HEIGHT;
+                let y = list_top + slot as f32 * row_height;
                 ui.painter().hline(
                     ui.max_rect().x_range().shrink(6.0),
                     y,

@@ -68,6 +68,8 @@ pub struct Settings {
     pub volume: u16,
     /// Whether the library sidebar is visible.
     pub sidebar_visible: bool,
+    /// Use compact single-line rows without cover art in the sidebar.
+    pub sidebar_compact: bool,
     pub sidebar_width: f32,
     pub lyrics_width: f32,
     pub queue_width: f32,
@@ -142,6 +144,7 @@ impl Default for Settings {
             accent_from_art: true,
             volume: (u16::MAX as u32 * 70 / 100) as u16,
             sidebar_visible: true,
+            sidebar_compact: false,
             sidebar_width: 250.0,
             lyrics_width: 360.0,
             queue_width: 360.0,
@@ -286,6 +289,23 @@ mod tests {
         let json = serde_json::to_string(&settings).unwrap();
         let restored: Settings = serde_json::from_str(&json).unwrap();
         assert!(!restored.sidebar_visible);
+    }
+
+    #[test]
+    fn older_settings_default_to_standard_sidebar() {
+        let settings: Settings = serde_json::from_str("{}").unwrap();
+        assert!(!settings.sidebar_compact);
+    }
+
+    #[test]
+    fn compact_sidebar_round_trips() {
+        let settings = Settings {
+            sidebar_compact: true,
+            ..Settings::default()
+        };
+        let json = serde_json::to_string(&settings).unwrap();
+        let restored: Settings = serde_json::from_str(&json).unwrap();
+        assert!(restored.sidebar_compact);
     }
 }
 
