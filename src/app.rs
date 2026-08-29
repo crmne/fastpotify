@@ -283,6 +283,7 @@ pub struct App {
     /// User ids resolved to display names; `None` while unknown, so an id
     /// is asked about only once per run.
     pub user_names: HashMap<String, Option<String>>,
+    pub user_names_revision: u64,
     /// Context URIs most recently played, newest first: the sidebar's
     /// order. Kept with the session, so it survives a restart.
     pub recent_contexts: Vec<String>,
@@ -461,6 +462,7 @@ impl App {
                 .filter_map(|(page, sort)| Some((Page::decode(page)?, *sort)))
                 .collect(),
             user_names: HashMap::new(),
+            user_names_revision: 0,
             recent_contexts: session.recent_contexts.clone(),
             resume_context: session.last_context.clone(),
             resume_track: session.last_track.clone(),
@@ -816,6 +818,13 @@ impl App {
         self.pending_fresh() && self.pending_play_keys.iter().any(|k| k == key)
     }
 
+    pub fn set_user_name(&mut self, id: String, name: Option<String>) {
+        if self.user_names.get(&id) != Some(&name) {
+            self.user_names.insert(id, name);
+            self.user_names_revision = self.user_names_revision.wrapping_add(1);
+        }
+    }
+
     pub fn any_play_pending(&self) -> bool {
         self.pending_fresh() && !self.pending_play_keys.is_empty()
     }
@@ -917,7 +926,7 @@ impl App {
                     self.try_adopt_playlist_cache(&id);
                 }
                 Event::UserName { id, name } => {
-                    self.user_names.insert(id, name);
+                    self.set_user_name(id, name);
                 }
                 Event::WebApp { client_id } => self.web_app = client_id,
                 Event::UpdateAvailable { version, url } => {
@@ -3119,12 +3128,7 @@ impl App {
                 .filter(|id| !id.is_empty())
                 .collect();
             page.contributors.extend(adders.iter().cloned());
-            page.items.total = Some(items.len() as u32);
-            page.items.items = items;
-            page.items.next_offset = None;
-            page.items.loading = false;
-            page.items.loaded_once = true;
-            page.items.error = None;
+            page.items.set_cached(items);
             page.cache_complete = true;
         }
         self.request_contains(uris);
@@ -3568,7 +3572,7 @@ impl App {
                     .and_then(|page| page.playlist.get())
                     .and_then(|playlist| playlist.snapshot_id.clone());
                 if let Some(page) = self.playlist_pages.get_mut(&playlist_id) {
-                    page.items.items.retain(|item| {
+                    page.items.retain(|item| {
                         item.playable()
                             .is_none_or(|playable| !uris.iter().any(|uri| uri == playable.uri()))
                     });
@@ -3591,12 +3595,7 @@ impl App {
                     .and_then(|page| page.playlist.get())
                     .and_then(|playlist| playlist.snapshot_id.clone());
                 if let Some(page) = self.playlist_pages.get_mut(&playlist_id) {
-                    let items = &mut page.items.items;
-                    if (from as usize) < items.len() && (to as usize) <= items.len() {
-                        let item = items.remove(from as usize);
-                        let insert_at = if to > from { to - 1 } else { to } as usize;
-                        items.insert(insert_at.min(items.len()), item);
-                    }
+                    page.items.reorder(from as usize, to as usize);
                 }
                 self.playlist_busy = true;
                 self.backend.api(ApiRequest::ReorderPlaylist {

@@ -1,5 +1,7 @@
 //! Playlist, album, and Liked Songs pages: a hero, actions, and a track table.
 
+use std::sync::Arc;
+
 use egui::{Align, Layout, Rect, Sense, Vec2, pos2, vec2};
 
 use crate::api::models::{Album, PlayableItem, Playlist, pick_image};
@@ -266,13 +268,74 @@ pub struct Table<'a> {
     pub error: Option<&'a str>,
     pub can_load_more: bool,
     pub filter: &'a str,
+    pub items_revision: u64,
+}
+
+#[derive(Clone)]
+pub struct TableCache {
+    pub sort: Option<TableSort>,
+    pub needle: String,
+    pub items_revision: u64,
+    pub user_names_revision: u64,
+    pub visible: Arc<[usize]>,
+    pub view_uris: Option<Arc<[String]>>,
+}
+
+pub fn prepare_table_view(
+    ui: &mut egui::Ui,
+    app: &App,
+    page: &Page,
+    items: &[TableItem],
+    needle: &str,
+    sort: Option<TableSort>,
+    items_revision: u64,
+) -> Arc<TableCache> {
+    let cache_id = egui::Id::new("table-view-cache").with(page);
+    let cached = ui.data(|d| d.get_temp::<Arc<TableCache>>(cache_id));
+
+    let is_valid = cached.as_ref().is_some_and(|c| {
+        c.sort == sort
+            && c.needle == needle
+            && c.items_revision == items_revision
+            && c.user_names_revision == app.user_names_revision
+    });
+
+    if let Some(entry) = cached.filter(|_| is_valid) {
+        entry
+    } else {
+        let visible = view_indices(items, needle, sort);
+        let view_uris = sort.map(|_| {
+            visible
+                .iter()
+                .map(|&index| items[index].0.uri().to_string())
+                .collect::<Arc<[String]>>()
+        });
+        let entry = Arc::new(TableCache {
+            sort,
+            needle: needle.to_string(),
+            items_revision,
+            user_names_revision: app.user_names_revision,
+            visible: visible.into(),
+            view_uris,
+        });
+        ui.data_mut(|d| d.insert_temp(cache_id, Arc::clone(&entry)));
+        entry
+    }
 }
 
 pub fn table(app: &mut App, ui: &mut egui::Ui, table: Table<'_>) {
     let palette = app.palette;
     let needle = table.filter.trim().to_lowercase();
     let sort = app.table_sorts.get(&table.page).copied();
-    let visible = view_indices(table.items, &needle, sort);
+    let entry = prepare_table_view(
+        ui,
+        app,
+        &table.page,
+        table.items,
+        &needle,
+        sort,
+        table.items_revision,
+    );
 
     if !table.items.is_empty()
         && let Some(column) = widgets::table_header(
@@ -318,17 +381,13 @@ pub fn table(app: &mut App, ui: &mut egui::Ui, table: Table<'_>) {
     // What is displayed is what plays: a sorted view plays in its own
     // order, as a plain list of tracks, and its rows cannot edit server
     // positions that no longer match the screen.
-    let context = if sort.is_some() {
-        let uris: Vec<String> = visible
-            .iter()
-            .map(|&index| table.items[index].0.uri().to_string())
-            .collect();
+    let context = if let Some(uris) = &entry.view_uris {
         match &table.context {
             RowContext::Context { uri, .. } => RowContext::View {
-                uris,
+                uris: uris.to_vec(),
                 context_uri: uri.clone(),
             },
-            _ => RowContext::Uris(uris),
+            _ => RowContext::Uris(uris.to_vec()),
         }
     } else {
         table.context.clone()
@@ -362,11 +421,11 @@ pub fn table(app: &mut App, ui: &mut egui::Ui, table: Table<'_>) {
             .pointer_latest_pos()
             .filter(|pos| ui.clip_rect().contains(*pos))?;
         let row = (pos.y - list_top) / theme::ROW_HEIGHT;
-        (row >= 0.0 && row <= visible.len() as f32)
-            .then(|| (row.round() as usize).min(visible.len()))
+        (row >= 0.0 && row <= entry.visible.len() as f32)
+            .then(|| (row.round() as usize).min(entry.visible.len()))
     });
-    widgets::virtual_rows(ui, visible.len(), theme::ROW_HEIGHT, |ui, row| {
-        let index = visible[row];
+    widgets::virtual_rows(ui, entry.visible.len(), theme::ROW_HEIGHT, |ui, row| {
+        let index = entry.visible[row];
         let (item, added_at, added_by) = &table.items[index];
         // Neighbours part at the slot the dragged row would land in, the
         // same eased few pixels the sidebar uses, and ease back after.
@@ -441,7 +500,11 @@ pub fn table(app: &mut App, ui: &mut egui::Ui, table: Table<'_>) {
             "Nothing here yet",
             "Songs you add will show up here.",
         );
-    } else if visible.is_empty() && !needle.is_empty() && table.can_load_more && !table.loading {
+    } else if entry.visible.is_empty()
+        && !needle.is_empty()
+        && table.can_load_more
+        && !table.loading
+    {
         // Filtering a partially loaded list: keep fetching so matches appear.
         app.actions.push(Action::LoadMore(table.page));
     } else {
@@ -605,6 +668,7 @@ pub fn top_songs(app: &mut App, ui: &mut egui::Ui) {
             error: None,
             can_load_more: false,
             filter: "",
+            items_revision: app.home.top_songs_generation,
         },
     );
 }
@@ -690,17 +754,21 @@ pub fn playlist(app: &mut App, ui: &mut egui::Ui, id: &str) {
             );
             let owned = playlist.owned_by(&user_id);
             let saved = app.is_saved(&playlist.uri).unwrap_or(false);
-            let view_play = app
+            let needle = page.filter.trim().to_lowercase();
+            let sort = app
                 .table_sorts
                 .get(&Page::Playlist(id.to_string()))
-                .copied()
-                .map(|sort| {
-                    let needle = page.filter.trim().to_lowercase();
-                    view_indices(&items, &needle, Some(sort))
-                        .iter()
-                        .map(|&index| items[index].0.uri().to_string())
-                        .collect::<Vec<_>>()
-                });
+                .copied();
+            let table_view = prepare_table_view(
+                ui,
+                app,
+                &Page::Playlist(id.to_string()),
+                &items,
+                &needle,
+                sort,
+                page.items.revision,
+            );
+            let view_play = table_view.view_uris.as_ref().map(|uris| uris.to_vec());
             let playlist_clone = playlist.clone();
             actions_row(
                 app,
@@ -736,6 +804,7 @@ pub fn playlist(app: &mut App, ui: &mut egui::Ui, id: &str) {
                     error: page.items.error.as_deref(),
                     can_load_more: page.items.can_load_more(),
                     filter: &page.filter,
+                    items_revision: page.items.revision,
                 },
             );
         }
@@ -780,16 +849,17 @@ pub fn album(app: &mut App, ui: &mut egui::Ui, id: &str) {
                 })
                 .collect();
             let saved = app.is_saved(&album.uri).unwrap_or(false);
-            let album_view = app
-                .table_sorts
-                .get(&Page::Album(id.to_string()))
-                .copied()
-                .map(|sort| {
-                    view_indices(&items, "", Some(sort))
-                        .iter()
-                        .map(|&index| items[index].0.uri().to_string())
-                        .collect::<Vec<_>>()
-                });
+            let sort = app.table_sorts.get(&Page::Album(id.to_string())).copied();
+            let table_view = prepare_table_view(
+                ui,
+                app,
+                &Page::Album(id.to_string()),
+                &items,
+                "",
+                sort,
+                page.tracks.revision,
+            );
+            let album_view = table_view.view_uris.as_ref().map(|uris| uris.to_vec());
             actions_row(
                 app,
                 ui,
@@ -822,6 +892,7 @@ pub fn album(app: &mut App, ui: &mut egui::Ui, id: &str) {
                     error: page.tracks.error.as_deref(),
                     can_load_more: page.tracks.can_load_more(),
                     filter: "",
+                    items_revision: page.tracks.revision,
                 },
             );
             ui.add_space(24.0);
@@ -968,12 +1039,24 @@ pub fn liked(app: &mut App, ui: &mut egui::Ui) {
     let mut filter = ui
         .data(|data| data.get_temp::<String>(filter_id))
         .unwrap_or_default();
+    let needle = filter.trim().to_lowercase();
+    let sort = app.table_sorts.get(&Page::LikedSongs).copied();
+    let table_view = prepare_table_view(
+        ui,
+        app,
+        &Page::LikedSongs,
+        &items,
+        &needle,
+        sort,
+        app.library.liked.revision,
+    );
+    let liked_view = table_view.view_uris.as_ref().map(|uris| uris.to_vec());
     actions_row(
         app,
         ui,
         Actions {
             play_uri: collection_uri.clone(),
-            view: None,
+            view: liked_view,
             saved: None,
             saved_icons: (Icon::Heart, Icon::HeartFilled),
             saved_tooltips: ("", ""),
@@ -1013,6 +1096,7 @@ pub fn liked(app: &mut App, ui: &mut egui::Ui) {
             error: error.as_deref(),
             can_load_more,
             filter: &filter,
+            items_revision: app.library.liked.revision,
         },
     );
 }
@@ -1039,4 +1123,147 @@ fn rect_after(ui: &egui::Ui, height: f32) -> Rect {
 #[allow(dead_code)]
 fn palette_of(app: &App) -> Palette {
     app.palette
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::models::{Album, ArtistRef, Track};
+
+    fn make_test_tracks() -> Vec<TableItem> {
+        let titles = [
+            "Bohemian Rhapsody",
+            "Cancion Animal",
+            "Despacito",
+            "Ubermensch",
+        ];
+        let artists = ["Queen", "Soda Stereo", "Luis Fonsi", "Rammstein"];
+        let albums = [
+            "A Night at the Opera",
+            "Cancion Animal Remastered",
+            "Vida",
+            "Mutter",
+        ];
+
+        (0..4)
+            .map(|i| {
+                let track = Track {
+                    id: Some(format!("t_{i}")),
+                    name: titles[i].to_string(),
+                    uri: format!("spotify:track:t_{i}"),
+                    duration_ms: (i as u32 + 1) * 60_000,
+                    track_number: Some(i as u32 + 1),
+                    disc_number: Some(1),
+                    explicit: false,
+                    is_local: false,
+                    is_playable: Some(true),
+                    artists: vec![
+                        ArtistRef {
+                            id: Some(format!("a_{i}")),
+                            name: artists[i].to_string(),
+                            uri: Some(format!("spotify:artist:a_{i}")),
+                        },
+                        ArtistRef {
+                            id: Some(format!("feat_{i}")),
+                            name: format!("Feat Artist {i}"),
+                            uri: Some(format!("spotify:artist:feat_{i}")),
+                        },
+                    ],
+                    album: Some(Album {
+                        id: format!("alb_{i}"),
+                        name: albums[i].to_string(),
+                        uri: format!("spotify:album:alb_{i}"),
+                        images: vec![],
+                        release_date: Some("2020-01-01".to_string()),
+                        album_type: Some("album".to_string()),
+                        artists: vec![],
+                        album_group: None,
+                        total_tracks: Some(10),
+                        label: None,
+                        genres: vec![],
+                        popularity: None,
+                        tracks: None,
+                        copyrights: vec![],
+                        external_urls: Default::default(),
+                    }),
+                    popularity: None,
+                    external_urls: Default::default(),
+                };
+                (
+                    PlayableItem::Track(track),
+                    Some(format!("2024-01-0{i}")),
+                    Some(format!("User {i}")),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_view_indices_filtering_and_sorting() {
+        let items = make_test_tracks();
+
+        // 1. Unfiltered and unsorted: natural order
+        let visible = view_indices(&items, "", None);
+        assert_eq!(visible, vec![0, 1, 2, 3]);
+
+        // 2. Filter by track name
+        let visible = view_indices(&items, "bohemian", None);
+        assert_eq!(visible, vec![0]);
+
+        // 3. Filter by artist name
+        let visible = view_indices(&items, "soda", None);
+        assert_eq!(visible, vec![1]);
+
+        // 4. Filter by album name
+        let visible = view_indices(&items, "mutter", None);
+        assert_eq!(visible, vec![3]);
+
+        // 5. Sort descending by title
+        let sort = Some(TableSort {
+            column: SortColumn::Title,
+            ascending: false,
+        });
+        let visible = view_indices(&items, "", sort);
+        assert_eq!(visible, vec![3, 2, 1, 0]);
+    }
+
+    #[test]
+    fn test_table_cache_validation() {
+        let sort = Some(TableSort {
+            column: SortColumn::Title,
+            ascending: true,
+        });
+        let cache = TableCache {
+            sort,
+            needle: "desp".to_string(),
+            items_revision: 5,
+            user_names_revision: 2,
+            visible: Arc::new([2]),
+            view_uris: Some(Arc::new(["spotify:track:t_2".to_string()])),
+        };
+
+        // Cache hit
+        assert!(
+            cache.sort == sort
+                && cache.needle == "desp"
+                && cache.items_revision == 5
+                && cache.user_names_revision == 2
+        );
+
+        // Cache miss on sort change
+        let diff_sort = Some(TableSort {
+            column: SortColumn::Title,
+            ascending: false,
+        });
+        assert_ne!(cache.sort, diff_sort);
+
+        // Cache miss on filter change
+        assert_ne!(cache.needle, "bohemian");
+
+        // Cache miss on items_revision change
+        assert_ne!(cache.items_revision, 6);
+
+        // Cache miss on user_names_revision change
+        assert_ne!(cache.user_names_revision, 3);
+    }
 }

@@ -141,6 +141,7 @@ pub struct PagedList<T> {
     pub loading: bool,
     pub error: Option<String>,
     pub loaded_once: bool,
+    pub revision: u64,
 }
 
 impl<T> Default for PagedList<T> {
@@ -152,13 +153,17 @@ impl<T> Default for PagedList<T> {
             loading: false,
             error: None,
             loaded_once: false,
+            revision: 0,
         }
     }
 }
 
 impl<T> PagedList<T> {
     pub fn reset(&mut self) {
-        *self = Self::default();
+        *self = Self {
+            revision: self.revision.wrapping_add(1),
+            ..Default::default()
+        };
     }
 
     pub fn can_load_more(&self) -> bool {
@@ -183,6 +188,34 @@ impl<T> PagedList<T> {
         self.loading = false;
         self.error = None;
         self.loaded_once = true;
+        self.revision = self.revision.wrapping_add(1);
+    }
+
+    pub fn retain<F>(&mut self, f: F)
+    where
+        F: FnMut(&T) -> bool,
+    {
+        self.items.retain(f);
+        self.revision = self.revision.wrapping_add(1);
+    }
+
+    pub fn reorder(&mut self, from: usize, to: usize) {
+        if from < self.items.len() && to <= self.items.len() {
+            let item = self.items.remove(from);
+            let insert_at = if to > from { to - 1 } else { to };
+            self.items.insert(insert_at.min(self.items.len()), item);
+            self.revision = self.revision.wrapping_add(1);
+        }
+    }
+
+    pub fn set_cached(&mut self, items: Vec<T>) {
+        self.total = Some(items.len() as u32);
+        self.items = items;
+        self.next_offset = None;
+        self.loading = false;
+        self.loaded_once = true;
+        self.error = None;
+        self.revision = self.revision.wrapping_add(1);
     }
 
     pub fn fail(&mut self, error: String) {
