@@ -14,6 +14,7 @@ use ksni::blocking::TrayMethods;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TrayCommand {
+    Show,
     ShowHide,
     PlayPause,
     Next,
