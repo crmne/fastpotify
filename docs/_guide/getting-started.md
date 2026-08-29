@@ -68,7 +68,8 @@ speaker.
 
 - **Closing the window does not stop the music.** Fastpotify keeps playing
   from the system tray; reopen it from the tray icon and quit from the tray
-  menu or Ctrl+Q. Settings can turn this off.
+  menu or Ctrl+Q. On macOS you can also reopen it from the Dock. Settings can
+  turn this off.
 - **Play requests show their progress.** A pressed play button spins until
   Spotify responds.
 - **Common actions have shortcuts.** Space plays and pauses, Ctrl+F or `/`

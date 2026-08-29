@@ -89,8 +89,8 @@ tray-icon = { version = "0.24", default-features = false }
 souvlaki = { version = "0.8", default-features = false }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-# Serving AppKit while no window exists (the status item lives on the main
-# thread), and leaving the Dock while hidden.
+# Serving AppKit while no window exists: the status item and Dock reopen
+# callback live on the main thread.
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSEvent", "NSMenu", "NSMenuItem", "NSResponder", "NSRunningApplication"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSDate", "NSObjCRuntime", "NSRunLoop", "NSString"] }

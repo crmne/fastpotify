@@ -52,7 +52,8 @@ application rather than a shell plugin.
   and clicking the tray, or your desktop's media controls, brings a window
   back. No compositor-specific tricks, so it behaves the same on any
   desktop. Quit from the tray menu or `Ctrl+Q`; turn the behaviour off in
-  Settings if you prefer close-to-quit.
+  Settings if you prefer close-to-quit. On macOS the Dock icon stays present,
+  and clicking it opens the window again.
 - **Visible network activity.** Pages show spinners while they load. An
   indicator appears in the top bar when a Spotify request takes more than a
   moment or is waiting for a rate limit.
