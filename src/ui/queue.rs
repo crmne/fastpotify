@@ -122,6 +122,7 @@ fn contents(app: &mut App, ui: &mut egui::Ui, compact: bool) {
                 added_by: None,
                 show_added_by: false,
                 compact,
+                thin: false,
                 shift: 0.0,
             },
         );
@@ -166,6 +167,7 @@ fn contents(app: &mut App, ui: &mut egui::Ui, compact: bool) {
                 added_by: None,
                 show_added_by: false,
                 compact,
+                thin: false,
                 shift: 0.0,
             },
         );

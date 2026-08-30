@@ -199,5 +199,7 @@ On macOS, `Cmd` replaces `Ctrl`.
 Settings (Ctrl+,) includes the Connect device name, audio quality up to
 320 kbps, volume normalisation, autoplay, gapless playback, the audio backend
 on Linux, the audio cache size, the equalizer, themes, album-art tinting,
+compact views of the sidebar and of track lists (Spotify's compact views:
+names only, one line a row, no covers),
 the mini player's skin and size, and close-to-tray behaviour. Applying playback settings restarts the local player. Other
 settings take effect immediately.

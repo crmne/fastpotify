@@ -99,6 +99,8 @@ pub const RADIUS: u8 = 8;
 pub const RADIUS_SMALL: u8 = 4;
 pub const ROW_HEIGHT: f32 = 56.0;
 pub const COMPACT_ROW_HEIGHT: f32 = 48.0;
+/// The compact track list: one line, no cover.
+pub const THIN_ROW_HEIGHT: f32 = 36.0;
 pub const PLAYER_BAR_HEIGHT: f32 = 88.0;
 pub const TOP_BAR_HEIGHT: f32 = 56.0;
 

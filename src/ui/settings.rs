@@ -467,6 +467,17 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         widgets::setting_row(
             ui,
             &palette,
+            "Compact track list",
+            "Show track names and artists in a single line without cover artwork.",
+            |ui| {
+                if widgets::switch(ui, &palette, &mut app.settings.tracklist_compact).changed() {
+                    changed = true;
+                }
+            },
+        );
+        widgets::setting_row(
+            ui,
+            &palette,
             "Interface zoom",
             "Ctrl+Plus and Ctrl+Minus work anywhere; Ctrl+0 resets.",
             |ui| {

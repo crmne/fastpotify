@@ -605,6 +605,10 @@ pub fn apply_flags(app: &mut App, page: Option<&str>, show: Option<&str>) {
                 app.settings.eq_on = true;
                 app.settings.eq_bands_db = crate::eq::PRESETS[13].bands_db;
             }
+            "compact" => {
+                app.settings.sidebar_compact = true;
+                app.settings.tracklist_compact = true;
+            }
             "eq-shade" => {
                 app.settings.eq_open = true;
                 app.settings.eq_shaded = true;

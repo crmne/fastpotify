@@ -73,6 +73,8 @@ pub struct Settings {
     pub sidebar_width: f32,
     pub lyrics_width: f32,
     pub queue_width: f32,
+    /// Use compact single-line rows without cover art in track lists.
+    pub tracklist_compact: bool,
     pub search_history: Vec<String>,
     pub show_shortcut_hints: bool,
     /// An optional personal Spotify Web API application id. The shared
@@ -148,6 +150,7 @@ impl Default for Settings {
             sidebar_width: 250.0,
             lyrics_width: 360.0,
             queue_width: 360.0,
+            tracklist_compact: false,
             search_history: Vec::new(),
             show_shortcut_hints: true,
             web_client_id: None,
@@ -306,6 +309,23 @@ mod tests {
         let json = serde_json::to_string(&settings).unwrap();
         let restored: Settings = serde_json::from_str(&json).unwrap();
         assert!(restored.sidebar_compact);
+    }
+
+    #[test]
+    fn older_settings_default_to_standard_tracklist() {
+        let settings: Settings = serde_json::from_str("{}").unwrap();
+        assert!(!settings.tracklist_compact);
+    }
+
+    #[test]
+    fn compact_tracklist_round_trips() {
+        let settings = Settings {
+            tracklist_compact: true,
+            ..Settings::default()
+        };
+        let json = serde_json::to_string(&settings).unwrap();
+        let restored: Settings = serde_json::from_str(&json).unwrap();
+        assert!(restored.tracklist_compact);
     }
 }
 
