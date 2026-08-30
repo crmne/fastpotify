@@ -474,6 +474,31 @@ pub struct TrackRow<'a> {
     pub shift: f32,
 }
 
+/// Draw each credited artist separately so its Spotify id remains clickable.
+pub(crate) fn artist_links(
+    ui: &mut Ui,
+    app: &mut App,
+    artists: &[ArtistRef],
+    font: egui::FontId,
+    color: Color32,
+) {
+    let spacing = ui.spacing().item_spacing;
+    ui.spacing_mut().item_spacing.x = 0.0;
+    for (index, artist) in artists.iter().enumerate() {
+        if index > 0 {
+            theme::text(ui, ", ", font.clone(), color);
+        }
+        if let Some(id) = &artist.id {
+            if theme::link(ui, &artist.name, font.clone(), color).clicked() {
+                app.actions.push(Action::Open(Page::Artist(id.clone())));
+            }
+        } else {
+            theme::text(ui, &artist.name, font.clone(), color);
+        }
+    }
+    ui.spacing_mut().item_spacing = spacing;
+}
+
 /// Column widths of the track table, computed from the available width.
 struct Columns {
     number: f32,
@@ -681,14 +706,13 @@ pub fn track_row(ui: &mut Ui, app: &mut App, row: TrackRow<'_>) {
                     theme::regular(12.0),
                     palette.secondary.gamma_multiply(0.6),
                 );
-                let names = track.artist_names();
-                let first_artist = track.artists.iter().find_map(|artist| artist.id.clone());
-                let response = theme::link(&mut child, names, theme::regular(13.0), subtitle_color);
-                if response.clicked()
-                    && let Some(id) = first_artist
-                {
-                    app.actions.push(Action::Open(Page::Artist(id)));
-                }
+                artist_links(
+                    &mut child,
+                    app,
+                    &track.artists,
+                    theme::regular(13.0),
+                    subtitle_color,
+                );
             }
             PlayableItem::Episode(episode) => {
                 let subtitle = episode
@@ -736,14 +760,13 @@ pub fn track_row(ui: &mut Ui, app: &mut App, row: TrackRow<'_>) {
                     if track.explicit {
                         explicit_badge(ui, &palette);
                     }
-                    let names = track.artist_names();
-                    let first_artist = track.artists.iter().find_map(|artist| artist.id.clone());
-                    let response = theme::link(ui, names, theme::regular(12.5), subtitle_color);
-                    if response.clicked()
-                        && let Some(id) = first_artist
-                    {
-                        app.actions.push(Action::Open(Page::Artist(id)));
-                    }
+                    artist_links(
+                        ui,
+                        app,
+                        &track.artists,
+                        theme::regular(12.5),
+                        subtitle_color,
+                    );
                 }
                 PlayableItem::Episode(episode) => {
                     let subtitle = episode

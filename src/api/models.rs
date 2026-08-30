@@ -772,6 +772,16 @@ mod tests {
     }
 
     #[test]
+    fn track_keeps_artist_objects_when_a_name_has_a_comma() {
+        let json = r#"{"name":"Song","artists":[{"id":"tyler","name":"Tyler, the Creator"},{"id":"guest","name":"Guest"}]}"#;
+        let track: Track = serde_json::from_str(json).unwrap();
+
+        assert_eq!(track.artists.len(), 2);
+        assert_eq!(track.artists[0].name, "Tyler, the Creator");
+        assert_eq!(track.artists[1].id.as_deref(), Some("guest"));
+    }
+
+    #[test]
     fn search_playlists_skip_null_entries() {
         let json = r#"{"playlists":{"items":[null,{"id":"p","name":"P","uri":"spotify:playlist:p"}],"total":2,"limit":2,"offset":0,"next":"next page"}}"#;
         let results: SearchResults = serde_json::from_str(json).unwrap();

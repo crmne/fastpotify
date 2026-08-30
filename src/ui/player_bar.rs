@@ -136,28 +136,27 @@ fn now_playing_block(app: &mut App, ui: &mut egui::Ui, region: Rect, now: Option
             app.actions.push(Action::Open(Page::Show(id.clone())));
         }
     }
-    let subtitle_response = theme::link(
-        &mut text_ui,
-        &now.subtitle,
-        theme::regular(12.0),
-        palette.secondary,
-    );
-    if subtitle_response.clicked() {
-        if let Some(id) = now.artists.first().and_then(|artist| artist.id.clone()) {
-            app.actions.push(Action::Open(Page::Artist(id)));
-        } else if let Some(id) = &now.show_id {
-            app.actions.push(Action::Open(Page::Show(id.clone())));
+    text_ui.horizontal_top(|ui| {
+        if now.artists.is_empty() {
+            if theme::link(ui, &now.subtitle, theme::regular(12.0), palette.secondary).clicked()
+                && let Some(id) = &now.show_id
+            {
+                app.actions.push(Action::Open(Page::Show(id.clone())));
+            }
+        } else {
+            super::widgets::artist_links(
+                ui,
+                app,
+                &now.artists,
+                theme::regular(12.0),
+                palette.secondary,
+            );
         }
-    }
+    });
     // The playing thing answers the same right-click menu as a table row,
     // from the cover, the empty space around the words, or the words.
     if let Some(item) = app.now_playing_item() {
-        for response in [
-            &cover_response,
-            &info_response,
-            &title_response,
-            &subtitle_response,
-        ] {
+        for response in [&cover_response, &info_response, &title_response] {
             egui::Popup::context_menu(response)
                 .frame(super::widgets::menu_frame(&palette))
                 .show(|ui| super::widgets::item_menu(ui, app, &item, None, None));
