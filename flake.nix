@@ -56,10 +56,10 @@
               libxkbcommon
               wayland
               libGL
-              xorg.libX11
-              xorg.libXcursor
-              xorg.libXi
-              xorg.libXrandr
+              libx11
+              libxcursor
+              libxi
+              libxrandr
             ];
           # The GUI dlopens its Wayland, X11 and GL libraries at run time.
           LD_LIBRARY_PATH = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux (
@@ -69,10 +69,10 @@
                 libxkbcommon
                 wayland
                 libGL
-                xorg.libX11
-                xorg.libXcursor
-                xorg.libXi
-                xorg.libXrandr
+                libx11
+                libxcursor
+                libxi
+                libxrandr
               ]
             )
           );
@@ -88,19 +88,18 @@
               cargo = toolchain;
               rustc = toolchain;
             };
-            runtimeLibs =
-              pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux (
-                with pkgs;
-                [
-                  libxkbcommon
-                  wayland
-                  libGL
-                  xorg.libX11
-                  xorg.libXcursor
-                  xorg.libXi
-                  xorg.libXrandr
-                ]
-              );
+            runtimeLibs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux (
+              with pkgs;
+              [
+                libxkbcommon
+                wayland
+                libGL
+                libx11
+                libxcursor
+                libxi
+                libxrandr
+              ]
+            );
           in
           rustPlatform.buildRustPackage {
             pname = "fastpotify";
