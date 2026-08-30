@@ -2918,9 +2918,6 @@ impl App {
         self.recent_contexts.truncate(60);
     }
 
-    /// With `shuffle_first`, shuffle is turned on before playback starts,
-    /// in one ordered exchange: two independent requests race, and shuffle
-    /// sometimes lost.
     /// A random playable track of a context the app has rows for: the
     /// start of a shuffle play. `None` when no rows are at hand.
     fn random_track_in(&self, context_uri: &str) -> Option<String> {
@@ -2954,13 +2951,72 @@ impl App {
         if uris.is_empty() {
             return None;
         }
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .ok()?
-            .subsec_nanos() as usize;
-        Some(uris[nanos % uris.len()].to_string())
+        Some(uris[rand::random_range(0..uris.len())].to_string())
     }
 
+    /// How many songs Spotify last said a context holds, from the library
+    /// alone: enough to start a shuffle play at a random position when the
+    /// rows are not loaded, which is every play begun from the sidebar, a
+    /// card, or a context menu. `None` for anything unsaved, whose length
+    /// nobody here knows.
+    fn context_len(&self, context_uri: &str) -> Option<u32> {
+        if context_uri.ends_with(":collection") {
+            return self.library.liked.total;
+        }
+        match util::uri_kind(context_uri)? {
+            "playlist" => self
+                .library
+                .playlists
+                .get()?
+                .iter()
+                .find(|playlist| playlist.uri == context_uri)?
+                .tracks
+                .as_ref()
+                .map(|tracks| tracks.total),
+            "album" => {
+                self.library
+                    .albums
+                    .items
+                    .iter()
+                    .find(|saved| saved.album.uri == context_uri)?
+                    .album
+                    .total_tracks
+            }
+            "show" => {
+                self.library
+                    .shows
+                    .items
+                    .iter()
+                    .find(|saved| saved.show.uri == context_uri)?
+                    .show
+                    .total_episodes
+            }
+            _ => None,
+        }
+    }
+
+    /// Where a shuffled play of `context_uri` begins, as an offset by
+    /// track URI or by position: a random one of the rows the app holds,
+    /// or, when it holds none, a random position within the length the
+    /// library knows. Neither, and the play carries no offset at all:
+    /// librespot then picks its own random track, and only the Web API,
+    /// which would start at track one, needs telling where to go.
+    fn shuffle_start(&self, context_uri: &str) -> (Option<String>, Option<u32>) {
+        if let Some(uri) = self.random_track_in(context_uri) {
+            return (Some(uri), None);
+        }
+        if matches!(self.target(), Target::Remote(Some(_)))
+            && let Some(len) = self.context_len(context_uri)
+            && len > 0
+        {
+            return (None, Some(rand::random_range(0..len)));
+        }
+        (None, None)
+    }
+
+    /// With `shuffle_first`, shuffle is turned on before playback starts,
+    /// in one ordered exchange: two independent requests race, and shuffle
+    /// sometimes lost.
     fn play_request(&mut self, request: PlayRequest, shuffle_first: bool) {
         // Shuffle is a mode the listener sets, not a property of one
         // context: once on, every play shuffles until it is turned off,
@@ -2978,7 +3034,7 @@ impl App {
             && request.uris.is_empty()
             && let Some(context) = request.context_uri.clone()
         {
-            request.offset_uri = self.random_track_in(&context);
+            (request.offset_uri, request.offset_position) = self.shuffle_start(&context);
         }
         let mut keys: Vec<String> = Vec::new();
         if let Some(context) = &request.context_uri {
@@ -3478,13 +3534,9 @@ impl App {
                 }
             },
             Action::ShufflePlay(uri) => {
-                // librespot and the Web API both start an offsetless play
-                // at track one and only then shuffle what follows, so the
-                // first songs came out in order. Picking the random start
-                // here makes even the first song anyone's guess.
-                let mut request = PlayRequest::context(uri.clone());
-                request.offset_uri = self.random_track_in(&uri);
-                self.play_request(request, true);
+                // The random starting song is picked in `play_request`,
+                // which every shuffled play goes through.
+                self.play_request(PlayRequest::context(uri), true);
             }
             Action::TogglePlay => self.toggle_play(),
             Action::Next => match self.target() {
@@ -4298,6 +4350,115 @@ mod tests {
         );
         app.local_ready = true;
         app
+    }
+
+    /// A shuffle play must not start at track one, wherever it is begun
+    /// from: on the rows the app holds it picks one of them, and with no
+    /// rows at hand the Web API is sent a position drawn from the length
+    /// the library knows. Local playback is given neither, because
+    /// librespot draws its own starting track.
+    #[test]
+    fn a_shuffled_play_does_not_start_at_track_one() {
+        use crate::api::models::{
+            Album, PlayableItem, Playlist, PlaylistItem, SavedAlbum, Track, TrackCount,
+        };
+        let track = |uri: &str| {
+            Some(PlayableItem::Track(Track {
+                uri: uri.into(),
+                ..Default::default()
+            }))
+        };
+        let mut app = headless_app();
+        app.library.playlists = Loadable::Loaded(vec![
+            Playlist {
+                uri: "spotify:playlist:open".into(),
+                tracks: Some(TrackCount { total: 3 }),
+                ..Default::default()
+            },
+            Playlist {
+                uri: "spotify:playlist:unopened".into(),
+                tracks: Some(TrackCount { total: 57 }),
+                ..Default::default()
+            },
+        ]);
+        app.library.albums.items = vec![SavedAlbum {
+            album: Album {
+                uri: "spotify:album:saved".into(),
+                total_tracks: Some(12),
+                ..Default::default()
+            },
+            ..Default::default()
+        }];
+        app.library.liked.total = Some(9);
+        app.playlist_pages.insert(
+            "open".into(),
+            PlaylistPage {
+                items: PagedList {
+                    items: vec![
+                        PlaylistItem {
+                            item: track("spotify:track:one"),
+                            ..Default::default()
+                        },
+                        PlaylistItem {
+                            item: track("spotify:track:two"),
+                            ..Default::default()
+                        },
+                    ],
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        );
+        // Playing on a phone: the Web API needs the offset.
+        app.selected_device = Some("phone".into());
+        assert!(matches!(app.target(), Target::Remote(Some(_))));
+
+        // The playlist on screen: the start is one of its own rows.
+        let (uri, position) = app.shuffle_start("spotify:playlist:open");
+        assert!(
+            matches!(
+                uri.as_deref(),
+                Some("spotify:track:one" | "spotify:track:two")
+            ),
+            "the start comes from the rows, got {uri:?}"
+        );
+        assert_eq!(position, None);
+
+        // Begun from the sidebar or a menu, with no rows loaded: a
+        // position inside the length the library reported.
+        for (context, len) in [
+            ("spotify:playlist:unopened", 57),
+            ("spotify:album:saved", 12),
+            ("spotify:user:someone:collection", 9),
+        ] {
+            for _ in 0..50 {
+                let (uri, position) = app.shuffle_start(context);
+                assert_eq!(uri, None, "{context} has no rows to name");
+                let position = position.unwrap_or_else(|| panic!("{context} got no offset"));
+                assert!(
+                    position < len,
+                    "{context} offset {position} is outside {len}"
+                );
+            }
+        }
+        // Over 50 draws a 57-song playlist should not have sat still on
+        // one song, let alone on the first.
+        let drawn: std::collections::HashSet<Option<u32>> = (0..50)
+            .map(|_| app.shuffle_start("spotify:playlist:unopened").1)
+            .collect();
+        assert!(drawn.len() > 1, "the starting position never moved");
+
+        // Nothing saved, nothing loaded: no offset to give.
+        assert_eq!(app.shuffle_start("spotify:playlist:unknown"), (None, None));
+
+        // Local playback: librespot picks the starting track itself.
+        app.selected_device = None;
+        assert!(matches!(app.target(), Target::Local));
+        assert_eq!(
+            app.shuffle_start("spotify:playlist:unopened"),
+            (None, None),
+            "librespot is left to draw its own"
+        );
     }
 
     /// A Free account is told once per sign-in that nothing will play;
