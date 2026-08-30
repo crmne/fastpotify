@@ -60,7 +60,7 @@ const ALBUMS: &[(&str, usize, &str)] = &[
 ];
 
 const TRACKS: &[&str] = &[
-    "Rosewood 🔥",
+    "Rosewood",
     "Otomo",
     "Shadows",
     "Tides",
@@ -79,14 +79,14 @@ const TRACKS: &[&str] = &[
     "Encores",
     "Sunlight",
     "My Friend the Forest",
-    "Kaleidoscope 🎧",
+    "Kaleidoscope",
 ];
 
 const PLAYLISTS: &[&str] = &[
     "Discover Weekly",
-    "Late night focus 🌙",
+    "Late night focus",
     "Sunday morning",
-    "Running 2026 🏃",
+    "Running 2026",
     "Release Radar",
     "Berlin nights",
     "Dinner party",
