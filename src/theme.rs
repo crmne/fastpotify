@@ -270,9 +270,10 @@ fn install_fonts(ctx: &egui::Context) {
         .insert(INTER_BOLD.to_owned(), weighted(700.0));
 
     let noto_emoji = include_bytes!("../assets/fonts/NotoEmoji.ttf");
-    fonts
-        .font_data
-        .insert("noto_emoji".to_owned(), Arc::new(FontData::from_static(noto_emoji)));
+    fonts.font_data.insert(
+        "noto_emoji".to_owned(),
+        Arc::new(FontData::from_static(noto_emoji)),
+    );
 
     fonts
         .families

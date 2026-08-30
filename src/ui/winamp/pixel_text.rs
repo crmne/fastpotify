@@ -342,6 +342,6 @@ mod tests {
         let image = text.rasterise("🔥 🎵 ❤️ 🚀");
         assert!(image.size[0] > 0 && image.size[1] > 0);
         // Ensure not all pixels are transparent (i.e. ink is drawn)
-        assert!(image.pixels.iter().any(|pixel| *pixel == Color32::WHITE));
+        assert!(image.pixels.contains(&Color32::WHITE));
     }
 }
