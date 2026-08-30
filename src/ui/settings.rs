@@ -456,6 +456,17 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         widgets::setting_row(
             ui,
             &palette,
+            "Compact queue",
+            "Show track names only in the queue without cover artwork.",
+            |ui| {
+                if widgets::switch(ui, &palette, &mut app.settings.queue_compact).changed() {
+                    changed = true;
+                }
+            },
+        );
+        widgets::setting_row(
+            ui,
+            &palette,
             "Interface zoom",
             "Ctrl+Plus and Ctrl+Minus work anywhere; Ctrl+0 resets.",
             |ui| {

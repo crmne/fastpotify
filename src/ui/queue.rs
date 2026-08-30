@@ -104,6 +104,7 @@ fn contents(app: &mut App, ui: &mut egui::Ui, compact: bool) {
                 .and_then(|id| app.track_cache.get(id).cloned().map(PlayableItem::Track))
         })
     });
+    let show_cover = !app.settings.queue_compact;
     if let Some(current) = &current {
         theme::text(ui, "Now playing", theme::semibold(14.0), palette.text);
         ui.add_space(4.0);
@@ -116,7 +117,7 @@ fn contents(app: &mut App, ui: &mut egui::Ui, compact: bool) {
                 number: Some(1),
                 item: current,
                 context: &context,
-                show_cover: true,
+                show_cover,
                 show_album: !compact,
                 added_at: None,
                 added_by: None,
@@ -160,7 +161,7 @@ fn contents(app: &mut App, ui: &mut egui::Ui, compact: bool) {
                 number: Some(index + 1),
                 item: &items[index],
                 context: &context,
-                show_cover: true,
+                show_cover,
                 show_album: !compact,
                 added_at: None,
                 added_by: None,
