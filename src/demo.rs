@@ -7,6 +7,8 @@
 
 use std::time::Instant;
 
+use jiff::{SignedDuration, Timestamp};
+
 use crate::api::models::{
     Album, Artist, ArtistRef, Context, Copyright, Device, Episode, Followers, Image, Owner,
     Page as ApiPage, PlayHistory, PlayableItem, PlaybackState, Playlist, PlaylistItem, Queue,
@@ -81,6 +83,18 @@ const TRACKS: &[&str] = &[
     "My Friend the Forest",
     "Kaleidoscope",
 ];
+
+fn demo_added_at(index: usize, now: Timestamp) -> String {
+    let age = match index {
+        0 => SignedDuration::from_secs(30),
+        1 => SignedDuration::from_mins(5),
+        2 => SignedDuration::from_hours(3),
+        3 => SignedDuration::from_hours(2 * 24),
+        4 => SignedDuration::from_hours(2 * 7 * 24),
+        _ => SignedDuration::from_hours((35 + index as i64) * 24),
+    };
+    (now - age).to_string()
+}
 
 const PLAYLISTS: &[&str] = &[
     "Discover Weekly",
@@ -275,6 +289,7 @@ pub fn populate(app: &mut App) {
         playlist: Loadable::Loaded(playlists[1].clone()),
         ..PlaylistPage::default()
     };
+    let demo_now = Timestamp::now();
     playlist_page.items.absorb(
         0,
         page(
@@ -282,11 +297,9 @@ pub fn populate(app: &mut App) {
                 .iter()
                 .enumerate()
                 .map(|(index, track)| PlaylistItem {
-                    added_at: Some(format!(
-                        "2026-0{}-{:02}T10:00:00Z",
-                        1 + index % 8,
-                        1 + index % 27
-                    )),
+                    // The first rows deliberately cover each relative-date
+                    // unit; the rest remain absolute dates.
+                    added_at: Some(demo_added_at(index, demo_now)),
                     is_local: false,
                     // A second pair of hands, so the page reads as made
                     // together: the Added By column and the byline show.

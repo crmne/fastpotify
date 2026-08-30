@@ -80,6 +80,35 @@ pub fn format_date(iso: &str) -> String {
     }
 }
 
+/// `5 minutes ago` for recent ISO-8601 timestamps, otherwise the usual date.
+///
+/// Dates are shown relatively for their first 30 days, matching the playlist
+/// table's compact, time-aware presentation. `now` is an argument so callers
+/// can render against one instant and the boundary behaviour stays testable.
+pub fn format_relative_date(iso: &str, now: jiff::Timestamp) -> String {
+    let Ok(added) = iso.parse::<jiff::Timestamp>() else {
+        return format_date(iso);
+    };
+    let seconds = added.duration_until(now).as_secs_f64().floor() as i64;
+    if !(0..30 * 24 * 60 * 60).contains(&seconds) {
+        return format_date(iso);
+    }
+
+    let (count, unit) = if seconds < 60 {
+        (seconds, "second")
+    } else if seconds < 60 * 60 {
+        (seconds / 60, "minute")
+    } else if seconds < 24 * 60 * 60 {
+        (seconds / (60 * 60), "hour")
+    } else if seconds < 7 * 24 * 60 * 60 {
+        (seconds / (24 * 60 * 60), "day")
+    } else {
+        (seconds / (7 * 24 * 60 * 60), "week")
+    };
+    let plural = if count == 1 { "" } else { "s" };
+    format!("{count} {unit}{plural} ago")
+}
+
 /// Tears the id out of `spotify:track:abc` and friends.
 pub fn uri_id(uri: &str) -> Option<&str> {
     uri.rsplit(':').next().filter(|id| !id.is_empty())
@@ -211,6 +240,45 @@ mod tests {
         assert_eq!(format_date("2024-01-05T10:00:00Z"), "Jan 5, 2024");
         assert_eq!(format_date("2024-03"), "Mar 2024");
         assert_eq!(format_date("2024"), "2024");
+    }
+
+    #[test]
+    fn recent_dates_are_relative_for_the_first_month() {
+        let now: jiff::Timestamp = "2026-08-31T12:00:00Z".parse().unwrap();
+        assert_eq!(
+            format_relative_date("2026-08-31T11:59:30Z", now),
+            "30 seconds ago"
+        );
+        assert_eq!(
+            format_relative_date("2026-08-31T11:59:00Z", now),
+            "1 minute ago"
+        );
+        assert_eq!(
+            format_relative_date("2026-08-31T11:00:00Z", now),
+            "1 hour ago"
+        );
+        assert_eq!(
+            format_relative_date("2026-08-30T12:00:00Z", now),
+            "1 day ago"
+        );
+        assert_eq!(
+            format_relative_date("2026-08-17T12:00:00Z", now),
+            "2 weeks ago"
+        );
+        assert_eq!(
+            format_relative_date("2026-08-01T12:00:00Z", now),
+            "Aug 1, 2026"
+        );
+    }
+
+    #[test]
+    fn relative_dates_fall_back_for_future_and_invalid_timestamps() {
+        let now: jiff::Timestamp = "2026-08-31T12:00:00Z".parse().unwrap();
+        assert_eq!(
+            format_relative_date("2026-09-01T12:00:00Z", now),
+            "Sep 1, 2026"
+        );
+        assert_eq!(format_relative_date("not-a-date", now), "not-a-date");
     }
 
     #[test]

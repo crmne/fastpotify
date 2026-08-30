@@ -821,13 +821,20 @@ pub fn track_row(ui: &mut Ui, app: &mut App, row: TrackRow<'_>) {
             .filter(|added| !added.starts_with("1970-01-01"))
         {
             let cell = Rect::from_min_size(pos2(x, rect.top()), vec2(cols.added, row_height));
+            let label = util::format_relative_date(added, jiff::Timestamp::now());
             painter.text(
                 pos2(cell.left(), cell.center().y),
                 egui::Align2::LEFT_CENTER,
-                util::format_date(added),
+                &label,
                 theme::regular(13.0),
                 palette.secondary,
             );
+            // Relative labels cross a boundary while the table is idle, so
+            // keep the visible value in step with the clock.
+            if label.ends_with(" ago") {
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_secs(1));
+            }
         }
         x += cols.added;
     }

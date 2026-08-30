@@ -26,7 +26,10 @@ more top songs** to open the complete ranked list.
 
 Track tables sort by their column headings: click **Title**, **Album**,
 **Date added**, or the clock to sort by it, again to reverse, and a third
-time to return to the list's own order.
+time to return to the list's own order. Recent additions say how long ago
+they were added; entries at least a month old show their calendar date.
+
+![A playlist showing relative dates for recent additions](/assets/images/date-added-relative-demo.png)
 
 ## Your Library
 
