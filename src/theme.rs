@@ -848,10 +848,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn inspect_egui_emoji_layout() {
+    fn fonts_install_and_layout_emojis() {
         let ctx = egui::Context::default();
         install(&ctx);
-        let mut output = ctx.run_ui(egui::RawInput::default(), |_ui| {});
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let galley = ui.painter().layout_no_wrap(
+                "Rosewood 🔥 Otomo 🎵 ❤️ 🚀".to_string(),
+                regular(14.0),
+                Color32::WHITE,
+            );
+            assert!(galley.rows[0].glyphs.len() >= 5);
+        });
         output.textures_delta.clear();
     }
 }
