@@ -862,4 +862,3 @@ mod tests {
         output.textures_delta.clear();
     }
 }
-
