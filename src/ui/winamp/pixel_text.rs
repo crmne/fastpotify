@@ -41,6 +41,7 @@ static FACES: LazyLock<Vec<(&'static [u8], u32)>> = LazyLock::new(|| {
         Some(face) => vec![(&face.bytes, face.index)],
         None => vec![(include_bytes!("../../../assets/fonts/InterVariable.ttf"), 0)],
     };
+    faces.push((include_bytes!("../../../assets/fonts/NotoEmoji.ttf"), 0));
     for fallback in crate::system_fonts::fallbacks() {
         faces.push((&fallback.bytes, fallback.index));
     }
@@ -333,5 +334,14 @@ mod tests {
             (drawn - long).abs() <= long * 0.15,
             "drawn {drawn}, measured {long}"
         );
+    }
+
+    #[test]
+    fn emojis_are_drawn_from_bundled_emoji_face() {
+        let mut text = PixelText::default();
+        let image = text.rasterise("🔥 🎵 ❤️ 🚀");
+        assert!(image.size[0] > 0 && image.size[1] > 0);
+        // Ensure not all pixels are transparent (i.e. ink is drawn)
+        assert!(image.pixels.iter().any(|pixel| *pixel == Color32::WHITE));
     }
 }

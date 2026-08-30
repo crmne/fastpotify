@@ -269,11 +269,26 @@ fn install_fonts(ctx: &egui::Context) {
         .font_data
         .insert(INTER_BOLD.to_owned(), weighted(700.0));
 
+    let noto_emoji = include_bytes!("../assets/fonts/NotoEmoji.ttf");
+    fonts
+        .font_data
+        .insert("noto_emoji".to_owned(), Arc::new(FontData::from_static(noto_emoji)));
+
     fonts
         .families
         .entry(FontFamily::Proportional)
         .or_default()
         .insert(0, "inter".to_owned());
+    fonts
+        .families
+        .entry(FontFamily::Proportional)
+        .or_default()
+        .push("noto_emoji".to_owned());
+    fonts
+        .families
+        .entry(FontFamily::Monospace)
+        .or_default()
+        .push("noto_emoji".to_owned());
     let fallbacks: Vec<String> = fonts.families[&FontFamily::Proportional]
         .iter()
         .skip(1)

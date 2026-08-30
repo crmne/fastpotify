@@ -52,6 +52,7 @@ const FALLBACK_SCRIPTS: &[(&str, char, &str)] = &[
     ("georgian", '\u{10d0}', "georgian"),
     ("ethiopic", '\u{1200}', "ethiopic"),
     ("cherokee", '\u{13a0}', "cherokee"),
+    ("symbols", '\u{2605}', "symbol"),
 ];
 
 /// The regional cut of a pan-CJK font a locale should be shown, longest
@@ -367,7 +368,8 @@ fn face_score(family: &str, weight: f32, han: &str, hint: &str) -> u32 {
     // The rest of a Noto set are the specialised cuts -- Nastaliq for Urdu
     // poetry, Rashi for rabbinic commentary, Kufi for display -- which are
     // correct typography for a body of text and wrong for a track title.
-    if !family.contains("sans") {
+    // Emoji and symbol faces do not necessarily include "sans" in their family names.
+    if !family.contains("sans") && hint != "emoji" && hint != "symbol" {
         score += 50;
     }
     for (fragment, penalty) in [
@@ -516,6 +518,13 @@ mod tests {
         assert!(is_font_file(Path::new("/x/PingFang.otf")));
         assert!(!is_font_file(Path::new("/x/fonts.dir")));
         assert!(!is_font_file(Path::new("/x/README")));
+    }
+
+    #[test]
+    fn symbols_faces_are_scored_fairly() {
+        let symbol = face_score("noto sans symbols", 400.0, "sc", "symbol");
+        let non_symbol = face_score("noto sans arabic", 400.0, "sc", "symbol");
+        assert!(symbol < non_symbol);
     }
 
     #[test]
