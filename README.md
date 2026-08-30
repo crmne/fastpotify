@@ -47,6 +47,10 @@ application rather than a shell plugin.
   edited: add from any row's menu or by dragging a song onto the playlist in
   the sidebar, remove from the playlist page.
 - **Queue** as a side panel or a page; add anything to it from a row menu.
+- **Picks up where you left off.** A cold start shows the song the last
+  session ended on, paused at the position it stopped at; play carries on
+  from there instead of restarting it. Next, previous, and the progress bar
+  work on it before it plays, so a skip never has to start it first.
 - **Album-art colour.** Pages and the player bar take a tint from the cover
   of what you are looking at or listening to. Turn it off in Settings.
 - **Light and dark**, or follow the system.

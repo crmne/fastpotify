@@ -29,6 +29,10 @@ const REMOTE_POLL_IDLE: Duration = Duration::from_secs(20);
 const REMOTE_FRESH: Duration = Duration::from_secs(45);
 const DEVICES_FRESH: Duration = Duration::from_secs(12);
 const SEARCH_DEBOUNCE: Duration = Duration::from_millis(280);
+/// How far into a song Previous restarts it rather than stepping back,
+/// matching what librespot does during playback.
+const RESTART_BEFORE_PREVIOUS: u32 = 3_000;
+
 const TOAST_LIFETIME: Duration = Duration::from_millis(3200);
 const OPTIMISTIC_HOLD: Duration = Duration::from_millis(2500);
 
@@ -84,6 +88,9 @@ pub struct NowPlaying {
     pub volume_percent: u8,
     pub can_control: bool,
     pub is_episode: bool,
+    /// The remembered song from the last session, shown paused before a
+    /// first press. Nothing is playing yet.
+    pub resuming: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -292,9 +299,9 @@ pub struct App {
     /// order. Kept with the session, so it survives a restart.
     pub recent_contexts: Vec<String>,
     /// What was playing when the app last closed, to resume from cold.
-    resume_context: Option<String>,
-    resume_track: Option<String>,
-    resume_position_ms: u32,
+    pub resume_context: Option<String>,
+    pub resume_track: Option<String>,
+    pub resume_position_ms: u32,
     /// A newer release than this build, once GitHub has said so.
     pub update: Option<crate::updates::Release>,
     last_update_check: Option<Instant>,
@@ -677,6 +684,11 @@ impl App {
     }
 
     pub fn now_playing(&self) -> Option<NowPlaying> {
+        self.now_playing_live().or_else(|| self.resume_preview())
+    }
+
+    /// What a device is actually playing, here or elsewhere.
+    fn now_playing_live(&self) -> Option<NowPlaying> {
         if self.local.is_active() {
             let track = self.local.track.as_ref()?;
             let cached = track
@@ -728,6 +740,7 @@ impl App {
                 volume_percent: volume_to_percent(self.local.volume),
                 can_control: true,
                 is_episode: track.is_episode,
+                resuming: false,
             });
         }
         let remote = self.remote_fresh()?;
@@ -814,6 +827,43 @@ impl App {
             volume_percent: volume,
             can_control: device.is_none_or(|device| !device.is_restricted),
             is_episode,
+            resuming: false,
+        })
+    }
+
+    /// The song the last session ended on, drawn paused at the position it
+    /// stopped at so the listener can see what a press of play will resume.
+    /// Only ever offered when no device is playing anything.
+    fn resume_preview(&self) -> Option<NowPlaying> {
+        let uri = self.resume_track.as_deref()?;
+        let track = self.track_cache.get(util::uri_id(uri)?)?;
+        Some(NowPlaying {
+            local: true,
+            device_name: None,
+            uri: uri.to_string(),
+            id: track.id.clone(),
+            title: track.name.clone(),
+            subtitle: track.artist_names(),
+            artists: track.artists.clone(),
+            album_name: track
+                .album
+                .as_ref()
+                .map(|album| album.name.clone())
+                .unwrap_or_default(),
+            album_id: track.album.as_ref().map(|album| album.id.clone()),
+            show_id: None,
+            art_url: track.image(640).map(str::to_string),
+            art_small: track.image(64).map(str::to_string),
+            duration_ms: track.duration_ms,
+            position_ms: self.resume_position_ms.min(track.duration_ms),
+            playing: false,
+            loading: false,
+            shuffle: self.shuffle_wanted,
+            repeat: RepeatMode::Off,
+            volume_percent: volume_to_percent(self.local.volume),
+            can_control: true,
+            is_episode: false,
+            resuming: true,
         })
     }
 
@@ -1121,10 +1171,159 @@ impl App {
         }
     }
 
+    /// Fetch the remembered song's details so the player bar can show it
+    /// before anything plays. Asked for once, and only while nothing is
+    /// playing: a live song needs no preview.
+    fn request_resume_track(&mut self) {
+        if self.now_playing_live().is_some() {
+            return;
+        }
+        let Some(uri) = self.resume_track.clone() else {
+            return;
+        };
+        // Episodes are not in the track endpoint; the preview skips them.
+        if !uri.starts_with("spotify:track:") {
+            return;
+        }
+        let Some(id) = util::uri_id(&uri).map(str::to_string) else {
+            return;
+        };
+        if self.track_cache.contains_key(&id) || !self.track_requests.insert(id.clone()) {
+            return;
+        }
+        self.backend.api(ApiRequest::Track { id });
+    }
+
+    /// True while the player bar is showing the remembered song and no
+    /// device is playing anything: the song is loaded and current, but not
+    /// playing, and the transport acts on it here rather than on an engine
+    /// that has nothing to skip.
+    fn resume_only(&self) -> bool {
+        self.resume_track.is_some() && self.now_playing_live().is_none()
+    }
+
+    /// Load the rows of the context the last session was left in, so the
+    /// remembered song knows its neighbours before anything plays. The
+    /// playlist cache on disk usually answers this without a request.
+    fn ensure_resume_context_loaded(&mut self) {
+        if !self.resume_only() {
+            return;
+        }
+        let Some(context) = self.resume_context.clone() else {
+            return;
+        };
+        if self.context_track_uris(&context).is_some() {
+            return;
+        }
+        if let Some(page) = Page::decode(&Self::context_page(&context)) {
+            self.ensure_loaded(page);
+        }
+    }
+
+    /// The page that shows a context, in the encoded form `Page::decode`
+    /// takes.
+    fn context_page(context_uri: &str) -> String {
+        if context_uri.ends_with(":collection") {
+            return "liked".to_owned();
+        }
+        match (util::uri_kind(context_uri), util::uri_id(context_uri)) {
+            (Some(kind), Some(id)) => format!("{kind}:{id}"),
+            _ => String::new(),
+        }
+    }
+
+    /// Step the remembered song to its neighbour in the context, without
+    /// playing anything: the song stays loaded and paused, at its start.
+    /// `false` when there is no list to step through.
+    fn step_resume(&mut self, forward: bool) -> bool {
+        let Some(context) = self.resume_context.clone() else {
+            return false;
+        };
+        let Some(uris) = self.context_track_uris(&context) else {
+            return false;
+        };
+        let current = self.resume_track.clone().unwrap_or_default();
+        let next = if self.shuffle_wanted && forward {
+            // Shuffle is the listener's mode, and it outlives a close: a
+            // skip under it lands somewhere else in the context, as a skip
+            // during playback would.
+            let choices: Vec<&String> = uris.iter().filter(|uri| **uri != current).collect();
+            if choices.is_empty() {
+                return false;
+            }
+            choices[rand::random_range(0..choices.len())].clone()
+        } else {
+            let Some(index) = uris.iter().position(|uri| *uri == current) else {
+                return false;
+            };
+            let last = uris.len() - 1;
+            let target = match (forward, index) {
+                (true, i) if i == last => 0,
+                (true, i) => i + 1,
+                (false, 0) => last,
+                (false, i) => i - 1,
+            };
+            uris[target].clone()
+        };
+        self.cache_track_from_context(&context, &next);
+        self.resume_track = Some(next);
+        self.resume_position_ms = 0;
+        self.session_dirty = true;
+        true
+    }
+
+    /// Take a song's details from the context's own rows, so a skip shows
+    /// the new song at once instead of blanking the bar until a request
+    /// for it comes back.
+    fn cache_track_from_context(&mut self, context_uri: &str, uri: &str) {
+        let Some(id) = util::uri_id(uri) else {
+            return;
+        };
+        if self.track_cache.contains_key(id) {
+            return;
+        }
+        let found = if let Some(pid) = context_uri.strip_prefix("spotify:playlist:") {
+            self.playlist_pages.get(pid).and_then(|page| {
+                page.items
+                    .items
+                    .iter()
+                    .find_map(|item| match item.playable() {
+                        Some(PlayableItem::Track(track)) if track.uri == uri => Some(track.clone()),
+                        _ => None,
+                    })
+            })
+        } else if let Some(aid) = context_uri.strip_prefix("spotify:album:") {
+            self.album_pages.get(aid).and_then(|page| {
+                page.tracks
+                    .items
+                    .iter()
+                    .find(|track| track.uri == uri)
+                    .cloned()
+            })
+        } else if context_uri.ends_with(":collection") {
+            self.library
+                .liked
+                .items
+                .iter()
+                .find(|item| item.track.uri == uri)
+                .map(|item| item.track.clone())
+        } else {
+            None
+        };
+        if let Some(track) = found {
+            self.track_cache.insert(id.to_owned(), track);
+        }
+    }
+
     fn on_now_playing_changed(&mut self) {
         let Some(now) = self.now_playing() else {
             return;
         };
+        // The remembered song is not a song that started: taking it for one
+        // would rewind the very position it is there to show.
+        if now.resuming {
+            return;
+        }
         if self.last_now_playing_uri.as_deref() == Some(now.uri.as_str()) {
             return;
         }
@@ -1213,6 +1412,11 @@ impl App {
         {
             self.last_update_check = Some(now);
             self.backend.send(Command::CheckForUpdates);
+        }
+
+        if self.is_connected() && !self.offline {
+            self.request_resume_track();
+            self.ensure_resume_context_loaded();
         }
 
         if self.is_connected() && !self.offline {
@@ -2948,15 +3152,17 @@ impl App {
 
     /// A random playable track of a context the app has rows for: the
     /// start of a shuffle play. `None` when no rows are at hand.
-    fn random_track_in(&self, context_uri: &str) -> Option<String> {
-        let uris: Vec<&str> = if let Some(id) = context_uri.strip_prefix("spotify:playlist:") {
+    /// The songs a context holds, in the order they are shown, from the
+    /// rows already loaded. `None` when those rows are not here yet.
+    fn context_track_uris(&self, context_uri: &str) -> Option<Vec<String>> {
+        let uris: Vec<String> = if let Some(id) = context_uri.strip_prefix("spotify:playlist:") {
             self.playlist_pages
                 .get(id)?
                 .items
                 .items
                 .iter()
                 .filter_map(|item| item.playable())
-                .map(|item| item.uri())
+                .map(|item| item.uri().to_string())
                 .collect()
         } else if let Some(id) = context_uri.strip_prefix("spotify:album:") {
             self.album_pages
@@ -2964,22 +3170,24 @@ impl App {
                 .tracks
                 .items
                 .iter()
-                .map(|track| track.uri.as_str())
+                .map(|track| track.uri.clone())
                 .collect()
         } else if context_uri.ends_with(":collection") {
             self.library
                 .liked
                 .items
                 .iter()
-                .map(|item| item.track.uri.as_str())
+                .map(|item| item.track.uri.clone())
                 .collect()
         } else {
             return None;
         };
-        if uris.is_empty() {
-            return None;
-        }
-        Some(uris[rand::random_range(0..uris.len())].to_string())
+        (!uris.is_empty()).then_some(uris)
+    }
+
+    fn random_track_in(&self, context_uri: &str) -> Option<String> {
+        let uris = self.context_track_uris(context_uri)?;
+        Some(uris[rand::random_range(0..uris.len())].clone())
     }
 
     /// How many songs Spotify last said a context holds, from the library
@@ -3280,6 +3488,13 @@ impl App {
     }
 
     fn seek(&mut self, position_ms: u32) {
+        // Dragging the bar under the remembered song moves the point a press
+        // of play will resume from; there is no stream to seek yet.
+        if self.now_playing_live().is_none() && self.resume_track.is_some() {
+            self.resume_position_ms = position_ms;
+            self.session_dirty = true;
+            return;
+        }
         match self.target() {
             Target::Local => self.backend.player(PlayerCommand::Seek(position_ms)),
             Target::Remote(device_id) => {
@@ -3557,10 +3772,24 @@ impl App {
                 self.play_request(PlayRequest::context(uri), true);
             }
             Action::TogglePlay => self.toggle_play(),
+            Action::Next if self.resume_only() => {
+                self.step_resume(true);
+            }
             Action::Next => match self.target() {
                 Target::Local => self.backend.player(PlayerCommand::Next),
                 Target::Remote(device_id) => self.remote(RemoteAction::Next, device_id),
             },
+            // Previous restarts the song when it is far enough in and steps
+            // back otherwise, which is what librespot's own prev does; the
+            // remembered song answers it the same way, from a standstill.
+            Action::Previous if self.resume_only() => {
+                if self.resume_position_ms > RESTART_BEFORE_PREVIOUS {
+                    self.resume_position_ms = 0;
+                    self.session_dirty = true;
+                } else {
+                    self.step_resume(false);
+                }
+            }
             Action::Previous => match self.target() {
                 Target::Local => self.backend.player(PlayerCommand::Previous),
                 Target::Remote(device_id) => self.remote(RemoteAction::Previous, device_id),
@@ -4426,6 +4655,229 @@ mod tests {
         assert_eq!(volume_to_percent(0), 0);
         assert_eq!(volume_to_percent(percent_to_volume(70)), 70);
         assert_eq!(percent_to_volume(200), u16::MAX);
+    }
+
+    /// The song the last session ended on is shown, paused, at the position
+    /// it stopped at, so a cold start does not look like an empty player.
+    #[test]
+    fn the_remembered_song_is_shown_paused_at_its_position() {
+        use crate::api::models::{Album, ArtistRef, Track};
+        let mut app = headless_app();
+        app.resume_track = Some("spotify:track:abc".into());
+        app.resume_position_ms = 19_566;
+        assert!(
+            app.now_playing().is_none(),
+            "nothing to show until the song's details arrive"
+        );
+        app.track_cache.insert(
+            "abc".into(),
+            Track {
+                id: Some("abc".into()),
+                uri: "spotify:track:abc".into(),
+                name: "Karma Police".into(),
+                artists: vec![ArtistRef {
+                    id: None,
+                    name: "Radiohead".into(),
+                    uri: None,
+                }],
+                album: Some(Album {
+                    id: "ok".into(),
+                    name: "OK Computer".into(),
+                    ..Default::default()
+                }),
+                duration_ms: 264_000,
+                ..Default::default()
+            },
+        );
+        let now = app.now_playing().expect("the remembered song is shown");
+        assert!(now.resuming);
+        assert!(!now.playing, "it is shown paused, not played");
+        assert_eq!(now.title, "Karma Police");
+        assert_eq!(now.subtitle, "Radiohead");
+        assert_eq!(now.album_name, "OK Computer");
+        assert_eq!(now.duration_ms, 264_000);
+        assert_eq!(
+            now.position_ms, 19_566,
+            "the bar sits where the listener left it, not at zero"
+        );
+    }
+
+    /// Drawing the remembered song must not be mistaken for a song that
+    /// started: that would rewind the very position it exists to show.
+    #[test]
+    fn showing_the_remembered_song_keeps_its_position() {
+        use crate::api::models::Track;
+        let mut app = headless_app();
+        app.resume_track = Some("spotify:track:abc".into());
+        app.resume_position_ms = 19_566;
+        app.track_cache.insert(
+            "abc".into(),
+            Track {
+                id: Some("abc".into()),
+                uri: "spotify:track:abc".into(),
+                duration_ms: 264_000,
+                ..Default::default()
+            },
+        );
+        app.on_now_playing_changed();
+        assert_eq!(app.resume_position_ms, 19_566);
+        app.save_session();
+        assert_eq!(
+            app.resume_position_ms, 19_566,
+            "closing again must not lose the position"
+        );
+    }
+
+    /// Dragging the bar before pressing play moves where play will land.
+    #[test]
+    fn seeking_the_remembered_song_moves_the_resume_point() {
+        let mut app = headless_app();
+        app.resume_track = Some("spotify:track:abc".into());
+        app.resume_position_ms = 19_566;
+        app.seek(90_000);
+        assert_eq!(app.resume_position_ms, 90_000);
+    }
+
+    /// The point of the whole thing: play, pressed on a cold start, picks
+    /// the song up where it was left rather than at its beginning.
+    #[test]
+    fn pressing_play_on_a_cold_start_does_not_restart_the_song() {
+        let mut app = headless_app();
+        app.resume_context = Some("spotify:playlist:pl1".into());
+        app.resume_track = Some("spotify:track:abc".into());
+        app.resume_position_ms = 19_566;
+        app.toggle_play();
+        let request = app
+            .queued_play
+            .as_ref()
+            .expect("the resumed play is held for the engine");
+        assert_eq!(
+            request.context_uri.as_deref(),
+            Some("spotify:playlist:pl1"),
+            "it resumes inside the playlist it was left in"
+        );
+        assert_eq!(request.offset_uri.as_deref(), Some("spotify:track:abc"));
+        assert_eq!(
+            request.position_ms, 19_566,
+            "the song resumes where it stopped, not at zero"
+        );
+    }
+
+    /// A restored song is loaded and current, not playing. The transport
+    /// must act on it from that standstill: skipping moves through the
+    /// playlist it was left in without ever starting the restored song.
+    #[test]
+    fn the_transport_works_on_a_restored_song_without_playing_it() {
+        use crate::api::models::{PlayableItem, PlaylistItem, Track};
+        use crate::model::PagedList;
+        let row = |uri: &str| PlaylistItem {
+            item: Some(PlayableItem::Track(Track {
+                id: Some(uri.rsplit(':').next().unwrap().into()),
+                uri: uri.into(),
+                name: uri.into(),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        let ctx = egui::Context::default();
+        let mut app = headless_app();
+        app.playlist_pages.insert(
+            "pl1".into(),
+            PlaylistPage {
+                items: PagedList {
+                    items: vec![
+                        row("spotify:track:one"),
+                        row("spotify:track:two"),
+                        row("spotify:track:three"),
+                    ],
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        );
+        app.resume_context = Some("spotify:playlist:pl1".into());
+        app.resume_track = Some("spotify:track:two".into());
+        app.resume_position_ms = 19_566;
+        assert!(app.resume_only(), "loaded and current, but not playing");
+
+        // Next steps to the following song, at its start, still not playing.
+        app.apply(Action::Next, &ctx);
+        assert_eq!(app.resume_track.as_deref(), Some("spotify:track:three"));
+        assert_eq!(app.resume_position_ms, 0);
+        assert!(
+            app.queued_play.is_none() && app.local_list.is_none(),
+            "skipping must not start the restored song"
+        );
+        // Its details come from the rows already loaded, so the bar fills
+        // in at once rather than blanking.
+        let now = app.now_playing().expect("the new song is shown");
+        assert!(now.resuming && !now.playing);
+        assert_eq!(now.uri, "spotify:track:three");
+
+        // Previous steps back from the start of a song.
+        app.apply(Action::Previous, &ctx);
+        assert_eq!(app.resume_track.as_deref(), Some("spotify:track:two"));
+
+        // Past the threshold, Previous restarts instead, as it does while
+        // playing.
+        app.resume_position_ms = 19_566;
+        app.apply(Action::Previous, &ctx);
+        assert_eq!(app.resume_track.as_deref(), Some("spotify:track:two"));
+        assert_eq!(app.resume_position_ms, 0, "it restarts the song");
+
+        // The ends of the list wrap rather than dead-ending.
+        app.apply(Action::Previous, &ctx);
+        assert_eq!(app.resume_track.as_deref(), Some("spotify:track:one"));
+        app.apply(Action::Previous, &ctx);
+        assert_eq!(app.resume_track.as_deref(), Some("spotify:track:three"));
+
+        // And play still starts whatever the skipping settled on, in the
+        // playlist it belongs to.
+        app.apply(Action::TogglePlay, &ctx);
+        let request = app.queued_play.as_ref().expect("play starts it");
+        assert_eq!(
+            request.context_uri.as_deref(),
+            Some("spotify:playlist:pl1"),
+            "the playlist it was left in is kept"
+        );
+        assert_eq!(request.offset_uri.as_deref(), Some("spotify:track:three"));
+    }
+
+    /// Shuffle is the listener's mode and outlives a close: a skip from the
+    /// standstill lands elsewhere in the context, and shuffle stays on.
+    #[test]
+    fn skipping_a_restored_song_keeps_shuffle_on() {
+        use crate::api::models::{PlayableItem, PlaylistItem, Track};
+        use crate::model::PagedList;
+        let row = |uri: &str| PlaylistItem {
+            item: Some(PlayableItem::Track(Track {
+                uri: uri.into(),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        let ctx = egui::Context::default();
+        let mut app = headless_app();
+        app.playlist_pages.insert(
+            "pl1".into(),
+            PlaylistPage {
+                items: PagedList {
+                    items: vec![row("spotify:track:one"), row("spotify:track:two")],
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        );
+        app.resume_context = Some("spotify:playlist:pl1".into());
+        app.resume_track = Some("spotify:track:one".into());
+        app.shuffle_wanted = true;
+        app.apply(Action::Next, &ctx);
+        assert!(app.shuffle_wanted, "shuffle survives the skip");
+        assert_eq!(
+            app.resume_track.as_deref(),
+            Some("spotify:track:two"),
+            "a shuffled skip still lands on another song in the context"
+        );
     }
 
     fn headless_app() -> App {

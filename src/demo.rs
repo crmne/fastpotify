@@ -591,6 +591,23 @@ pub fn apply_flags(app: &mut App, page: Option<&str>, show: Option<&str>) {
                 app.actions.push(Action::SettingsChanged);
             }
             "focus" => app.settings.sidebar_visible = false,
+            // A cold start: no device is playing anything, and all the app
+            // has is the song the last session ended on.
+            "resume" => {
+                app.remote = None;
+                app.resume_context = Some("spotify:playlist:pl1".into());
+                app.resume_track = Some("spotify:track:trk0".into());
+                app.resume_position_ms = 19_566;
+            }
+            // The same cold start, one press of Next in: the song moved on
+            // and nothing started playing.
+            "resume-next" => {
+                app.remote = None;
+                app.resume_context = Some("spotify:playlist:pl1".into());
+                app.resume_track = Some("spotify:track:trk0".into());
+                app.resume_position_ms = 19_566;
+                app.actions.push(Action::Next);
+            }
             // The built-in skin, whatever the settings say, so shots are
             // the same everywhere and never show someone else's art.
             "winamp" => {

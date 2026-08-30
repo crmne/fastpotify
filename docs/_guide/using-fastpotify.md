@@ -15,6 +15,14 @@ The player bar shows what is playing locally or on another device. Click the
 title to open its album, the artist name to open the artist, or the heart to
 save the track.
 
+When you start Fastpotify and nothing is playing anywhere, the player bar
+shows the song the last session ended on, paused at the second it stopped at.
+Press play and it carries on from there rather than starting the song again.
+The rest of the transport works from that standstill too: next and previous
+step through the playlist it was left in without starting anything, previous
+restarts the song when it is more than a few seconds in, and dragging the
+progress bar moves where play will resume from.
+
 Music played on this computer follows the system's default output: plug in
 headphones, connect a Bluetooth speaker, or pick another device in the sound
 settings, and playback moves there within a couple of seconds.
