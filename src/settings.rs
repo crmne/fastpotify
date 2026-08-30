@@ -4,6 +4,50 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+/// Interface language. `System` follows the desktop locale.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Language {
+    #[default]
+    System,
+    English,
+    #[serde(rename = "es-ES")]
+    SpanishSpain,
+}
+
+impl Language {
+    pub const ALL: [Language; 3] = [Self::System, Self::English, Self::SpanishSpain];
+
+    pub fn label(self, catalog: crate::i18n::Catalog) -> &'static str {
+        match self {
+            Self::System => catalog.get("language.system"),
+            Self::English => catalog.get("language.english"),
+            Self::SpanishSpain => catalog.get("language.spanish"),
+        }
+    }
+
+    /// Pick the language a desktop locale should use.
+    pub fn resolve(choice: Self) -> Self {
+        match choice {
+            Self::System => detect_system_language(),
+            other => other,
+        }
+    }
+}
+
+fn detect_system_language() -> Language {
+    let locale = ["LC_ALL", "LC_CTYPE", "LANG"]
+        .iter()
+        .find_map(|key| std::env::var(key).ok().filter(|value| !value.is_empty()))
+        .unwrap_or_default()
+        .to_lowercase();
+    if locale.starts_with("es") {
+        Language::SpanishSpain
+    } else {
+        Language::English
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ThemeChoice {
@@ -37,11 +81,11 @@ impl VisMode {
 impl ThemeChoice {
     pub const ALL: [ThemeChoice; 3] = [Self::Dark, Self::Light, Self::System];
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self, catalog: crate::i18n::Catalog) -> &'static str {
         match self {
-            Self::Dark => "Dark",
-            Self::Light => "Light",
-            Self::System => "Follow system",
+            Self::Dark => catalog.get("theme.dark"),
+            Self::Light => catalog.get("theme.light"),
+            Self::System => catalog.get("theme.system"),
         }
     }
 }
@@ -62,6 +106,7 @@ pub struct Settings {
     pub audio_cache: bool,
     pub audio_cache_mb: u64,
     pub theme: ThemeChoice,
+    pub language: Language,
     /// Tint the interface with the colour of the playing album's art.
     pub accent_from_art: bool,
     /// Last local volume, 0..=65535.
@@ -143,6 +188,7 @@ impl Default for Settings {
             audio_cache: true,
             audio_cache_mb: 1024,
             theme: ThemeChoice::Dark,
+            language: Language::System,
             accent_from_art: true,
             volume: (u16::MAX as u32 * 70 / 100) as u16,
             sidebar_visible: true,

@@ -13,7 +13,7 @@ pub fn page(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     ui.add_space(8.0);
     ui.horizontal(|ui| {
-        theme::text(ui, "Queue", theme::bold(28.0), palette.text);
+        theme::text(ui, app.t("queue.title"), theme::bold(28.0), palette.text);
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if theme::icon_button(
                 ui,
@@ -21,7 +21,7 @@ pub fn page(app: &mut App, ui: &mut egui::Ui) {
                 18.0,
                 palette.secondary,
                 palette.text,
-                "Refresh",
+                app.t("common.refresh"),
             )
             .clicked()
             {
@@ -48,10 +48,17 @@ pub fn side_panel(app: &mut App, ui: &mut egui::Ui) {
     let response = panel.show(ui, |ui| {
         ui.horizontal(|ui| {
             ui.add_space(4.0);
-            theme::text(ui, "Queue", theme::bold(18.0), palette.text);
+            theme::text(ui, app.t("queue.title"), theme::bold(18.0), palette.text);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if theme::icon_button(ui, Icon::X, 18.0, palette.secondary, palette.text, "Close")
-                    .clicked()
+                if theme::icon_button(
+                    ui,
+                    Icon::X,
+                    18.0,
+                    palette.secondary,
+                    palette.text,
+                    app.t("common.close"),
+                )
+                .clicked()
                 {
                     app.actions.push(Action::ToggleQueuePanel);
                 }
@@ -61,7 +68,7 @@ pub fn side_panel(app: &mut App, ui: &mut egui::Ui) {
                     16.0,
                     palette.secondary,
                     palette.text,
-                    "Refresh",
+                    app.t("common.refresh"),
                 )
                 .clicked()
                 {
@@ -87,7 +94,7 @@ fn contents(app: &mut App, ui: &mut egui::Ui, compact: bool) {
     let queue = match &app.queue {
         Loadable::Loaded(queue) => queue.clone(),
         Loadable::Loading | Loadable::NotLoaded => {
-            widgets::loading_row(ui, &palette);
+            widgets::loading_row(ui, app);
             return;
         }
         Loadable::Failed(error) => {
@@ -105,7 +112,12 @@ fn contents(app: &mut App, ui: &mut egui::Ui, compact: bool) {
         })
     });
     if let Some(current) = &current {
-        theme::text(ui, "Now playing", theme::semibold(14.0), palette.text);
+        theme::text(
+            ui,
+            app.t("queue.now_playing"),
+            theme::semibold(14.0),
+            palette.text,
+        );
         ui.add_space(4.0);
         let context = RowContext::Uris(vec![current.uri().to_string()]);
         widgets::track_row(
@@ -133,12 +145,17 @@ fn contents(app: &mut App, ui: &mut egui::Ui, compact: bool) {
             ui,
             &palette,
             Icon::ListVideo,
-            "Nothing queued",
-            "Add songs to your queue and they'll show up here.",
+            app.t("queue.empty_title"),
+            app.t("queue.empty_body"),
         );
         return;
     }
-    theme::text(ui, "Next up", theme::semibold(14.0), palette.text);
+    theme::text(
+        ui,
+        app.t("queue.next_up"),
+        theme::semibold(14.0),
+        palette.text,
+    );
     ui.add_space(4.0);
     let uris: Vec<String> = queue
         .queue

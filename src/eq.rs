@@ -88,6 +88,32 @@ pub struct Preset {
     pub bands_db: [f32; 10],
 }
 
+impl Preset {
+    pub fn label_key(self) -> &'static str {
+        match self.name {
+            "Flat" => "eq.preset.flat",
+            "Classical" => "eq.preset.classical",
+            "Club" => "eq.preset.club",
+            "Dance" => "eq.preset.dance",
+            "Full Bass" => "eq.preset.full_bass",
+            "Full Bass & Treble" => "eq.preset.full_bass_treble",
+            "Full Treble" => "eq.preset.full_treble",
+            "Laptop Speakers / Headphones" => "eq.preset.laptop",
+            "Large Hall" => "eq.preset.large_hall",
+            "Live" => "eq.preset.live",
+            "Party" => "eq.preset.party",
+            "Pop" => "eq.preset.pop",
+            "Reggae" => "eq.preset.reggae",
+            "Rock" => "eq.preset.rock",
+            "Ska" => "eq.preset.ska",
+            "Soft" => "eq.preset.soft",
+            "Soft Rock" => "eq.preset.soft_rock",
+            "Techno" => "eq.preset.techno",
+            _ => "eq.preset.flat",
+        }
+    }
+}
+
 /// Winamp's presets, in its order.
 pub const PRESETS: &[Preset] = &[
     Preset {

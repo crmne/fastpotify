@@ -113,6 +113,7 @@ impl Default for AppOptions {
 pub struct App {
     pub dirs: AppDirs,
     pub settings: Settings,
+    pub catalog: crate::i18n::Catalog,
     settings_dirty: bool,
     last_settings_save: Instant,
     pub backend: Backend,
@@ -345,10 +346,16 @@ impl App {
         let media_controls = options
             .media_controls
             .then(|| MediaService::spawn(move || wake.wake()));
+        let catalog = crate::i18n::Catalog::new(settings.language);
         let wake = waker.clone();
         let tray = options
             .tray
-            .then(|| TrayService::spawn(move || wake.wake()))
+            .then(|| {
+                TrayService::spawn(
+                    move || wake.wake(),
+                    crate::i18n::TrayLabels::from_catalog(catalog),
+                )
+            })
             .flatten();
 
         let session = SessionState::load(&dirs.session_file());
@@ -362,6 +369,7 @@ impl App {
         let mut app = Self {
             dirs,
             settings,
+            catalog,
             settings_dirty: false,
             last_settings_save: Instant::now(),
             backend,
@@ -477,7 +485,40 @@ impl App {
             winamp: crate::winamp::WinampState::new(session.winamp_pos, tap, eq),
         };
         app.local.volume = app.settings.volume;
+        app.backend
+            .send(crate::backend::Command::SetLanguage(app.settings.language));
         app
+    }
+
+    pub fn refresh_catalog(&mut self) {
+        self.catalog = crate::i18n::Catalog::new(self.settings.language);
+    }
+
+    fn localize(&self, message: &str) -> String {
+        crate::i18n::translate(self.catalog, message)
+    }
+
+    fn refresh_chrome_i18n(&mut self) {
+        self.refresh_catalog();
+        self.backend
+            .send(crate::backend::Command::SetLanguage(self.settings.language));
+        if let Some(tray) = &mut self.tray {
+            tray.set_labels(crate::i18n::TrayLabels::from_catalog(self.catalog));
+        }
+        #[cfg(target_os = "macos")]
+        crate::mac_menu::refresh(self.catalog);
+    }
+
+    pub fn t(&self, key: &'static str) -> &'static str {
+        self.catalog.get(key)
+    }
+
+    pub fn tf(&self, key: &'static str, args: &[(&str, &str)]) -> String {
+        self.catalog.format(key, args)
+    }
+
+    pub fn shortcut(&self, key: &'static str) -> String {
+        self.tf(key, &[("mod", self.catalog.mod_key())])
     }
 
     /// Watches the queue control clients fill and keeps the snapshots they
@@ -891,13 +932,16 @@ impl App {
                     self.activating_receiver = None;
                     match result {
                         Ok(()) => {
-                            self.toast(format!("{name} is ready"));
+                            self.toast(self.tf("toast.receiver_ready", &[("name", &name)]));
                             // It takes a moment to appear in the device list.
                             self.pending_transfer_to = Some((name, Instant::now()));
                             self.devices_fetched_at = None;
                             self.refresh_devices();
                         }
-                        Err(error) => self.toast_error(format!("{name}: {error}")),
+                        Err(error) => self.toast_error(self.tf(
+                            "toast.receiver_error",
+                            &[("name", &name), ("error", &error)],
+                        )),
                     }
                 }
                 Event::Local(state) => self.handle_local(*state),
@@ -907,7 +951,7 @@ impl App {
                     let tint = self.palette.tint_from_art(color);
                     self.accents.insert(url, tint);
                 }
-                Event::Error(message) => self.toast_error(message),
+                Event::Error(message) => self.toast_error(self.localize(&message)),
                 Event::Lyrics { uri, result } => {
                     if self.lyrics_uri.as_deref() == Some(uri.as_str()) {
                         self.lyrics = match result {
@@ -937,7 +981,9 @@ impl App {
                 Event::UpdateAvailable { version, url } => {
                     let notice = crate::updates::Release { version, url };
                     if self.update.as_ref() != Some(&notice) {
-                        self.toast(format!("Fastpotify {} is out", notice.version));
+                        self.toast(
+                            self.tf("toast.update_available", &[("version", &notice.version)]),
+                        );
                     }
                     self.update = Some(notice);
                 }
@@ -969,7 +1015,7 @@ impl App {
             }
             AuthStatus::Failed(message) => {
                 self.sign_in_url = None;
-                self.toast_error(message.clone());
+                self.toast_error(self.localize(message));
             }
             _ => {}
         }
@@ -994,7 +1040,10 @@ impl App {
                 if self.queued_play.take().is_some() {
                     self.clear_play_pending();
                 }
-                self.toast_error(format!("Local playback: {message}"));
+                self.toast_error(self.tf(
+                    "toast.local_playback",
+                    &[("message", &self.localize(message))],
+                ));
             }
             LocalPlayback::Authorizing | LocalPlayback::Connecting => {}
         }
@@ -1057,12 +1106,12 @@ impl App {
         if let Some(error) = &state.error
             && self.local.error.as_deref() != Some(error.as_str())
         {
-            self.toast_error(error.clone());
+            self.toast_error(self.localize(error));
             // One unavailable track is Spotify's catalogue; several in a
             // row is the session's audio-key service gone bad, which
             // leaves librespot feeding the decoder encrypted bytes and
             // skipping through the whole album. A fresh session cures it.
-            if error.starts_with("This item isn't available") {
+            if error.starts_with("error.item_unavailable") {
                 let now = Instant::now();
                 self.unavailable_at
                     .retain(|at| now.duration_since(*at) < Duration::from_secs(20));
@@ -1075,7 +1124,7 @@ impl App {
                     self.unavailable_at.clear();
                     self.last_unavailable_reconnect = Some(now);
                     self.backend.send(Command::Reconnect);
-                    self.toast("Spotify's audio service faltered; reconnecting local playback");
+                    self.toast(self.t("toast.spotify_audio_reconnect"));
                 }
             }
         }
@@ -1299,9 +1348,9 @@ impl App {
                 self.winamp
                     .wear(Some(loaded.name.clone()), std::sync::Arc::new(skin));
                 if loaded.installed {
-                    self.toast(format!(
-                        "Added the {} skin",
-                        crate::winamp::label(&loaded.name)
+                    self.toast(self.tf(
+                        "toast.skin_added",
+                        &[("skin", &crate::winamp::label(&loaded.name))],
                     ));
                     self.winamp.list_choices(&self.dirs.skins_dir());
                     self.settings.skin = Some(loaded.name);
@@ -1309,7 +1358,13 @@ impl App {
                 }
             }
             Err(error) => {
-                self.toast_error(format!("{}: {error}", crate::winamp::label(&loaded.name)));
+                self.toast_error(self.tf(
+                    "toast.skin_error",
+                    &[
+                        ("skin", &crate::winamp::label(&loaded.name)),
+                        ("error", &error.to_string()),
+                    ],
+                ));
                 if !loaded.installed {
                     self.settings.skin = self.winamp.worn.clone();
                     self.settings_dirty = true;
@@ -2030,11 +2085,11 @@ impl App {
                 }
                 Err(error) => {
                     if matches!(error, crate::api::ApiError::SignInExpired { .. }) {
-                        self.auth = AuthStatus::Failed(
-                            "Your Spotify sign-in expired. Please sign in again.".into(),
-                        );
+                        self.auth = AuthStatus::Failed(self.t("error.signin_expired").to_string());
                     } else {
-                        self.toast_error(format!("Couldn't load your profile: {error}"));
+                        self.toast_error(
+                            self.tf("toast.profile_error", &[("error", &error.to_string())]),
+                        );
                     }
                 }
             },
@@ -2069,7 +2124,9 @@ impl App {
                             self.selected_device = None;
                         }
                     }
-                    Err(error) => self.toast_error(format!("Couldn't list devices: {error}")),
+                    Err(error) => self.toast_error(
+                        self.tf("toast.devices_error", &[("error", &error.to_string())]),
+                    ),
                 }
             }
             ApiResponse::PlaybackState { seq, result } => {
@@ -2325,7 +2382,9 @@ impl App {
                     if offset == 0 {
                         self.library.playlists = Loadable::Failed(error.to_string());
                     } else {
-                        self.toast_error(format!("Couldn't load more playlists: {error}"));
+                        self.toast_error(
+                            self.tf("toast.playlists_error", &[("error", &error.to_string())]),
+                        );
                     }
                 }
             },
@@ -3822,6 +3881,7 @@ impl App {
                 }
             }
             Action::SettingsChanged => {
+                self.refresh_catalog();
                 self.settings_dirty = true;
                 ctx.set_theme(match self.settings.theme {
                     ThemeChoice::Dark => egui::ThemePreference::Dark,

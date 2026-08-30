@@ -143,7 +143,7 @@ impl RodioSink {
                 Ok(())
             }
             Err(error) => {
-                let message = error.to_string();
+                let message = error.user_message();
                 log::error!("{message}");
                 (self.on_error)(message.clone());
                 Err(SinkError::ConnectionRefused(message))
@@ -197,7 +197,7 @@ impl Sink for RodioSink {
         // decoded into memory at once.
         while output.sink.len() > QUEUE_LIMIT {
             if output.failed() {
-                let message = "The audio output stopped working".to_string();
+                let message = crate::i18n::keyed("error.audio_stopped");
                 (self.on_error)(message.clone());
                 return Err(SinkError::OnWrite(message));
             }
@@ -209,12 +209,26 @@ impl Sink for RodioSink {
 
 #[derive(Debug, thiserror::Error)]
 enum OpenError {
-    #[error("No audio output device was found. Connect or enable one, then press play again.")]
+    #[error("error.no_audio_device")]
     NoDevice,
-    #[error("Cannot list the audio devices: {0}")]
+    #[error("error.list_devices")]
     Devices(#[from] cpal::DevicesError),
-    #[error("Cannot open the audio output: {0}")]
+    #[error("error.open_audio")]
     Stream(#[from] rodio::StreamError),
+}
+
+impl OpenError {
+    fn user_message(&self) -> String {
+        match self {
+            Self::NoDevice => crate::i18n::keyed("error.no_audio_device"),
+            Self::Devices(error) => {
+                crate::i18n::keyed_args("error.list_devices", &[("error", &error.to_string())])
+            }
+            Self::Stream(error) => {
+                crate::i18n::keyed_args("error.open_audio", &[("error", &error.to_string())])
+            }
+        }
+    }
 }
 
 fn open_output(preferred: Option<&str>) -> Result<Output, OpenError> {

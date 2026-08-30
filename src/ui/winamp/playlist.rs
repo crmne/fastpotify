@@ -599,7 +599,7 @@ fn menus(app: &mut App, view: &mut View, rows: &[Row], queue_uris: &[String], he
             super::menu_style(ui, unit);
             match name {
                 "add" => add_menu(app, ui),
-                "rem" => rem_menu(ui),
+                "rem" => rem_menu(app, ui),
                 "sel" => sel_menu(app, ui, rows),
                 "misc" => misc_menu(app, ui, rows),
                 _ => list_menu(app, ui, rows, queue_uris),
@@ -610,33 +610,37 @@ fn menus(app: &mut App, view: &mut View, rows: &[Row], queue_uris: &[String], he
 
 /// Where a song comes from here: the big window's search or Liked Songs.
 fn add_menu(app: &mut App, ui: &mut egui::Ui) {
-    if ui.button("Search Spotify").clicked() {
+    if ui.button(app.t("search.empty_title")).clicked() {
         app.actions.push(Action::FocusSearch);
         app.actions.push(Action::ToggleWinampWindow);
     }
-    if ui.button("Liked Songs").clicked() {
+    if ui.button(app.t("sidebar.liked_songs")).clicked() {
         app.actions.push(Action::Open(Page::LikedSongs));
         app.actions.push(Action::ToggleWinampWindow);
     }
 }
 
-fn rem_menu(ui: &mut egui::Ui) {
-    let why = "Spotify keeps its queue; no app can take from it.";
-    for label in ["Remove selected", "Remove all"] {
+fn rem_menu(app: &App, ui: &mut egui::Ui) {
+    let why = app.t("winamp.playlist.queue_note");
+    for label in [
+        app.t("winamp.playlist.remove_selected"),
+        app.t("winamp.playlist.remove_all"),
+    ] {
         ui.add_enabled(false, egui::Button::new(label))
             .on_disabled_hover_text(why);
     }
 }
 
 fn sel_menu(app: &mut App, ui: &mut egui::Ui, rows: &[Row]) {
+    let catalog = app.catalog;
     let selection = &mut app.winamp.playlist_selection;
-    if ui.button("All").clicked() {
+    if ui.button(catalog.get("winamp.playlist.all")).clicked() {
         selection.extend(rows.iter().map(|row| row.uri.clone()));
     }
-    if ui.button("None").clicked() {
+    if ui.button(catalog.get("winamp.playlist.none")).clicked() {
         selection.clear();
     }
-    if ui.button("Invert").clicked() {
+    if ui.button(catalog.get("winamp.playlist.invert")).clicked() {
         for row in rows {
             if !selection.remove(&row.uri) {
                 selection.insert(row.uri.clone());
@@ -652,17 +656,17 @@ fn misc_menu(app: &mut App, ui: &mut egui::Ui, rows: &[Row]) {
         .find(|row| app.winamp.playlist_selection.contains(&row.uri))
         .or_else(|| rows.iter().find(|row| row.current));
     let Some(row) = chosen else {
-        ui.add_enabled(false, egui::Button::new("Song info"));
+        ui.add_enabled(false, egui::Button::new(app.t("winamp.playlist.song_info")));
         return;
     };
     if let Some(album) = &row.album_id
-        && ui.button("Song info").clicked()
+        && ui.button(app.t("winamp.playlist.song_info")).clicked()
     {
         app.actions.push(Action::Open(Page::Album(album.clone())));
         app.actions.push(Action::ToggleWinampWindow);
     }
     if let Some(artist) = &row.artist_id
-        && ui.button("Artist").clicked()
+        && ui.button(app.t("common.artist")).clicked()
     {
         app.actions.push(Action::Open(Page::Artist(artist.clone())));
         app.actions.push(Action::ToggleWinampWindow);
@@ -682,12 +686,15 @@ fn list_menu(app: &mut App, ui: &mut egui::Ui, rows: &[Row], queue_uris: &[Strin
                 .collect()
         })
         .unwrap_or_default();
-    ui.menu_button("Load list", |ui| {
+    ui.menu_button(app.t("winamp.playlist.load_list"), |ui| {
         egui::ScrollArea::vertical()
             .max_height(220.0)
             .show(ui, |ui| {
                 if playlists.is_empty() {
-                    ui.add_enabled(false, egui::Button::new("No playlists yet"));
+                    ui.add_enabled(
+                        false,
+                        egui::Button::new(app.t("winamp.playlist.no_playlists")),
+                    );
                 }
                 for (name, uri) in &playlists {
                     if ui.button(name).clicked() {
@@ -703,8 +710,11 @@ fn list_menu(app: &mut App, ui: &mut egui::Ui, rows: &[Row], queue_uris: &[Strin
     });
     let saveable = !queue_uris.is_empty() || rows.iter().any(|row| row.current);
     if ui
-        .add_enabled(saveable, egui::Button::new("Save list"))
-        .on_hover_text("The queue, as a new playlist of yours")
+        .add_enabled(
+            saveable,
+            egui::Button::new(app.t("winamp.playlist.save_list")),
+        )
+        .on_hover_text(app.t("winamp.playlist.save_tooltip"))
         .clicked()
     {
         let mut uris: Vec<String> = rows
@@ -715,7 +725,7 @@ fn list_menu(app: &mut App, ui: &mut egui::Ui, rows: &[Row], queue_uris: &[Strin
         uris.extend(queue_uris.iter().cloned());
         let today = jiff::Zoned::now().strftime("%Y-%m-%d").to_string();
         app.actions.push(Action::CreatePlaylist {
-            name: format!("Queue {today}"),
+            name: app.tf("winamp.playlist.default_name", &[("date", &today)]),
             public: false,
             add_uris: uris,
         });

@@ -142,40 +142,45 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
     }
 }
 
-pub const SHORTCUTS: &[(&str, &str)] = &[
-    ("Space", "Play or pause"),
-    ("Ctrl+←  /  Ctrl+→", "Previous or next"),
-    ("Shift+←  /  Shift+→", "Seek 10 seconds"),
-    ("Ctrl+↑  /  Ctrl+↓", "Volume up or down"),
-    ("M", "Mute or unmute"),
-    ("S", "Toggle shuffle"),
-    ("R", "Cycle repeat"),
-    ("Q", "Show the queue"),
-    ("L", "Show the lyrics"),
-    ("Ctrl+F  or  /", "Search"),
-    ("Ctrl+B", "Show or hide the sidebar"),
-    ("Alt+←  /  Alt+→", "Back or forward"),
-    (
-        if cfg!(target_os = "macos") {
-            "Ctrl+Shift+H"
-        } else {
-            "Ctrl+H"
-        },
-        "Home",
-    ),
-    ("Ctrl+L", "Liked Songs"),
-    ("Ctrl+Shift+A", "Go to the playing artist"),
-    ("Ctrl+Shift+B", "Go to the playing album"),
-    (
-        if cfg!(target_os = "macos") {
-            "Ctrl+Shift+M"
-        } else {
-            "Ctrl+M"
-        },
-        "Winamp mini player",
-    ),
-    ("Ctrl+,", "Settings"),
-    ("Ctrl+/ or ?", "Keyboard shortcuts"),
-    ("Ctrl+W", "Close the window"),
-    ("Ctrl+Q", "Quit"),
-];
+pub fn shortcuts(app: &App) -> Vec<(String, &str)> {
+    let mod_key = app.catalog.mod_key();
+    let home_keys = if cfg!(target_os = "macos") {
+        app.t("shortcuts.keys.home_mac").to_string()
+    } else {
+        app.t("shortcuts.keys.home_other").to_string()
+    };
+    let winamp_keys = if cfg!(target_os = "macos") {
+        app.t("shortcuts.keys.winamp_mac").to_string()
+    } else {
+        app.t("shortcuts.keys.winamp_other").to_string()
+    };
+    vec![
+        ("Space".into(), app.t("shortcuts.play_pause")),
+        (
+            format!("{mod_key}+←  /  {mod_key}+→"),
+            app.t("shortcuts.prev_next"),
+        ),
+        ("Shift+←  /  Shift+→".into(), app.t("shortcuts.seek")),
+        (
+            format!("{mod_key}+↑  /  {mod_key}+↓"),
+            app.t("shortcuts.volume"),
+        ),
+        ("M".into(), app.t("shortcuts.mute")),
+        ("S".into(), app.t("shortcuts.shuffle")),
+        ("R".into(), app.t("shortcuts.repeat")),
+        ("Q".into(), app.t("shortcuts.queue")),
+        ("L".into(), app.t("shortcuts.lyrics")),
+        (format!("{mod_key}+F  or  /"), app.t("shortcuts.search")),
+        (format!("{mod_key}+B"), app.t("shortcuts.sidebar")),
+        ("Alt+←  /  Alt+→".into(), app.t("shortcuts.history")),
+        (home_keys, app.t("shortcuts.home")),
+        (format!("{mod_key}+L"), app.t("shortcuts.liked")),
+        (format!("{mod_key}+Shift+A"), app.t("shortcuts.go_artist")),
+        (format!("{mod_key}+Shift+B"), app.t("shortcuts.go_album")),
+        (winamp_keys, app.t("shortcuts.winamp")),
+        (format!("{mod_key}+,"), app.t("shortcuts.settings")),
+        (format!("{mod_key}+/ or ?"), app.t("shortcuts.help")),
+        (format!("{mod_key}+W"), app.t("shortcuts.close")),
+        (format!("{mod_key}+Q"), app.t("shortcuts.quit")),
+    ]
+}

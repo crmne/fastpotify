@@ -317,15 +317,15 @@ impl SearchFilter {
         Self::Episodes,
     ];
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self, catalog: crate::i18n::Catalog) -> &'static str {
         match self {
-            Self::All => "All",
-            Self::Songs => "Songs",
-            Self::Artists => "Artists",
-            Self::Albums => "Albums",
-            Self::Playlists => "Playlists",
-            Self::Podcasts => "Podcasts",
-            Self::Episodes => "Episodes",
+            Self::All => catalog.get("search_filter.all"),
+            Self::Songs => catalog.get("search_filter.songs"),
+            Self::Artists => catalog.get("search_filter.artists"),
+            Self::Albums => catalog.get("search_filter.albums"),
+            Self::Playlists => catalog.get("search_filter.playlists"),
+            Self::Podcasts => catalog.get("search_filter.podcasts"),
+            Self::Episodes => catalog.get("search_filter.episodes"),
         }
     }
 }
@@ -377,12 +377,12 @@ impl DiscographyFilter {
     pub const ALL: [DiscographyFilter; 4] =
         [Self::All, Self::Albums, Self::Singles, Self::AppearsOn];
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self, catalog: crate::i18n::Catalog) -> &'static str {
         match self {
-            Self::All => "All",
-            Self::Albums => "Albums",
-            Self::Singles => "Singles & EPs",
-            Self::AppearsOn => "Appears On",
+            Self::All => catalog.get("discography.all"),
+            Self::Albums => catalog.get("discography.albums"),
+            Self::Singles => catalog.get("discography.singles"),
+            Self::AppearsOn => catalog.get("discography.appears_on"),
         }
     }
 

@@ -23,7 +23,10 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, id: &str) {
         Loadable::Loaded(show) => {
             let mut byline = vec![(show.publisher.clone(), None)];
             if let Some(total) = show.total_episodes {
-                byline.push((format!("{total} episodes"), None));
+                byline.push((
+                    app.tf("show.episodes_count", &[("count", &total.to_string())]),
+                    None,
+                ));
             }
             hero(
                 app,
@@ -31,7 +34,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, id: &str) {
                 Hero {
                     image: pick_image(&show.images, 300),
                     liked: false,
-                    kind: "Podcast",
+                    kind: app.t("show.kind"),
                     title: &show.name,
                     description: None,
                     byline,
@@ -49,7 +52,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, id: &str) {
                             56.0,
                             palette.accent,
                             palette.on_accent,
-                            "Starting…",
+                            app.t("collection.starting"),
                         );
                     } else if theme::circle_button(
                         ui,
@@ -58,7 +61,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, id: &str) {
                         palette.accent,
                         palette.accent_hover,
                         palette.on_accent,
-                        "Play latest episode",
+                        app.t("show.play_latest"),
                     )
                     .clicked()
                     {
@@ -72,10 +75,14 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, id: &str) {
                     (
                         Icon::CircleCheck,
                         palette.accent,
-                        "Remove from Your Library",
+                        app.t("menu.remove_library"),
                     )
                 } else {
-                    (Icon::CirclePlus, palette.secondary, "Follow podcast")
+                    (
+                        Icon::CirclePlus,
+                        palette.secondary,
+                        app.t("show.follow_podcast"),
+                    )
                 };
                 if theme::icon_button(ui, icon, 26.0, color, palette.text, tooltip).clicked() {
                     app.actions.push(Action::ToggleSaved(show.uri.clone()));
@@ -86,7 +93,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, id: &str) {
                     26.0,
                     palette.secondary,
                     palette.text,
-                    "More",
+                    app.t("common.more"),
                 );
                 egui::Popup::menu(&more)
                     .frame(widgets::menu_frame(&palette))
@@ -94,7 +101,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, id: &str) {
             });
             ui.add_space(16.0);
             if !show.description.is_empty() {
-                theme::section_title(ui, &palette, "About");
+                theme::section_title(ui, &palette, app.t("show.about"));
                 ui.add_space(4.0);
                 let description = util::strip_html(&show.description);
                 let galley = crate::bidi::layout(
@@ -109,7 +116,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, id: &str) {
                 ui.add(egui::Label::new(galley));
                 ui.add_space(16.0);
             }
-            theme::section_title(ui, &palette, "All episodes");
+            theme::section_title(ui, &palette, app.t("show.all_episodes"));
             ui.add_space(6.0);
             let episodes = page.episodes.items.clone();
             let show_image = pick_image(&show.images, 64).map(str::to_string);
@@ -117,7 +124,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, id: &str) {
                 episode_row(app, ui, &episodes[index], show_image.as_deref());
             });
             if page.episodes.loading {
-                widgets::loading_row(ui, &palette);
+                widgets::loading_row(ui, app);
             }
             if let Some(error) = &page.episodes.error {
                 let error = error.clone();
@@ -132,7 +139,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, id: &str) {
         }
         Loadable::Loading | Loadable::NotLoaded => {
             ui.add_space(40.0);
-            widgets::loading_row(ui, &palette);
+            widgets::loading_row(ui, app);
         }
         Loadable::Failed(error) => {
             let error = error.clone();
@@ -231,7 +238,13 @@ pub fn episode_row(
         Icon::PlayFilled
     };
     if app.play_pending(&episode.uri) {
-        theme::circle_spinner(&mut child, 32.0, palette.text, palette.window, "Starting…");
+        theme::circle_spinner(
+            &mut child,
+            32.0,
+            palette.text,
+            palette.window,
+            app.t("collection.starting"),
+        );
     } else if theme::circle_button(
         &mut child,
         icon,
@@ -243,7 +256,7 @@ pub fn episode_row(
             palette.text
         },
         palette.window,
-        "Play",
+        app.t("common.play"),
     )
     .clicked()
     {
@@ -258,7 +271,7 @@ pub fn episode_row(
     }
     let mut meta = Vec::new();
     if let Some(date) = &episode.release_date {
-        meta.push(util::format_date(date));
+        meta.push(util::format_date(app.catalog, date));
     }
     let resume = episode.resume_point.as_ref();
     let remaining = resume
@@ -269,8 +282,11 @@ pub fn episode_row(
                 .saturating_sub(resume.resume_position_ms)
         });
     match remaining {
-        Some(left) => meta.push(format!("{} left", util::format_episode_ms(left))),
-        None => meta.push(util::format_episode_ms(episode.duration_ms)),
+        Some(left) => meta.push(app.tf(
+            "show.time_left",
+            &[("duration", &util::format_episode_ms(app.catalog, left))],
+        )),
+        None => meta.push(util::format_episode_ms(app.catalog, episode.duration_ms)),
     }
     let meta_text = meta.join(" • ");
     let meta_galley =
@@ -289,7 +305,7 @@ pub fn episode_row(
             ui.painter().text(
                 pos2(x + 20.0, footer_y),
                 egui::Align2::LEFT_CENTER,
-                "Played",
+                app.t("show.played"),
                 theme::regular(12.0),
                 palette.secondary,
             );

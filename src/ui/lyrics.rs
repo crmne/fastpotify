@@ -33,17 +33,24 @@ pub fn side_panel(app: &mut App, ui: &mut egui::Ui) {
     let response = panel.show(ui, |ui| {
         ui.horizontal(|ui| {
             ui.add_space(4.0);
-            theme::text(ui, "Lyrics", theme::bold(18.0), palette.text);
+            theme::text(ui, app.t("lyrics.title"), theme::bold(18.0), palette.text);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if theme::icon_button(ui, Icon::X, 18.0, palette.secondary, palette.text, "Close")
-                    .clicked()
+                if theme::icon_button(
+                    ui,
+                    Icon::X,
+                    18.0,
+                    palette.secondary,
+                    palette.text,
+                    app.t("common.close"),
+                )
+                .clicked()
                 {
                     app.actions.push(Action::ToggleLyricsPanel);
                 }
                 let loaded = matches!(&app.lyrics, Loadable::Loaded(Some(_)));
                 if loaded
                     && !app.lyrics_following
-                    && theme::pill_button(ui, &palette, "Follow", false).clicked()
+                    && theme::pill_button(ui, &palette, app.t("lyrics.follow"), false).clicked()
                 {
                     app.lyrics_following = true;
                     app.lyrics_line_shown = None;
@@ -67,22 +74,22 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
             ui,
             &palette,
             Icon::Mic,
-            "Nothing playing",
-            "Play something and its words show up here.",
+            app.t("player.nothing_playing"),
+            app.t("lyrics.empty_body"),
         );
         return;
     };
     let lyrics = match &app.lyrics {
         Loadable::NotLoaded | Loadable::Loading => {
-            widgets::loading_row(ui, &palette);
+            widgets::loading_row(ui, app);
             return;
         }
         Loadable::Failed(error) => {
-            let message = format!("Couldn't fetch the lyrics: {error}");
+            let message = app.tf("lyrics.fetch_error", &[("error", error)]);
             ui.add_space(8.0);
             theme::text(ui, message, theme::regular(13.0), palette.secondary);
             ui.add_space(8.0);
-            if theme::pill_button(ui, &palette, "Try again", false).clicked() {
+            if theme::pill_button(ui, &palette, app.t("common.try_again"), false).clicked() {
                 app.request_lyrics();
             }
             return;
@@ -92,8 +99,8 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
                 ui,
                 &palette,
                 Icon::Mic,
-                "No lyrics",
-                "No lyrics found for this one.",
+                app.t("lyrics.none_title"),
+                app.t("lyrics.none_body"),
             );
             return;
         }
@@ -102,8 +109,8 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
                 ui,
                 &palette,
                 Icon::Music,
-                "Instrumental",
-                "No words to follow on this one.",
+                app.t("lyrics.instrumental_title"),
+                app.t("lyrics.instrumental_body"),
             );
             return;
         }

@@ -1,5 +1,7 @@
 //! Formatting helpers shared by every view.
 
+use crate::i18n::Catalog;
+
 /// `3:45` for track lengths, `1:02:03` past an hour.
 pub fn format_duration_ms(ms: u32) -> String {
     let total = ms / 1000;
@@ -14,28 +16,49 @@ pub fn format_duration_ms(ms: u32) -> String {
 }
 
 /// `2 hr 13 min` for playlist totals, `45 min 12 sec` under an hour.
-pub fn format_total_ms(ms: u64) -> String {
+pub fn format_total_ms(catalog: Catalog, ms: u64) -> String {
     let total = ms / 1000;
     let hours = total / 3600;
     let minutes = (total / 60) % 60;
     let seconds = total % 60;
     if hours > 0 {
-        format!("{hours} hr {minutes} min")
+        catalog.format(
+            "format.total.hours_minutes",
+            &[
+                ("hours", &hours.to_string()),
+                ("minutes", &minutes.to_string()),
+            ],
+        )
     } else if minutes > 0 {
-        format!("{minutes} min {seconds} sec")
+        catalog.format(
+            "format.total.minutes_seconds",
+            &[
+                ("minutes", &minutes.to_string()),
+                ("seconds", &seconds.to_string()),
+            ],
+        )
     } else {
-        format!("{seconds} sec")
+        catalog.format("format.total.seconds", &[("seconds", &seconds.to_string())])
     }
 }
 
 /// Episode lengths read as `1 hr 12 min` or `38 min`.
-pub fn format_episode_ms(ms: u32) -> String {
+pub fn format_episode_ms(catalog: Catalog, ms: u32) -> String {
     let minutes = ms / 60_000;
     let hours = minutes / 60;
     if hours > 0 {
-        format!("{hours} hr {} min", minutes % 60)
+        catalog.format(
+            "format.episode.hours_minutes",
+            &[
+                ("hours", &hours.to_string()),
+                ("minutes", &(minutes % 60).to_string()),
+            ],
+        )
     } else {
-        format!("{} min", minutes.max(1))
+        catalog.format(
+            "format.episode.minutes",
+            &[("minutes", &minutes.max(1).to_string())],
+        )
     }
 }
 
@@ -52,7 +75,7 @@ pub fn format_count(count: u64) -> String {
 }
 
 /// `Jan 5, 2024` from an ISO-8601 timestamp or a bare date.
-pub fn format_date(iso: &str) -> String {
+pub fn format_date(catalog: Catalog, iso: &str) -> String {
     let date = iso.get(..10).unwrap_or(iso);
     let mut parts = date.split('-');
     let (Some(year), Some(month)) = (parts.next(), parts.next()) else {
@@ -60,23 +83,30 @@ pub fn format_date(iso: &str) -> String {
     };
     let day = parts.next();
     let month_name = match month {
-        "01" => "Jan",
-        "02" => "Feb",
-        "03" => "Mar",
-        "04" => "Apr",
-        "05" => "May",
-        "06" => "Jun",
-        "07" => "Jul",
-        "08" => "Aug",
-        "09" => "Sep",
-        "10" => "Oct",
-        "11" => "Nov",
-        "12" => "Dec",
+        "01" => catalog.get("date.month.jan"),
+        "02" => catalog.get("date.month.feb"),
+        "03" => catalog.get("date.month.mar"),
+        "04" => catalog.get("date.month.apr"),
+        "05" => catalog.get("date.month.may"),
+        "06" => catalog.get("date.month.jun"),
+        "07" => catalog.get("date.month.jul"),
+        "08" => catalog.get("date.month.aug"),
+        "09" => catalog.get("date.month.sep"),
+        "10" => catalog.get("date.month.oct"),
+        "11" => catalog.get("date.month.nov"),
+        "12" => catalog.get("date.month.dec"),
         _ => return iso.to_string(),
     };
     match day.and_then(|day| day.trim_start_matches('0').parse::<u8>().ok()) {
-        Some(day) => format!("{month_name} {day}, {year}"),
-        None => format!("{month_name} {year}"),
+        Some(day) => catalog.format(
+            "date.with_day",
+            &[
+                ("month", month_name),
+                ("day", &day.to_string()),
+                ("year", year),
+            ],
+        ),
+        None => catalog.format("date.month_year", &[("month", month_name), ("year", year)]),
     }
 }
 
@@ -158,11 +188,11 @@ pub fn app_icon_rgba(size: usize) -> Vec<u8> {
     rgba
 }
 
-pub fn greeting() -> &'static str {
+pub fn greeting(catalog: Catalog) -> &'static str {
     match local_hour() {
-        5..=11 => "Good morning",
-        12..=17 => "Good afternoon",
-        _ => "Good evening",
+        5..=11 => catalog.get("greeting.morning"),
+        12..=17 => catalog.get("greeting.afternoon"),
+        _ => catalog.get("greeting.evening"),
     }
 }
 
@@ -194,23 +224,29 @@ pub fn strip_html(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::i18n::Catalog;
+    use crate::settings::Language;
+
+    fn en() -> Catalog {
+        Catalog::new(Language::English)
+    }
 
     #[test]
     fn durations() {
         assert_eq!(format_duration_ms(225_000), "3:45");
         assert_eq!(format_duration_ms(3_723_000), "1:02:03");
-        assert_eq!(format_total_ms(7_980_000), "2 hr 13 min");
-        assert_eq!(format_total_ms(2_712_000), "45 min 12 sec");
-        assert_eq!(format_episode_ms(4_320_000), "1 hr 12 min");
+        assert_eq!(format_total_ms(en(), 7_980_000), "2 hr 13 min");
+        assert_eq!(format_total_ms(en(), 2_712_000), "45 min 12 sec");
+        assert_eq!(format_episode_ms(en(), 4_320_000), "1 hr 12 min");
     }
 
     #[test]
     fn counts_and_dates() {
         assert_eq!(format_count(1_234_567), "1,234,567");
         assert_eq!(format_count(12), "12");
-        assert_eq!(format_date("2024-01-05T10:00:00Z"), "Jan 5, 2024");
-        assert_eq!(format_date("2024-03"), "Mar 2024");
-        assert_eq!(format_date("2024"), "2024");
+        assert_eq!(format_date(en(), "2024-01-05T10:00:00Z"), "Jan 5, 2024");
+        assert_eq!(format_date(en(), "2024-03"), "Mar 2024");
+        assert_eq!(format_date(en(), "2024"), "2024");
     }
 
     #[test]

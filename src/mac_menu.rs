@@ -29,7 +29,10 @@ pub enum MenuCommand {
 }
 
 #[cfg(not(target_os = "macos"))]
-pub fn init() {}
+pub fn init(_catalog: crate::i18n::Catalog) {}
+
+#[cfg(not(target_os = "macos"))]
+pub fn refresh(_catalog: crate::i18n::Catalog) {}
 
 #[cfg(not(target_os = "macos"))]
 pub fn set_waker(_wake: impl Fn() + Send + Sync + 'static) {}
@@ -55,6 +58,25 @@ mod mac_impl {
 
     static COMMANDS: Mutex<Vec<MenuCommand>> = Mutex::new(Vec::new());
     static WAKER: Mutex<Option<Box<dyn Fn() + Send + Sync>>> = Mutex::new(None);
+    static LABELED_ITEMS: Mutex<Vec<(Retained<NSMenuItem>, &'static str)>> = Mutex::new(Vec::new());
+
+    fn label(catalog: crate::i18n::Catalog, key: &'static str) -> Retained<NSString> {
+        NSString::from_str(catalog.get(key))
+    }
+
+    fn remember(item: &Retained<NSMenuItem>, key: &'static str) {
+        if let Ok(mut list) = LABELED_ITEMS.lock() {
+            list.push((item.retain(), key));
+        }
+    }
+
+    pub fn refresh(catalog: crate::i18n::Catalog) {
+        if let Ok(list) = LABELED_ITEMS.lock() {
+            for (item, key) in list.iter() {
+                item.setTitle(&label(catalog, key));
+            }
+        }
+    }
 
     pub fn set_waker(wake: impl Fn() + Send + Sync + 'static) {
         if let Ok(mut w) = WAKER.lock() {
@@ -248,7 +270,7 @@ mod mac_impl {
         (container_item, menu)
     }
 
-    pub fn init() {
+    pub fn init(catalog: crate::i18n::Catalog) {
         let Some(mtm) = MainThreadMarker::new() else {
             return;
         };
@@ -273,278 +295,274 @@ mod mac_impl {
         {
             let settings_item = create_item(
                 mtm,
-                ns_string!("Settings…"),
+                &label(catalog, "mac.menu.settings"),
                 Some(sel!(openSettings:)),
                 ns_string!(","),
                 None,
                 Some(target),
             );
+            remember(&settings_item, "mac.menu.settings");
             let sep = NSMenuItem::separatorItem(mtm);
             app_menu.insertItem_atIndex(&settings_item, 1);
             app_menu.insertItem_atIndex(&sep, 2);
         }
 
         // 2. File menu
-        let (file_item, file_menu) = create_menu(mtm, ns_string!("File"));
-        file_menu.addItem(&create_item(
+        let (file_item, file_menu) = create_menu(mtm, &label(catalog, "mac.menu.file"));
+        remember(&file_item, "mac.menu.file");
+        let close_window = create_item(
             mtm,
-            ns_string!("Close Window"),
+            &label(catalog, "mac.menu.close_window"),
             Some(sel!(performClose:)),
             ns_string!("w"),
             None,
             None,
-        ));
+        );
+        remember(&close_window, "mac.menu.close_window");
+        file_menu.addItem(&close_window);
         menubar.addItem(&file_item);
 
         // 3. Edit menu. No Undo and Redo: egui's text fields handle Cmd+Z
         // themselves, and a menu item holding that chord would take it
         // from them.
-        let (edit_item, edit_menu) = create_menu(mtm, ns_string!("Edit"));
-        edit_menu.addItem(&create_item(
-            mtm,
-            ns_string!("Cut"),
-            Some(sel!(editCut:)),
-            ns_string!("x"),
-            None,
-            Some(target),
-        ));
-        edit_menu.addItem(&create_item(
-            mtm,
-            ns_string!("Copy"),
-            Some(sel!(editCopy:)),
-            ns_string!("c"),
-            None,
-            Some(target),
-        ));
-        edit_menu.addItem(&create_item(
-            mtm,
-            ns_string!("Paste"),
-            Some(sel!(editPaste:)),
-            ns_string!("v"),
-            None,
-            Some(target),
-        ));
-        edit_menu.addItem(&create_item(
-            mtm,
-            ns_string!("Select All"),
-            Some(sel!(editSelectAll:)),
-            ns_string!("a"),
-            None,
-            Some(target),
-        ));
+        let (edit_item, edit_menu) = create_menu(mtm, &label(catalog, "mac.menu.edit"));
+        remember(&edit_item, "mac.menu.edit");
+        for (key, action, shortcut) in [
+            ("mac.menu.cut", sel!(editCut:), "x"),
+            ("mac.menu.copy", sel!(editCopy:), "c"),
+            ("mac.menu.paste", sel!(editPaste:), "v"),
+            ("mac.menu.select_all", sel!(editSelectAll:), "a"),
+        ] {
+            let item = create_item(
+                mtm,
+                &label(catalog, key),
+                Some(action),
+                &NSString::from_str(shortcut),
+                None,
+                Some(target),
+            );
+            remember(&item, key);
+            edit_menu.addItem(&item);
+        }
         menubar.addItem(&edit_item);
 
         // 4. Playback menu
-        let (playback_item, playback_menu) = create_menu(mtm, ns_string!("Playback"));
-        playback_menu.addItem(&create_item(
-            mtm,
-            ns_string!("Play / Pause"),
-            Some(sel!(playPause:)),
-            ns_string!(""),
-            None,
-            Some(target),
-        ));
-        playback_menu.addItem(&create_item(
-            mtm,
-            ns_string!("Next Track"),
-            Some(sel!(nextTrack:)),
-            &NSString::from_str("\u{F703}"), // Right arrow
-            Some(NSEventModifierFlags::Command),
-            Some(target),
-        ));
-        playback_menu.addItem(&create_item(
-            mtm,
-            ns_string!("Previous Track"),
-            Some(sel!(previousTrack:)),
-            &NSString::from_str("\u{F702}"), // Left arrow
-            Some(NSEventModifierFlags::Command),
-            Some(target),
-        ));
+        let (playback_item, playback_menu) = create_menu(mtm, &label(catalog, "mac.menu.playback"));
+        remember(&playback_item, "mac.menu.playback");
+        for (key, action, shortcut, masks) in [
+            ("mac.menu.play_pause", sel!(playPause:), "", None),
+            (
+                "mac.menu.next_track",
+                sel!(nextTrack:),
+                "\u{F703}",
+                Some(NSEventModifierFlags::Command),
+            ),
+            (
+                "mac.menu.previous_track",
+                sel!(previousTrack:),
+                "\u{F702}",
+                Some(NSEventModifierFlags::Command),
+            ),
+        ] {
+            let item = create_item(
+                mtm,
+                &label(catalog, key),
+                Some(action),
+                &NSString::from_str(shortcut),
+                masks,
+                Some(target),
+            );
+            remember(&item, key);
+            playback_menu.addItem(&item);
+        }
         playback_menu.addItem(&NSMenuItem::separatorItem(mtm));
-        // Shift+arrow has no key equivalent here on purpose: a menu key
-        // equivalent fires ahead of the focused view, so binding it would
-        // take shift-arrow selection away from every text field. The window
-        // handles the same chord itself, and only when nothing has focus.
-        playback_menu.addItem(&create_item(
-            mtm,
-            ns_string!("Seek Forward (10s)"),
-            Some(sel!(seekForward:)),
-            ns_string!(""),
-            None,
-            Some(target),
-        ));
-        playback_menu.addItem(&create_item(
-            mtm,
-            ns_string!("Seek Backward (10s)"),
-            Some(sel!(seekBackward:)),
-            ns_string!(""),
-            None,
-            Some(target),
-        ));
+        for (key, action) in [
+            ("mac.menu.seek_forward", sel!(seekForward:)),
+            ("mac.menu.seek_backward", sel!(seekBackward:)),
+        ] {
+            let item = create_item(
+                mtm,
+                &label(catalog, key),
+                Some(action),
+                ns_string!(""),
+                None,
+                Some(target),
+            );
+            remember(&item, key);
+            playback_menu.addItem(&item);
+        }
         playback_menu.addItem(&NSMenuItem::separatorItem(mtm));
-        playback_menu.addItem(&create_item(
-            mtm,
-            ns_string!("Shuffle"),
-            Some(sel!(toggleShuffle:)),
-            ns_string!(""),
-            None,
-            Some(target),
-        ));
-        playback_menu.addItem(&create_item(
-            mtm,
-            ns_string!("Repeat"),
-            Some(sel!(cycleRepeat:)),
-            ns_string!(""),
-            None,
-            Some(target),
-        ));
+        for (key, action) in [
+            ("mac.menu.shuffle", sel!(toggleShuffle:)),
+            ("mac.menu.repeat", sel!(cycleRepeat:)),
+        ] {
+            let item = create_item(
+                mtm,
+                &label(catalog, key),
+                Some(action),
+                ns_string!(""),
+                None,
+                Some(target),
+            );
+            remember(&item, key);
+            playback_menu.addItem(&item);
+        }
         playback_menu.addItem(&NSMenuItem::separatorItem(mtm));
-        playback_menu.addItem(&create_item(
-            mtm,
-            ns_string!("Increase Volume"),
-            Some(sel!(volumeUp:)),
-            &NSString::from_str("\u{F700}"), // Up arrow
-            Some(NSEventModifierFlags::Command),
-            Some(target),
-        ));
-        playback_menu.addItem(&create_item(
-            mtm,
-            ns_string!("Decrease Volume"),
-            Some(sel!(volumeDown:)),
-            &NSString::from_str("\u{F701}"), // Down arrow
-            Some(NSEventModifierFlags::Command),
-            Some(target),
-        ));
-        playback_menu.addItem(&create_item(
-            mtm,
-            ns_string!("Mute"),
-            Some(sel!(toggleMute:)),
-            ns_string!(""),
-            None,
-            Some(target),
-        ));
+        for (key, action, shortcut, masks) in [
+            (
+                "mac.menu.volume_up",
+                sel!(volumeUp:),
+                "\u{F700}",
+                Some(NSEventModifierFlags::Command),
+            ),
+            (
+                "mac.menu.volume_down",
+                sel!(volumeDown:),
+                "\u{F701}",
+                Some(NSEventModifierFlags::Command),
+            ),
+            ("mac.menu.mute", sel!(toggleMute:), "", None),
+        ] {
+            let item = create_item(
+                mtm,
+                &label(catalog, key),
+                Some(action),
+                &NSString::from_str(shortcut),
+                masks,
+                Some(target),
+            );
+            remember(&item, key);
+            playback_menu.addItem(&item);
+        }
         menubar.addItem(&playback_item);
 
         // 5. View menu
-        let (view_item, view_menu) = create_menu(mtm, ns_string!("View"));
-        view_menu.addItem(&create_item(
-            mtm,
-            ns_string!("Back"),
-            Some(sel!(goBack:)),
-            ns_string!("["),
-            Some(NSEventModifierFlags::Command),
-            Some(target),
-        ));
-        view_menu.addItem(&create_item(
-            mtm,
-            ns_string!("Forward"),
-            Some(sel!(goForward:)),
-            ns_string!("]"),
-            Some(NSEventModifierFlags::Command),
-            Some(target),
-        ));
+        let (view_item, view_menu) = create_menu(mtm, &label(catalog, "mac.menu.view"));
+        remember(&view_item, "mac.menu.view");
+        for (key, action, shortcut, masks) in [
+            (
+                "mac.menu.back",
+                sel!(goBack:),
+                "[",
+                Some(NSEventModifierFlags::Command),
+            ),
+            (
+                "mac.menu.forward",
+                sel!(goForward:),
+                "]",
+                Some(NSEventModifierFlags::Command),
+            ),
+            (
+                "mac.menu.home",
+                sel!(openHome:),
+                "H",
+                Some(NSEventModifierFlags::Command | NSEventModifierFlags::Shift),
+            ),
+            (
+                "mac.menu.search",
+                sel!(focusSearch:),
+                "f",
+                Some(NSEventModifierFlags::Command),
+            ),
+            (
+                "mac.menu.liked",
+                sel!(openLikedSongs:),
+                "l",
+                Some(NSEventModifierFlags::Command),
+            ),
+            (
+                "mac.menu.toggle_sidebar",
+                sel!(toggleSidebar:),
+                "b",
+                Some(NSEventModifierFlags::Command),
+            ),
+            (
+                "mac.menu.queue",
+                sel!(toggleQueue:),
+                "u",
+                Some(NSEventModifierFlags::Command),
+            ),
+        ] {
+            if key == "mac.menu.home" {
+                view_menu.addItem(&NSMenuItem::separatorItem(mtm));
+            }
+            let item = create_item(
+                mtm,
+                &label(catalog, key),
+                Some(action),
+                &NSString::from_str(shortcut),
+                masks,
+                Some(target),
+            );
+            remember(&item, key);
+            view_menu.addItem(&item);
+        }
         view_menu.addItem(&NSMenuItem::separatorItem(mtm));
-        view_menu.addItem(&create_item(
+        let fullscreen = create_item(
             mtm,
-            ns_string!("Home"),
-            Some(sel!(openHome:)),
-            ns_string!("H"),
-            Some(NSEventModifierFlags::Command | NSEventModifierFlags::Shift),
-            Some(target),
-        ));
-        view_menu.addItem(&create_item(
-            mtm,
-            ns_string!("Search"),
-            Some(sel!(focusSearch:)),
-            ns_string!("f"),
-            Some(NSEventModifierFlags::Command),
-            Some(target),
-        ));
-        view_menu.addItem(&create_item(
-            mtm,
-            ns_string!("Liked Songs"),
-            Some(sel!(openLikedSongs:)),
-            ns_string!("l"),
-            Some(NSEventModifierFlags::Command),
-            Some(target),
-        ));
-        view_menu.addItem(&create_item(
-            mtm,
-            ns_string!("Toggle Sidebar"),
-            Some(sel!(toggleSidebar:)),
-            ns_string!("b"),
-            Some(NSEventModifierFlags::Command),
-            Some(target),
-        ));
-        view_menu.addItem(&create_item(
-            mtm,
-            ns_string!("Queue"),
-            Some(sel!(toggleQueue:)),
-            ns_string!("u"),
-            Some(NSEventModifierFlags::Command),
-            Some(target),
-        ));
-        view_menu.addItem(&NSMenuItem::separatorItem(mtm));
-        view_menu.addItem(&create_item(
-            mtm,
-            ns_string!("Toggle Full Screen"),
+            &label(catalog, "mac.menu.fullscreen"),
             Some(sel!(toggleFullScreen:)),
             ns_string!("f"),
             Some(NSEventModifierFlags::Control | NSEventModifierFlags::Command),
             None,
-        ));
+        );
+        remember(&fullscreen, "mac.menu.fullscreen");
+        view_menu.addItem(&fullscreen);
         menubar.addItem(&view_item);
 
         // 6. Window menu
-        let (window_item, window_menu) = create_menu(mtm, ns_string!("Window"));
-        window_menu.addItem(&create_item(
-            mtm,
-            ns_string!("Minimize"),
-            Some(sel!(performMiniaturize:)),
-            ns_string!("m"),
-            Some(NSEventModifierFlags::Command),
-            None,
-        ));
-        window_menu.addItem(&create_item(
-            mtm,
-            ns_string!("Zoom"),
-            Some(sel!(performZoom:)),
-            ns_string!(""),
-            None,
-            None,
-        ));
-        window_menu.addItem(&NSMenuItem::separatorItem(mtm));
-        window_menu.addItem(&create_item(
-            mtm,
-            ns_string!("Bring All to Front"),
-            Some(sel!(arrangeInFront:)),
-            ns_string!(""),
-            None,
-            None,
-        ));
+        let (window_item, window_menu) = create_menu(mtm, &label(catalog, "mac.menu.window"));
+        remember(&window_item, "mac.menu.window");
+        for (key, action, shortcut, masks) in [
+            (
+                "mac.menu.minimize",
+                sel!(performMiniaturize:),
+                "m",
+                Some(NSEventModifierFlags::Command),
+            ),
+            ("mac.menu.zoom", sel!(performZoom:), "", None),
+            ("mac.menu.bring_all_front", sel!(arrangeInFront:), "", None),
+        ] {
+            if key == "mac.menu.bring_all_front" {
+                window_menu.addItem(&NSMenuItem::separatorItem(mtm));
+            }
+            let item = create_item(
+                mtm,
+                &label(catalog, key),
+                Some(action),
+                &NSString::from_str(shortcut),
+                masks,
+                None,
+            );
+            remember(&item, key);
+            window_menu.addItem(&item);
+        }
         menubar.addItem(&window_item);
 
         // 7. Help menu
-        let (help_item, help_menu) = create_menu(mtm, ns_string!("Help"));
-        help_menu.addItem(&create_item(
-            mtm,
-            ns_string!("Keyboard Shortcuts"),
-            Some(sel!(showShortcuts:)),
-            ns_string!("/"),
-            Some(NSEventModifierFlags::Command),
-            Some(target),
-        ));
-        help_menu.addItem(&create_item(
-            mtm,
-            ns_string!("Fastpotify on GitHub"),
-            Some(sel!(openRepo:)),
-            ns_string!(""),
-            None,
-            Some(target),
-        ));
+        let (help_item, help_menu) = create_menu(mtm, &label(catalog, "mac.menu.help"));
+        remember(&help_item, "mac.menu.help");
+        for (key, action, shortcut, masks) in [
+            (
+                "mac.menu.shortcuts",
+                sel!(showShortcuts:),
+                "/",
+                Some(NSEventModifierFlags::Command),
+            ),
+            ("mac.menu.github", sel!(openRepo:), "", None),
+        ] {
+            let item = create_item(
+                mtm,
+                &label(catalog, key),
+                Some(action),
+                &NSString::from_str(shortcut),
+                masks,
+                Some(target),
+            );
+            remember(&item, key);
+            help_menu.addItem(&item);
+        }
         menubar.addItem(&help_item);
-
-        // NSMenuItem does not retain its target, and this one has to answer
         // for as long as the menu bar exists. It is a single process-wide
         // object, so leaking it is the whole lifetime story.
         std::mem::forget(handler);

@@ -433,7 +433,7 @@ fn full_window(
     if view
         .interact(layout::ABOUT, "about", Sense::click())
         .on_hover_cursor(egui::CursorIcon::PointingHand)
-        .on_hover_text("Back to the big window (Ctrl+M)")
+        .on_hover_text(app.shortcut("winamp.back_to_big"))
         .clicked()
     {
         app.actions.push(Action::ToggleWinampWindow);
@@ -473,7 +473,7 @@ fn shade_bar(
     }
     let unit = view.unit;
     egui::Popup::context_menu(&title).show(|ui| options_menu(app, ui, unit));
-    let big_window = "Back to the big window (Ctrl+M)";
+    let big_window = app.shortcut("winamp.back_to_big");
     if view
         .button(
             layout::OPTIONS_BUTTON,
@@ -481,7 +481,7 @@ fn shade_bar(
             sprites::OPTIONS_BUTTON_PRESSED,
             "logo",
         )
-        .on_hover_text(big_window)
+        .on_hover_text(&big_window)
         .clicked()
     {
         app.actions.push(Action::ToggleWinampWindow);
@@ -504,7 +504,7 @@ fn shade_bar(
             sprites::UNSHADE_BUTTON_PRESSED,
             "unshade",
         )
-        .on_hover_text("Roll the window down")
+        .on_hover_text(app.t("winamp.roll_down"))
         .clicked()
     {
         app.actions.push(Action::ToggleWinampShade);
@@ -516,7 +516,7 @@ fn shade_bar(
             sprites::CLOSE_BUTTON_PRESSED,
             "close",
         )
-        .on_hover_text(big_window)
+        .on_hover_text(&big_window)
         .clicked()
     {
         app.actions.push(Action::ToggleWinampWindow);
@@ -637,7 +637,7 @@ fn title_bar(app: &mut App, view: &mut View, ctx: &egui::Context, focused: bool)
     // The logo and the close button lead back to the big window: the mini
     // player is a way of looking at the same app, not a second one to
     // close. Quitting is in the menu and Ctrl+Q.
-    let big_window = "Back to the big window (Ctrl+M)";
+    let big_window = app.shortcut("winamp.back_to_big");
     if view
         .button(
             layout::OPTIONS_BUTTON,
@@ -645,7 +645,7 @@ fn title_bar(app: &mut App, view: &mut View, ctx: &egui::Context, focused: bool)
             sprites::OPTIONS_BUTTON_PRESSED,
             "logo",
         )
-        .on_hover_text(big_window)
+        .on_hover_text(&big_window)
         .clicked()
     {
         app.actions.push(Action::ToggleWinampWindow);
@@ -668,7 +668,7 @@ fn title_bar(app: &mut App, view: &mut View, ctx: &egui::Context, focused: bool)
             sprites::SHADE_BUTTON_PRESSED,
             "shade",
         )
-        .on_hover_text("Roll the window up")
+        .on_hover_text(app.t("winamp.roll_up"))
         .clicked()
     {
         app.actions.push(Action::ToggleWinampShade);
@@ -680,7 +680,7 @@ fn title_bar(app: &mut App, view: &mut View, ctx: &egui::Context, focused: bool)
             sprites::CLOSE_BUTTON_PRESSED,
             "close",
         )
-        .on_hover_text(big_window)
+        .on_hover_text(&big_window)
         .clicked()
     {
         app.actions.push(Action::ToggleWinampWindow);
@@ -694,7 +694,7 @@ fn options_menu(app: &mut App, ui: &mut Ui, unit: f32) {
     ui.set_min_width(font * 11.0);
     let scale = WinampState::scale(&app.settings, ui.ctx().pixels_per_point());
     ui.horizontal(|ui| {
-        ui.label("Size");
+        ui.label(app.t("winamp.size"));
         for candidate in 1..=MAX_SCALE {
             if ui
                 .selectable_label(candidate == scale, format!("{candidate}x"))
@@ -705,17 +705,20 @@ fn options_menu(app: &mut App, ui: &mut Ui, unit: f32) {
         }
     });
     let mut on_top = app.settings.winamp_on_top;
-    if ui.checkbox(&mut on_top, "Always on top").clicked() {
+    if ui
+        .checkbox(&mut on_top, app.t("winamp.always_on_top"))
+        .clicked()
+    {
         app.actions.push(Action::ToggleWinampOnTop);
     }
-    if ui.button("Choose a skin").clicked() {
+    if ui.button(app.t("winamp.choose_skin")).clicked() {
         app.actions.push(Action::Open(Page::Settings));
         app.actions.push(Action::ToggleWinampWindow);
     }
-    if ui.button("Big window").clicked() {
+    if ui.button(app.t("winamp.big_window")).clicked() {
         app.actions.push(Action::ToggleWinampWindow);
     }
-    if ui.button("Quit").clicked() {
+    if ui.button(app.t("common.quit")).clicked() {
         app.actions.push(Action::Quit);
     }
 }
@@ -753,7 +756,7 @@ fn clutter_bar(app: &mut App, view: &mut View, now: Option<&NowPlaying>) {
             app.settings.winamp_on_top,
             "clutter-a",
         )
-        .on_hover_text("Always on top")
+        .on_hover_text(app.t("winamp.always_on_top"))
         .clicked()
     {
         app.actions.push(Action::ToggleWinampOnTop);
@@ -765,7 +768,7 @@ fn clutter_bar(app: &mut App, view: &mut View, now: Option<&NowPlaying>) {
             false,
             "clutter-i",
         )
-        .on_hover_text("About the song")
+        .on_hover_text(app.t("winamp.about_song"))
         .clicked()
         && let Some(now) = now
     {
@@ -786,7 +789,7 @@ fn clutter_bar(app: &mut App, view: &mut View, now: Option<&NowPlaying>) {
             scale >= 2,
             "clutter-d",
         )
-        .on_hover_text("Size: 2x, 3x, 4x")
+        .on_hover_text(app.t("winamp.size_tooltip"))
         .clicked()
     {
         let next = if scale >= MAX_SCALE {
@@ -803,7 +806,7 @@ fn clutter_bar(app: &mut App, view: &mut View, now: Option<&NowPlaying>) {
             false,
             "clutter-v",
         )
-        .on_hover_text("Visualiser")
+        .on_hover_text(app.t("winamp.visualiser"))
         .clicked()
     {
         app.actions.push(Action::CycleVisualiser);
@@ -925,7 +928,7 @@ fn status(app: &mut App, view: &mut View, now: Option<&NowPlaying>) {
     if view
         .interact(layout::MONO, "mono", Sense::click())
         .on_hover_cursor(egui::CursorIcon::PointingHand)
-        .on_hover_text("Play in mono")
+        .on_hover_text(app.t("winamp.mono"))
         .clicked()
         && !mono
     {
@@ -934,7 +937,7 @@ fn status(app: &mut App, view: &mut View, now: Option<&NowPlaying>) {
     if view
         .interact(layout::STEREO, "stereo", Sense::click())
         .on_hover_cursor(egui::CursorIcon::PointingHand)
-        .on_hover_text("Play in stereo")
+        .on_hover_text(app.t("winamp.stereo"))
         .clicked()
         && mono
     {
@@ -1278,7 +1281,7 @@ fn transport(app: &mut App, view: &mut View, now: Option<&NowPlaying>) {
             sprites::EJECT_PRESSED,
             "eject",
         )
-        .on_hover_text("Open the big window")
+        .on_hover_text(app.t("winamp.open_big"))
         .clicked()
     {
         app.actions.push(Action::ToggleWinampWindow);

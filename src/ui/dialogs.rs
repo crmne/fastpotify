@@ -24,33 +24,70 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
         });
     let response = egui::Modal::new(egui::Id::new("dialog"))
         .frame(frame)
-        .backdrop_color(egui::Color32::from_black_alpha(if palette.dark { 150 } else { 80 }))
+        .backdrop_color(egui::Color32::from_black_alpha(if palette.dark {
+            150
+        } else {
+            80
+        }))
         .show(ctx, |ui| {
             ui.set_width(420.0);
             match dialog {
                 Dialog::CreatePlaylist { .. } => create_playlist(app, ui),
                 Dialog::EditPlaylist { .. } => edit_playlist(app, ui),
                 Dialog::ConfirmDeletePlaylist { id, name, owned } => {
-                    theme::text(ui, if owned { "Delete playlist?" } else { "Remove from Your Library?" }, theme::bold(20.0), palette.text);
+                    theme::text(
+                        ui,
+                        if owned {
+                            app.t("dialog.delete_playlist.title")
+                        } else {
+                            app.t("dialog.remove_library.title")
+                        },
+                        theme::bold(20.0),
+                        palette.text,
+                    );
                     ui.add_space(8.0);
                     let body = if owned {
-                        format!("This will delete “{name}” from Your Library. Spotify keeps deleted playlists recoverable for 90 days.")
+                        app.tf("dialog.delete_playlist.body", &[("name", &name)])
                     } else {
-                        format!("“{name}” will no longer appear in Your Library.")
+                        app.tf("dialog.remove_library.body", &[("name", &name)])
                     };
-                    ui.add(egui::Label::new(egui::RichText::new(body).font(theme::regular(14.0)).color(palette.secondary)).wrap());
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(body)
+                                .font(theme::regular(14.0))
+                                .color(palette.secondary),
+                        )
+                        .wrap(),
+                    );
                     ui.add_space(20.0);
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if theme::pill_button(ui, &palette, if owned { "Delete" } else { "Remove" }, true).clicked() {
+                        if theme::pill_button(
+                            ui,
+                            &palette,
+                            if owned {
+                                app.t("common.delete")
+                            } else {
+                                app.t("common.remove")
+                            },
+                            true,
+                        )
+                        .clicked()
+                        {
                             app.actions.push(Action::DeletePlaylist(id.clone()));
                         }
-                        if theme::pill_button(ui, &palette, "Cancel", false).clicked() {
+                        if theme::pill_button(ui, &palette, app.t("common.cancel"), false).clicked()
+                        {
                             app.actions.push(Action::CloseDialog);
                         }
                     });
                 }
                 Dialog::Shortcuts => {
-                    theme::text(ui, "Keyboard shortcuts", theme::bold(20.0), palette.text);
+                    theme::text(
+                        ui,
+                        app.t("dialog.shortcuts.title"),
+                        theme::bold(20.0),
+                        palette.text,
+                    );
                     ui.add_space(12.0);
                     // `theme::text` truncates, which in a grid makes each cell
                     // claim almost no width and turns "Ctrl+Shift+A" into
@@ -67,15 +104,15 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                         .num_columns(2)
                         .spacing([24.0, 8.0])
                         .show(ui, |ui| {
-                            for (keys, description) in super::keys::SHORTCUTS {
-                                cell(ui, keys, theme::semibold(13.0), palette.text);
+                            for (keys, description) in super::keys::shortcuts(app) {
+                                cell(ui, &keys, theme::semibold(13.0), palette.text);
                                 cell(ui, description, theme::regular(13.5), palette.secondary);
                                 ui.end_row();
                             }
                         });
                     ui.add_space(16.0);
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if theme::pill_button(ui, &palette, "Done", true).clicked() {
+                        if theme::pill_button(ui, &palette, app.t("common.done"), true).clicked() {
                             app.actions.push(Action::CloseDialog);
                         }
                     });
@@ -83,27 +120,22 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 Dialog::PremiumNeeded => {
                     theme::text(
                         ui,
-                        "This account cannot play music here",
+                        app.t("dialog.premium.title"),
                         theme::bold(20.0),
                         palette.text,
                     );
                     ui.add_space(8.0);
                     ui.add(
                         egui::Label::new(
-                            egui::RichText::new(
-                                "Spotify only lets Premium accounts play through another \
-                                 app, on this computer or on any other device. With a Free \
-                                 account Fastpotify can show your library and search, but \
-                                 play, pause, and skip will not work.",
-                            )
-                            .font(theme::regular(14.0))
-                            .color(palette.secondary),
+                            egui::RichText::new(app.t("dialog.premium.body"))
+                                .font(theme::regular(14.0))
+                                .color(palette.secondary),
                         )
                         .wrap(),
                     );
                     ui.add_space(20.0);
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if theme::pill_button(ui, &palette, "OK", true).clicked() {
+                        if theme::pill_button(ui, &palette, app.t("common.ok"), true).clicked() {
                             app.actions.push(Action::CloseDialog);
                         }
                     });
@@ -146,6 +178,7 @@ fn text_field(
 
 fn create_playlist(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
+    let catalog = app.catalog;
     let busy = app.playlist_busy;
     let Some(Dialog::CreatePlaylist {
         name,
@@ -155,24 +188,43 @@ fn create_playlist(app: &mut App, ui: &mut egui::Ui) {
     else {
         return;
     };
-    theme::text(ui, "New playlist", theme::bold(20.0), palette.text);
+    theme::text(
+        ui,
+        catalog.get("dialog.new_playlist.title"),
+        theme::bold(20.0),
+        palette.text,
+    );
     ui.add_space(12.0);
-    theme::text(ui, "Name", theme::medium(13.0), palette.secondary);
-    let field = text_field(ui, &palette, "playlist-name", name, "My playlist", true);
+    theme::text(
+        ui,
+        catalog.get("common.name"),
+        theme::medium(13.0),
+        palette.secondary,
+    );
+    let field = text_field(
+        ui,
+        &palette,
+        "playlist-name",
+        name,
+        catalog.get("dialog.playlist_name_hint"),
+        true,
+    );
     ui.add_space(10.0);
     ui.horizontal(|ui| {
         super::widgets::switch(ui, &palette, public);
-        theme::text(ui, "Public playlist", theme::regular(14.0), palette.text);
+        theme::text(
+            ui,
+            catalog.get("dialog.public_playlist"),
+            theme::regular(14.0),
+            palette.text,
+        );
     });
     if !add_uris.is_empty() {
         ui.add_space(6.0);
-        let count = add_uris.len();
+        let count = add_uris.len().to_string();
         theme::text(
             ui,
-            format!(
-                "{count} song{} will be added.",
-                if count == 1 { "" } else { "s" }
-            ),
+            catalog.format("dialog.songs_will_be_added", &[("count", &count)]),
             theme::regular(13.0),
             palette.secondary,
         );
@@ -186,7 +238,9 @@ fn create_playlist(app: &mut App, ui: &mut egui::Ui) {
         if busy {
             theme::spinner(ui, 18.0, palette.accent);
         } else {
-            let create = theme::pill_button(ui, &palette, "Create", true).clicked() || submit;
+            let create = theme::pill_button(ui, &palette, catalog.get("common.create"), true)
+                .clicked()
+                || submit;
             if create && !name_value.is_empty() {
                 app.actions.push(Action::CreatePlaylist {
                     name: name_value.clone(),
@@ -194,7 +248,7 @@ fn create_playlist(app: &mut App, ui: &mut egui::Ui) {
                     add_uris: uris.clone(),
                 });
             }
-            if theme::pill_button(ui, &palette, "Cancel", false).clicked() {
+            if theme::pill_button(ui, &palette, catalog.get("common.cancel"), false).clicked() {
                 app.actions.push(Action::CloseDialog);
             }
         }
@@ -203,6 +257,7 @@ fn create_playlist(app: &mut App, ui: &mut egui::Ui) {
 
 fn edit_playlist(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
+    let catalog = app.catalog;
     let busy = app.playlist_busy;
     let Some(Dialog::EditPlaylist {
         id,
@@ -213,12 +268,34 @@ fn edit_playlist(app: &mut App, ui: &mut egui::Ui) {
     else {
         return;
     };
-    theme::text(ui, "Edit details", theme::bold(20.0), palette.text);
+    theme::text(
+        ui,
+        catalog.get("dialog.edit_details"),
+        theme::bold(20.0),
+        palette.text,
+    );
     ui.add_space(12.0);
-    theme::text(ui, "Name", theme::medium(13.0), palette.secondary);
-    text_field(ui, &palette, "edit-name", name, "Playlist name", true);
+    theme::text(
+        ui,
+        catalog.get("common.name"),
+        theme::medium(13.0),
+        palette.secondary,
+    );
+    text_field(
+        ui,
+        &palette,
+        "edit-name",
+        name,
+        catalog.get("dialog.playlist_name_hint_edit"),
+        true,
+    );
     ui.add_space(10.0);
-    theme::text(ui, "Description", theme::medium(13.0), palette.secondary);
+    theme::text(
+        ui,
+        catalog.get("common.description"),
+        theme::medium(13.0),
+        palette.secondary,
+    );
     Frame::new()
         .fill(palette.surface)
         .corner_radius(CornerRadius::same(6))
@@ -228,7 +305,8 @@ fn edit_playlist(app: &mut App, ui: &mut egui::Ui) {
                 egui::TextEdit::multiline(description)
                     .id(egui::Id::new("edit-description"))
                     .hint_text(
-                        egui::RichText::new("Add an optional description").color(palette.dim),
+                        egui::RichText::new(catalog.get("dialog.description_hint"))
+                            .color(palette.dim),
                     )
                     .font(theme::regular(14.0))
                     .frame(egui::Frame::NONE)
@@ -239,7 +317,12 @@ fn edit_playlist(app: &mut App, ui: &mut egui::Ui) {
     ui.add_space(10.0);
     ui.horizontal(|ui| {
         super::widgets::switch(ui, &palette, public);
-        theme::text(ui, "Public playlist", theme::regular(14.0), palette.text);
+        theme::text(
+            ui,
+            catalog.get("dialog.public_playlist"),
+            theme::regular(14.0),
+            palette.text,
+        );
     });
     ui.add_space(20.0);
     let id = id.clone();
@@ -250,7 +333,9 @@ fn edit_playlist(app: &mut App, ui: &mut egui::Ui) {
         if busy {
             theme::spinner(ui, 18.0, palette.accent);
         } else {
-            if theme::pill_button(ui, &palette, "Save", true).clicked() && !name_value.is_empty() {
+            if theme::pill_button(ui, &palette, catalog.get("common.save"), true).clicked()
+                && !name_value.is_empty()
+            {
                 app.actions.push(Action::UpdatePlaylist {
                     id: id.clone(),
                     name: name_value.clone(),
@@ -258,7 +343,7 @@ fn edit_playlist(app: &mut App, ui: &mut egui::Ui) {
                     public: public_value,
                 });
             }
-            if theme::pill_button(ui, &palette, "Cancel", false).clicked() {
+            if theme::pill_button(ui, &palette, catalog.get("common.cancel"), false).clicked() {
                 app.actions.push(Action::CloseDialog);
             }
         }

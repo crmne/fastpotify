@@ -165,6 +165,7 @@ pub async fn wait_for_code(
     port: u16,
     expected_state: &str,
     mut cancel: watch::Receiver<bool>,
+    catalog: crate::i18n::Catalog,
 ) -> Result<String> {
     let address: SocketAddr = ([127, 0, 0, 1], port).into();
     let listener = TcpListener::bind(address)
@@ -190,8 +191,11 @@ pub async fn wait_for_code(
         }
         let outcome = parse_request_line(&request_line, expected_state);
         let (status, body) = match &outcome {
-            Ok(_) => ("200 OK", success_page()),
-            Err(error) => ("400 Bad Request", failure_page(&error.to_string())),
+            Ok(_) => ("200 OK", browser_success_page(catalog)),
+            Err(error) => (
+                "400 Bad Request",
+                browser_failure_page(catalog, &error.to_string()),
+            ),
         };
         let response = format!(
             "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nCache-Control: no-store\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
@@ -441,7 +445,7 @@ fn now_secs() -> u64 {
 
 fn page(title: &str, heading: &str, body: &str, accent: &str) -> String {
     format!(
-        "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>{title}</title>\
+        "<!doctype html><html><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>{title}</title>\
 <style>:root{{color-scheme:dark}}body{{margin:0;min-height:100vh;display:grid;place-items:center;background:#0f1114;color:#e8eaed;font-family:Inter,system-ui,sans-serif}}\
 main{{max-width:28rem;padding:2.5rem;border-radius:1.25rem;background:#181b20;box-shadow:0 20px 60px rgba(0,0,0,.5);text-align:center}}\
 .mark{{width:64px;height:64px;border-radius:50%;background:{accent};display:grid;place-items:center;margin:0 auto 1.25rem}}\
@@ -451,20 +455,23 @@ main{{max-width:28rem;padding:2.5rem;border-radius:1.25rem;background:#181b20;bo
     )
 }
 
-fn success_page() -> String {
+/// HTML shown in the browser after a successful Spotify redirect.
+pub fn browser_success_page(catalog: crate::i18n::Catalog) -> String {
     page(
-        "Signed in to Fastpotify",
-        "You're signed in",
-        "You can close this tab and go back to Fastpotify.",
+        catalog.get("auth.browser.title_success"),
+        catalog.get("auth.browser.heading_success"),
+        catalog.get("auth.browser.body_success"),
         "#1ed760",
     )
 }
 
-fn failure_page(reason: &str) -> String {
+/// HTML shown when the redirect listener rejects the request.
+pub fn browser_failure_page(catalog: crate::i18n::Catalog, reason: &str) -> String {
+    let body = catalog.format("auth.browser.body_failure", &[("reason", reason)]);
     page(
-        "Sign-in failed",
-        "Sign-in didn't complete",
-        &format!("{reason}. Return to Fastpotify and try again."),
+        catalog.get("auth.browser.title_failure"),
+        catalog.get("auth.browser.heading_failure"),
+        &body,
         "#f5717f",
     )
 }

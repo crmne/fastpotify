@@ -12,6 +12,8 @@ use std::time::Duration;
 
 use ksni::blocking::TrayMethods;
 
+use crate::i18n::TrayLabels;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TrayCommand {
     Show,
@@ -26,6 +28,7 @@ struct FastTray {
     commands: Sender<TrayCommand>,
     wake: Arc<dyn Fn() + Send + Sync>,
     playing: bool,
+    labels: TrayLabels,
 }
 
 impl FastTray {
@@ -42,7 +45,7 @@ impl ksni::Tray for FastTray {
     }
 
     fn title(&self) -> String {
-        "Fastpotify".into()
+        self.labels.tooltip.clone()
     }
 
     fn icon_pixmap(&self) -> Vec<ksni::Icon> {
@@ -69,7 +72,7 @@ impl ksni::Tray for FastTray {
         use ksni::menu::*;
         vec![
             StandardItem {
-                label: "Show / hide Fastpotify".into(),
+                label: self.labels.show_hide.clone(),
                 activate: Box::new(|tray: &mut Self| tray.send(TrayCommand::ShowHide)),
                 ..Default::default()
             }
@@ -77,29 +80,29 @@ impl ksni::Tray for FastTray {
             MenuItem::Separator,
             StandardItem {
                 label: if self.playing {
-                    "Pause".into()
+                    self.labels.pause.clone()
                 } else {
-                    "Play".into()
+                    self.labels.play.clone()
                 },
                 activate: Box::new(|tray: &mut Self| tray.send(TrayCommand::PlayPause)),
                 ..Default::default()
             }
             .into(),
             StandardItem {
-                label: "Next".into(),
+                label: self.labels.next.clone(),
                 activate: Box::new(|tray: &mut Self| tray.send(TrayCommand::Next)),
                 ..Default::default()
             }
             .into(),
             StandardItem {
-                label: "Previous".into(),
+                label: self.labels.previous.clone(),
                 activate: Box::new(|tray: &mut Self| tray.send(TrayCommand::Previous)),
                 ..Default::default()
             }
             .into(),
             MenuItem::Separator,
             StandardItem {
-                label: "Quit".into(),
+                label: self.labels.quit.clone(),
                 activate: Box::new(|tray: &mut Self| tray.send(TrayCommand::Quit)),
                 ..Default::default()
             }
@@ -116,12 +119,13 @@ pub struct TrayService {
 
 impl TrayService {
     /// Registers the tray item. `None` when no status-notifier host exists.
-    pub fn spawn(wake: impl Fn() + Send + Sync + 'static) -> Option<Self> {
+    pub fn spawn(wake: impl Fn() + Send + Sync + 'static, labels: TrayLabels) -> Option<Self> {
         let (sender, commands) = std::sync::mpsc::channel();
         let tray = FastTray {
             commands: sender,
             wake: Arc::new(wake),
             playing: false,
+            labels,
         };
         match tray.spawn() {
             Ok(handle) => Some(Self {
@@ -146,6 +150,11 @@ impl TrayService {
             self.playing = playing;
             self.handle.update(|tray| tray.playing = playing);
         }
+    }
+
+    /// Rebuilds menu labels after a language change.
+    pub fn set_labels(&mut self, labels: TrayLabels) {
+        self.handle.update(|tray| tray.labels = labels);
     }
 
     /// Nothing to do: the item lives on its own thread from the start.

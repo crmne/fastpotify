@@ -81,13 +81,13 @@ fn now_playing_block(app: &mut App, ui: &mut egui::Ui, region: Rect, now: Option
         text_ui.spacing_mut().item_spacing.y = 2.0;
         theme::text(
             &mut text_ui,
-            "Nothing playing",
+            app.t("player.nothing_playing"),
             theme::medium(14.0),
             palette.secondary,
         );
         theme::text(
             &mut text_ui,
-            "Pick a song, album, or playlist",
+            app.t("player.pick_something"),
             theme::regular(12.0),
             palette.dim,
         );
@@ -167,9 +167,13 @@ fn now_playing_block(app: &mut App, ui: &mut egui::Ui, region: Rect, now: Option
     if !now.is_episode {
         let saved = app.is_saved(&now.uri).unwrap_or(false);
         let (icon, color, tooltip) = if saved {
-            (Icon::HeartFilled, palette.accent, "Remove from Liked Songs")
+            (
+                Icon::HeartFilled,
+                palette.accent,
+                app.t("menu.remove_liked"),
+            )
         } else {
-            (Icon::Heart, palette.secondary, "Save to Liked Songs")
+            (Icon::Heart, palette.secondary, app.t("menu.save_liked"))
         };
         // Sit the heart just past the actual text, not at the region's far
         // edge, so it stays visually attached to the title.
@@ -250,7 +254,7 @@ fn transport(app: &mut App, ui: &mut egui::Ui, now: Option<&NowPlaying>, region:
         } else {
             palette.text
         },
-        "Shuffle",
+        app.t("common.shuffle"),
     )
     .clicked()
     {
@@ -264,7 +268,7 @@ fn transport(app: &mut App, ui: &mut egui::Ui, now: Option<&NowPlaying>, region:
         18.0,
         dim,
         palette.text,
-        "Previous",
+        app.t("player.previous"),
     )
     .clicked()
     {
@@ -296,7 +300,11 @@ fn transport(app: &mut App, ui: &mut egui::Ui, now: Option<&NowPlaying>, region:
             palette.text,
             hover,
             palette.window,
-            if playing { "Pause" } else { "Play" },
+            if playing {
+                app.t("common.pause")
+            } else {
+                app.t("common.play")
+            },
         )
         .clicked()
         {
@@ -311,7 +319,7 @@ fn transport(app: &mut App, ui: &mut egui::Ui, now: Option<&NowPlaying>, region:
         18.0,
         dim,
         palette.text,
-        "Next",
+        app.t("common.next"),
     )
     .clicked()
     {
@@ -319,9 +327,9 @@ fn transport(app: &mut App, ui: &mut egui::Ui, now: Option<&NowPlaying>, region:
     }
 
     let (repeat_icon, repeat_color, tooltip) = match repeat {
-        RepeatMode::Off => (Icon::Repeat, dim, "Repeat"),
-        RepeatMode::Context => (Icon::Repeat, palette.accent, "Repeat one"),
-        RepeatMode::Track => (Icon::Repeat1, palette.accent, "Repeat off"),
+        RepeatMode::Off => (Icon::Repeat, dim, app.t("player.repeat")),
+        RepeatMode::Context => (Icon::Repeat, palette.accent, app.t("player.repeat_context")),
+        RepeatMode::Track => (Icon::Repeat1, palette.accent, app.t("player.repeat_track")),
     };
     let mut cell = centered(ui, slot(widths[4]));
     if theme::icon_button(
@@ -449,7 +457,11 @@ fn extras(app: &mut App, ui: &mut egui::Ui, now: Option<&NowPlaying>) {
         18.0,
         palette.secondary,
         palette.text,
-        if shown == 0 { "Unmute" } else { "Mute" },
+        if shown == 0 {
+            app.t("player.unmute")
+        } else {
+            app.t("player.mute")
+        },
     )
     .clicked()
     {
@@ -467,7 +479,7 @@ fn extras(app: &mut App, ui: &mut egui::Ui, now: Option<&NowPlaying>) {
             palette.secondary
         },
         palette.text,
-        "Connect to a device",
+        app.t("player.connect_device"),
     );
     ui.ctx().data_mut(|data| {
         data.insert_temp(egui::Id::new(super::devices::BUTTON_RECT_ID), devices.rect)
@@ -486,7 +498,7 @@ fn extras(app: &mut App, ui: &mut egui::Ui, now: Option<&NowPlaying>) {
             palette.secondary
         },
         palette.text,
-        "Queue",
+        app.t("player.queue"),
     )
     .clicked()
     {
@@ -502,7 +514,7 @@ fn extras(app: &mut App, ui: &mut egui::Ui, now: Option<&NowPlaying>) {
             palette.secondary
         },
         palette.text,
-        "Lyrics",
+        app.t("player.lyrics"),
     )
     .clicked()
     {

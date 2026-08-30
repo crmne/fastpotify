@@ -258,7 +258,12 @@ pub fn item_menu(
     ui.set_max_width(300.0);
     let uri = item.uri().to_string();
     let label = item.name().to_string();
-    if menu_item(ui, &palette, Some(Icon::ListEnd), "Add to queue") {
+    if menu_item(
+        ui,
+        &palette,
+        Some(Icon::ListEnd),
+        app.t("menu.add_to_queue"),
+    ) {
         app.actions.push(Action::AddToQueue {
             uri: uri.clone(),
             label: label.clone(),
@@ -267,18 +272,18 @@ pub fn item_menu(
     if item.is_track() {
         let saved = app.is_saved(&uri).unwrap_or(false);
         let (icon, text) = if saved {
-            (Icon::HeartFilled, "Remove from Liked Songs")
+            (Icon::HeartFilled, app.t("menu.remove_liked"))
         } else {
-            (Icon::Heart, "Save to Liked Songs")
+            (Icon::Heart, app.t("menu.save_liked"))
         };
         if menu_item(ui, &palette, Some(icon), text) {
             app.actions.push(Action::ToggleSaved(uri.clone()));
         }
         let playlists = app.editable_playlists();
-        ui.menu_button("Add to playlist", |ui| {
+        ui.menu_button(app.t("menu.add_to_playlist"), |ui| {
             ui.set_min_width(220.0);
             ui.set_max_width(300.0);
-            if menu_item(ui, &palette, Some(Icon::Plus), "New playlist") {
+            if menu_item(ui, &palette, Some(Icon::Plus), app.t("menu.new_playlist")) {
                 app.actions.push(Action::ShowDialog(Dialog::CreatePlaylist {
                     name: String::new(),
                     public: false,
@@ -302,7 +307,12 @@ pub fn item_menu(
                     }
                 });
         });
-    } else if menu_item(ui, &palette, Some(Icon::Bookmark), "Save episode") {
+    } else if menu_item(
+        ui,
+        &palette,
+        Some(Icon::Bookmark),
+        app.t("menu.save_episode"),
+    ) {
         app.actions.push(Action::ToggleSaved(uri.clone()));
     }
     if let Some(RowContext::Context {
@@ -311,14 +321,19 @@ pub fn item_menu(
     }) = context
     {
         if let Some(index) = index {
-            if index > 0 && menu_item(ui, &palette, Some(Icon::ChevronUp), "Move up") {
+            if index > 0 && menu_item(ui, &palette, Some(Icon::ChevronUp), app.t("menu.move_up")) {
                 app.actions.push(Action::MoveInPlaylist {
                     playlist_id: playlist_id.clone(),
                     from: index as u32,
                     to: index as u32 - 1,
                 });
             }
-            if menu_item(ui, &palette, Some(Icon::ChevronDown), "Move down") {
+            if menu_item(
+                ui,
+                &palette,
+                Some(Icon::ChevronDown),
+                app.t("menu.move_down"),
+            ) {
                 app.actions.push(Action::MoveInPlaylist {
                     playlist_id: playlist_id.clone(),
                     from: index as u32,
@@ -326,7 +341,12 @@ pub fn item_menu(
                 });
             }
         }
-        if menu_item(ui, &palette, Some(Icon::Minus), "Remove from this playlist") {
+        if menu_item(
+            ui,
+            &palette,
+            Some(Icon::Minus),
+            app.t("menu.remove_from_playlist"),
+        ) {
             app.actions.push(Action::RemoveFromPlaylist {
                 playlist_id: playlist_id.clone(),
                 uris: vec![uri.clone()],
@@ -342,13 +362,13 @@ pub fn item_menu(
                 .filter(|artist| artist.id.is_some())
                 .collect();
             if artists.len() == 1 {
-                if menu_item(ui, &palette, Some(Icon::User), "Go to artist") {
+                if menu_item(ui, &palette, Some(Icon::User), app.t("menu.go_to_artist")) {
                     app.actions.push(Action::Open(Page::Artist(
                         artists[0].id.clone().unwrap_or_default(),
                     )));
                 }
             } else if artists.len() > 1 {
-                ui.menu_button("Go to artist", |ui| {
+                ui.menu_button(app.t("menu.go_to_artist"), |ui| {
                     ui.set_min_width(200.0);
                     for artist in &artists {
                         if menu_item(ui, &palette, Some(Icon::User), &artist.name) {
@@ -361,7 +381,7 @@ pub fn item_menu(
             }
             if let Some(album) = &track.album
                 && !album.id.is_empty()
-                && menu_item(ui, &palette, Some(Icon::Disc), "Go to album")
+                && menu_item(ui, &palette, Some(Icon::Disc), app.t("menu.go_to_album"))
             {
                 app.actions
                     .push(Action::Open(Page::Album(album.id.clone())));
@@ -369,17 +389,22 @@ pub fn item_menu(
         }
         PlayableItem::Episode(episode) => {
             if let Some(show) = &episode.show
-                && menu_item(ui, &palette, Some(Icon::Mic), "Go to podcast")
+                && menu_item(ui, &palette, Some(Icon::Mic), app.t("menu.go_to_podcast"))
             {
                 app.actions.push(Action::Open(Page::Show(show.id.clone())));
             }
         }
     }
     menu_separator(ui, &palette);
-    if menu_item(ui, &palette, Some(Icon::Copy), "Copy link") {
+    if menu_item(ui, &palette, Some(Icon::Copy), app.t("menu.copy_link")) {
         app.actions.push(Action::CopyLink(uri.clone()));
     }
-    if menu_item(ui, &palette, Some(Icon::ExternalLink), "Open in Spotify") {
+    if menu_item(
+        ui,
+        &palette,
+        Some(Icon::ExternalLink),
+        app.t("menu.open_in_spotify"),
+    ) {
         app.actions.push(Action::OpenInSpotify(uri));
     }
 }
@@ -396,17 +421,31 @@ pub fn context_menu_items(
     ui.set_min_width(200.0);
     ui.set_max_width(300.0);
     let kind = util::uri_kind(uri).unwrap_or("");
-    if menu_item(ui, &palette, Some(Icon::Play), "Play") {
+    if menu_item(ui, &palette, Some(Icon::Play), app.t("common.play")) {
         app.actions.push(Action::PlayContext {
             uri: uri.to_string(),
             offset_uri: None,
             offset_index: None,
         });
     }
-    if kind != "artist" && menu_item(ui, &palette, Some(Icon::Shuffle), "Shuffle play") {
+    if kind != "artist"
+        && menu_item(
+            ui,
+            &palette,
+            Some(Icon::Shuffle),
+            app.t("menu.shuffle_play"),
+        )
+    {
         app.actions.push(Action::ShufflePlay(uri.to_string()));
     }
-    if kind == "album" && menu_item(ui, &palette, Some(Icon::ListEnd), "Add to queue") {
+    if kind == "album"
+        && menu_item(
+            ui,
+            &palette,
+            Some(Icon::ListEnd),
+            app.t("menu.add_to_queue"),
+        )
+    {
         app.actions.push(Action::AddToQueue {
             uri: uri.to_string(),
             label: name.to_string(),
@@ -414,16 +453,16 @@ pub fn context_menu_items(
     }
     let saved = app.is_saved(uri).unwrap_or(false);
     let (icon, text) = match (kind, saved) {
-        ("artist", true) => (Icon::CircleX, "Unfollow"),
-        ("artist", false) => (Icon::CirclePlus, "Follow"),
-        (_, true) => (Icon::CircleX, "Remove from Your Library"),
-        (_, false) => (Icon::CirclePlus, "Add to Your Library"),
+        ("artist", true) => (Icon::CircleX, app.t("menu.unfollow")),
+        ("artist", false) => (Icon::CirclePlus, app.t("common.follow")),
+        (_, true) => (Icon::CircleX, app.t("menu.remove_library")),
+        (_, false) => (Icon::CirclePlus, app.t("menu.add_library")),
     };
     if owned_playlist.is_none() && menu_item(ui, &palette, Some(icon), text) {
         app.actions.push(Action::ToggleSaved(uri.to_string()));
     }
     if let Some(playlist) = owned_playlist {
-        if menu_item(ui, &palette, Some(Icon::Pencil), "Edit details") {
+        if menu_item(ui, &palette, Some(Icon::Pencil), app.t("menu.edit_details")) {
             app.actions.push(Action::ShowDialog(Dialog::EditPlaylist {
                 id: playlist.id.clone(),
                 name: playlist.name.clone(),
@@ -435,7 +474,7 @@ pub fn context_menu_items(
                 public: playlist.public.unwrap_or(false),
             }));
         }
-        if menu_item(ui, &palette, Some(Icon::Trash), "Delete") {
+        if menu_item(ui, &palette, Some(Icon::Trash), app.t("common.delete")) {
             app.actions
                 .push(Action::ShowDialog(Dialog::ConfirmDeletePlaylist {
                     id: playlist.id.clone(),
@@ -445,10 +484,15 @@ pub fn context_menu_items(
         }
     }
     menu_separator(ui, &palette);
-    if menu_item(ui, &palette, Some(Icon::Copy), "Copy link") {
+    if menu_item(ui, &palette, Some(Icon::Copy), app.t("menu.copy_link")) {
         app.actions.push(Action::CopyLink(uri.to_string()));
     }
-    if menu_item(ui, &palette, Some(Icon::ExternalLink), "Open in Spotify") {
+    if menu_item(
+        ui,
+        &palette,
+        Some(Icon::ExternalLink),
+        app.t("menu.open_in_spotify"),
+    ) {
         app.actions.push(Action::OpenInSpotify(uri.to_string()));
     }
 }
@@ -824,7 +868,7 @@ pub fn track_row(ui: &mut Ui, app: &mut App, row: TrackRow<'_>) {
             painter.text(
                 pos2(cell.left(), cell.center().y),
                 egui::Align2::LEFT_CENTER,
-                util::format_date(added),
+                util::format_date(app.catalog, added),
                 theme::regular(13.0),
                 palette.secondary,
             );
@@ -848,9 +892,9 @@ pub fn track_row(ui: &mut Ui, app: &mut App, row: TrackRow<'_>) {
                 (Icon::Heart, palette.secondary)
             };
             let tooltip = if saved == Some(true) {
-                "Remove from Liked Songs"
+                app.t("menu.remove_liked")
             } else {
-                "Save to Liked Songs"
+                app.t("menu.save_liked")
             };
             if theme::icon_button(&mut child, icon, 16.0, color, palette.text, tooltip).clicked() {
                 app.actions
@@ -889,7 +933,7 @@ pub fn track_row(ui: &mut Ui, app: &mut App, row: TrackRow<'_>) {
             18.0,
             palette.secondary,
             palette.text,
-            "More",
+            app.t("common.more"),
         );
         egui::Popup::menu(&more)
             .id(menu_id)
@@ -1004,7 +1048,7 @@ pub fn explicit_badge(ui: &mut Ui, palette: &Palette) {
 #[expect(clippy::fn_params_excessive_bools)]
 pub fn table_header(
     ui: &mut Ui,
-    palette: &Palette,
+    app: &App,
     show_album: bool,
     show_added: bool,
     show_added_by: bool,
@@ -1012,6 +1056,7 @@ pub fn table_header(
     sort: Option<crate::model::TableSort>,
 ) -> Option<crate::model::SortColumn> {
     use crate::model::SortColumn;
+    let palette = app.palette;
     let width = ui.available_width();
     let (rect, _) = ui.allocate_exact_size(vec2(width, 34.0), Sense::hover());
     let font = theme::regular(12.0);
@@ -1103,7 +1148,7 @@ pub fn table_header(
         }
         if response
             .on_hover_cursor(egui::CursorIcon::PointingHand)
-            .on_hover_text("The list's own order, reversed")
+            .on_hover_text(app.t("table.sort_reverse"))
             .clicked()
         {
             number_clicked = true;
@@ -1113,7 +1158,7 @@ pub fn table_header(
     if show_cover {
         x += 52.0;
     }
-    heading(ui, x, "TITLE", SortColumn::Title);
+    heading(ui, x, app.t("table.title"), SortColumn::Title);
     let medium = width > 560.0;
     let wide = width > 760.0;
     let album_width = if show_album && medium {
@@ -1131,15 +1176,15 @@ pub fn table_header(
     let right_fixed = 36.0 + 56.0 + 36.0 + 8.0;
     let mut cx = rect.right() - right_fixed - added_width - added_by_width - album_width;
     if album_width > 0.0 {
-        heading(ui, cx, "ALBUM", SortColumn::Album);
+        heading(ui, cx, app.t("table.album"), SortColumn::Album);
         cx += album_width;
     }
     if added_by_width > 0.0 {
-        heading(ui, cx, "ADDED BY", SortColumn::AddedBy);
+        heading(ui, cx, app.t("table.added_by"), SortColumn::AddedBy);
         cx += added_by_width;
     }
     if added_width > 0.0 {
-        heading(ui, cx, "DATE ADDED", SortColumn::Added);
+        heading(ui, cx, app.t("table.date_added"), SortColumn::Added);
     }
     if number_clicked {
         clicked = Some(SortColumn::Index);
@@ -1181,7 +1226,7 @@ pub fn table_header(
     }
     if response
         .on_hover_cursor(egui::CursorIcon::PointingHand)
-        .on_hover_text("Sort by duration")
+        .on_hover_text(app.t("table.sort_duration"))
         .clicked()
     {
         clicked = Some(SortColumn::Duration);
@@ -1324,7 +1369,7 @@ pub fn card(
                 palette.accent,
                 palette.accent_hover,
                 palette.on_accent,
-                "Play",
+                app.t("common.play"),
             )
             .clicked();
         }
@@ -1367,11 +1412,12 @@ pub fn grid(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui)) {
     });
 }
 
-pub fn loading_row(ui: &mut Ui, palette: &Palette) {
+pub fn loading_row(ui: &mut Ui, app: &App) {
+    let palette = app.palette;
     ui.horizontal(|ui| {
         ui.add_space(8.0);
         theme::spinner(ui, 18.0, palette.accent);
-        theme::subtle(ui, palette, "Loading…");
+        theme::subtle(ui, &palette, app.t("common.loading"));
     });
 }
 
@@ -1382,7 +1428,14 @@ pub fn error_row(ui: &mut Ui, app: &mut App, message: &str, retry: Option<Page>)
         theme::icon(ui, Icon::CircleAlert, 16.0, palette.danger);
         theme::text(ui, message, theme::regular(13.0), palette.secondary);
         if let Some(page) = retry
-            && theme::soft_button(ui, &palette, Some(Icon::Refresh), "Retry", false).clicked()
+            && theme::soft_button(
+                ui,
+                &palette,
+                Some(Icon::Refresh),
+                app.t("common.retry"),
+                false,
+            )
+            .clicked()
         {
             app.actions.push(Action::Reload(page));
         }

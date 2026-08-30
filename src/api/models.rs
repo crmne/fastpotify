@@ -206,17 +206,17 @@ impl Album {
             .map(|date| &date[..date.len().min(4)])
     }
 
-    pub fn kind_label(&self) -> &'static str {
+    pub fn kind_label(&self, catalog: crate::i18n::Catalog) -> &'static str {
         match self
             .album_group
             .as_deref()
             .or(self.album_type.as_deref())
             .unwrap_or("album")
         {
-            "single" => "Single",
-            "compilation" => "Compilation",
-            "appears_on" => "Appears On",
-            _ => "Album",
+            "single" => catalog.get("album_kind.single"),
+            "compilation" => catalog.get("album_kind.compilation"),
+            "appears_on" => catalog.get("album_kind.appears_on"),
+            _ => catalog.get("album_kind.album"),
         }
     }
 }

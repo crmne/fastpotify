@@ -20,7 +20,10 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, id: &str) {
             let mut byline = Vec::new();
             if let Some(followers) = &artist.followers {
                 byline.push((
-                    format!("{} followers", util::format_count(followers.total)),
+                    app.tf(
+                        "artist.followers",
+                        &[("count", &util::format_count(followers.total))],
+                    ),
                     None,
                 ));
             }
@@ -42,7 +45,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, id: &str) {
                 Hero {
                     image: pick_image(&artist.images, 300),
                     liked: false,
-                    kind: "Artist",
+                    kind: app.t("common.artist"),
                     title: &artist.name,
                     description: None,
                     byline,
@@ -53,7 +56,13 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, id: &str) {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 18.0;
                 if app.play_pending(&artist.uri) {
-                    theme::circle_spinner(ui, 56.0, palette.accent, palette.on_accent, "Starting…");
+                    theme::circle_spinner(
+                        ui,
+                        56.0,
+                        palette.accent,
+                        palette.on_accent,
+                        app.t("artist.starting"),
+                    );
                 } else if theme::circle_button(
                     ui,
                     Icon::PlayFilled,
@@ -61,7 +70,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, id: &str) {
                     palette.accent,
                     palette.accent_hover,
                     palette.on_accent,
-                    "Play",
+                    app.t("common.play"),
                 )
                 .clicked()
                 {
@@ -74,7 +83,11 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, id: &str) {
                 if theme::pill_button(
                     ui,
                     &palette,
-                    if following { "Following" } else { "Follow" },
+                    if following {
+                        app.t("common.following")
+                    } else {
+                        app.t("common.follow")
+                    },
                     false,
                 )
                 .clicked()
@@ -87,7 +100,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, id: &str) {
                     26.0,
                     palette.secondary,
                     palette.text,
-                    "More",
+                    app.t("common.more"),
                 );
                 egui::Popup::menu(&more)
                     .frame(widgets::menu_frame(&palette))
@@ -98,7 +111,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, id: &str) {
             ui.add_space(20.0);
 
             // Popular.
-            theme::section_title(ui, &palette, "Popular");
+            theme::section_title(ui, &palette, app.t("artist.popular"));
             ui.add_space(4.0);
             match &page.top_tracks {
                 Loadable::Loaded(tracks) if !tracks.is_empty() => {
@@ -134,9 +147,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, id: &str) {
                             &palette,
                             None,
                             if page.show_all_top {
-                                "Show less"
+                                app.t("artist.show_less")
                             } else {
-                                "See more"
+                                app.t("artist.see_more")
                             },
                             false,
                         )
@@ -147,9 +160,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, id: &str) {
                     }
                 }
                 Loadable::Loaded(_) => {
-                    theme::subtle(ui, &palette, "No popular songs to show.");
+                    theme::subtle(ui, &palette, app.t("artist.no_popular"));
                 }
-                Loadable::Loading | Loadable::NotLoaded => widgets::loading_row(ui, &palette),
+                Loadable::Loading | Loadable::NotLoaded => widgets::loading_row(ui, app),
                 Loadable::Failed(error) => {
                     let error = error.clone();
                     widgets::error_row(ui, app, &error, None);
@@ -158,11 +171,11 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, id: &str) {
             ui.add_space(20.0);
 
             // Discography.
-            theme::section_title(ui, &palette, "Discography");
+            theme::section_title(ui, &palette, app.t("artist.discography"));
             ui.add_space(6.0);
             let options: Vec<(DiscographyFilter, &str)> = DiscographyFilter::ALL
                 .iter()
-                .map(|f| (*f, f.label()))
+                .map(|f| (*f, f.label(app.catalog)))
                 .collect();
             if let Some(filter) = widgets::chips(ui, &palette, &options, page.filter) {
                 app.actions.push(Action::SetDiscographyFilter {
@@ -181,8 +194,11 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, id: &str) {
                         .collect();
                     widgets::grid(ui, |ui| {
                         for album in &albums {
-                            let subtitle =
-                                format!("{} • {}", album.year().unwrap_or(""), album.kind_label());
+                            let subtitle = format!(
+                                "{} • {}",
+                                album.year().unwrap_or(""),
+                                album.kind_label(app.catalog)
+                            );
                             let card = widgets::card(
                                 ui,
                                 app,
@@ -206,21 +222,23 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, id: &str) {
                         }
                     });
                     if list.loading {
-                        widgets::loading_row(ui, &palette);
+                        widgets::loading_row(ui, app);
                     } else if let Some(error) = &list.error {
                         let error = error.clone();
                         widgets::error_row(ui, app, &error, None);
                     } else if list.items.is_empty() {
-                        theme::subtle(ui, &palette, "Nothing in this category.");
+                        theme::subtle(ui, &palette, app.t("artist.nothing_category"));
                     } else if list.can_load_more() {
                         ui.add_space(8.0);
-                        if theme::soft_button(ui, &palette, None, "Load more", false).clicked() {
+                        if theme::soft_button(ui, &palette, None, app.t("artist.load_more"), false)
+                            .clicked()
+                        {
                             app.actions
                                 .push(Action::LoadMoreArtistAlbums(id.to_string()));
                         }
                     }
                 }
-                None => widgets::loading_row(ui, &palette),
+                None => widgets::loading_row(ui, app),
             }
             ui.add_space(20.0);
 
@@ -228,35 +246,41 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, id: &str) {
             if let Loadable::Loaded(related) = &page.related
                 && !related.is_empty()
             {
-                widgets::shelf(ui, &palette, "related", "Fans also like", |ui| {
-                    for artist in related {
-                        let card = widgets::card(
-                            ui,
-                            app,
-                            pick_image(&artist.images, 300),
-                            &artist.name,
-                            "Artist",
-                            true,
-                            true,
-                        );
-                        if card.play {
-                            app.actions.push(Action::PlayContext {
-                                uri: artist.uri.clone(),
-                                offset_uri: None,
-                                offset_index: None,
-                            });
+                widgets::shelf(
+                    ui,
+                    &palette,
+                    "related",
+                    app.t("artist.fans_also_like"),
+                    |ui| {
+                        for artist in related {
+                            let card = widgets::card(
+                                ui,
+                                app,
+                                pick_image(&artist.images, 300),
+                                &artist.name,
+                                app.t("common.artist"),
+                                true,
+                                true,
+                            );
+                            if card.play {
+                                app.actions.push(Action::PlayContext {
+                                    uri: artist.uri.clone(),
+                                    offset_uri: None,
+                                    offset_index: None,
+                                });
+                            }
+                            if card.clicked {
+                                app.actions
+                                    .push(Action::Open(Page::Artist(artist.id.clone())));
+                            }
                         }
-                        if card.clicked {
-                            app.actions
-                                .push(Action::Open(Page::Artist(artist.id.clone())));
-                        }
-                    }
-                });
+                    },
+                );
             }
         }
         Loadable::Loading | Loadable::NotLoaded => {
             ui.add_space(40.0);
-            widgets::loading_row(ui, &palette);
+            widgets::loading_row(ui, app);
         }
         Loadable::Failed(error) => {
             let error = error.clone();

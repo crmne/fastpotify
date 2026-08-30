@@ -65,18 +65,26 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             ui.add_space(super::widgets::PAGE_PADDING);
             ui.spacing_mut().item_spacing.x = 8.0;
             if !app.settings.sidebar_visible {
-                if nav_button(ui, &palette, Icon::PanelLeft, true, "Show sidebar (Cmd+B)").clicked()
-                {
+                let show_sidebar = app.shortcut("nav.show_sidebar");
+                if nav_button(ui, &palette, Icon::PanelLeft, true, &show_sidebar).clicked() {
                     app.actions.push(Action::ToggleSidebar);
                 }
                 ui.add_space(2.0);
             }
             if !app.settings.sidebar_visible
-                && nav_button(ui, &palette, Icon::House, true, "Home").clicked()
+                && nav_button(ui, &palette, Icon::House, true, app.t("common.home")).clicked()
             {
                 app.actions.push(Action::Open(Page::Home));
             }
-            if nav_button(ui, &palette, Icon::ChevronLeft, app.can_go_back(), "Back").clicked() {
+            if nav_button(
+                ui,
+                &palette,
+                Icon::ChevronLeft,
+                app.can_go_back(),
+                app.t("nav.back"),
+            )
+            .clicked()
+            {
                 app.actions.push(Action::Back);
             }
             if nav_button(
@@ -84,7 +92,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 &palette,
                 Icon::ChevronRight,
                 app.can_go_forward(),
-                "Forward",
+                app.t("nav.forward"),
             )
             .clicked()
             {
@@ -95,12 +103,13 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             let search_width = (ui.available_width() * 0.5).clamp(200.0, 440.0);
             let id = egui::Id::new("global-search");
             let before = app.search.query.clone();
+            let search_placeholder = app.catalog.get("search.placeholder");
             let response = super::widgets::search_field(
                 ui,
                 &palette,
                 id,
                 &mut app.search.query,
-                "What do you want to play?",
+                search_placeholder,
                 search_width,
             );
             if app.search.focus_requested {
@@ -201,21 +210,30 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                             });
                         }
                         super::widgets::menu_separator(ui, &palette);
-                        if super::widgets::menu_item(ui, &palette, Some(Icon::Settings), "Settings")
-                        {
+                        if super::widgets::menu_item(
+                            ui,
+                            &palette,
+                            Some(Icon::Settings),
+                            app.t("common.settings"),
+                        ) {
                             app.actions.push(Action::Open(Page::Settings));
                         }
                         if super::widgets::menu_item(
                             ui,
                             &palette,
                             Some(Icon::Info),
-                            "Keyboard shortcuts",
+                            app.t("nav.keyboard_shortcuts"),
                         ) {
                             app.actions
                                 .push(Action::ShowDialog(crate::model::Dialog::Shortcuts));
                         }
                         super::widgets::menu_separator(ui, &palette);
-                        if super::widgets::menu_item(ui, &palette, Some(Icon::LogOut), "Sign out") {
+                        if super::widgets::menu_item(
+                            ui,
+                            &palette,
+                            Some(Icon::LogOut),
+                            app.t("nav.sign_out"),
+                        ) {
                             app.actions.push(Action::SignOut);
                         }
                     });
@@ -226,19 +244,20 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     19.0,
                     palette.secondary,
                     palette.text,
-                    "Settings",
+                    app.t("common.settings"),
                 )
                 .clicked()
                 {
                     app.actions.push(Action::Open(Page::Settings));
                 }
+                let winamp_tooltip = app.shortcut("nav.winamp");
                 if theme::icon_button(
                     ui,
                     Icon::Shrink,
                     19.0,
                     palette.secondary,
                     palette.text,
-                    "Winamp mini player (Ctrl+M)",
+                    &winamp_tooltip,
                 )
                 .clicked()
                 {
@@ -252,16 +271,17 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     .busy(std::time::Duration::from_millis(1000))
                 {
                     theme::spinner(ui, 15.0, palette.secondary)
-                        .on_hover_text("Talking to Spotify…");
+                        .on_hover_text(app.t("nav.talking_to_spotify"));
                 }
                 // Where playback is.
                 if let Some(now) = app.now_playing()
                     && !now.local
                 {
-                    let label = format!(
-                        "Playing on {}",
-                        now.device_name.unwrap_or_else(|| "another device".into())
-                    );
+                    let device = now
+                        .device_name
+                        .as_deref()
+                        .unwrap_or(app.t("nav.playing_on.other_device"));
+                    let label = app.tf("nav.playing_on", &[("device", device)]);
                     let galley =
                         ui.painter()
                             .layout_no_wrap(label, theme::medium(12.5), palette.accent);
@@ -294,7 +314,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 // A newer release. Most people never visit a releases page,
                 // so the app says so, quietly, until they do.
                 if let Some(update) = app.update.clone() {
-                    let label = format!("Update to {}", update.version);
+                    let label = app.tf("nav.update_available", &[("version", &update.version)]);
                     let galley =
                         ui.painter()
                             .layout_no_wrap(label, theme::medium(12.5), palette.accent);
@@ -319,10 +339,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     );
                     if response
                         .on_hover_cursor(egui::CursorIcon::PointingHand)
-                        .on_hover_text(format!(
-                            "Fastpotify {} is out. Opens the download page.",
-                            update.version
-                        ))
+                        .on_hover_text(
+                            app.tf("nav.update_tooltip", &[("version", &update.version)]),
+                        )
                         .clicked()
                     {
                         app.actions.push(Action::OpenUrl(update.url));

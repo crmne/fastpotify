@@ -89,10 +89,26 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     let page = app.page().clone();
     ui.add_space(4.0);
-    if nav_row(ui, &palette, Icon::House, "Home", page == Page::Home).clicked() {
+    if nav_row(
+        ui,
+        &palette,
+        Icon::House,
+        app.t("common.home"),
+        page == Page::Home,
+    )
+    .clicked()
+    {
         app.actions.push(Action::Open(Page::Home));
     }
-    if nav_row(ui, &palette, Icon::Search, "Search", page == Page::Search).clicked() {
+    if nav_row(
+        ui,
+        &palette,
+        Icon::Search,
+        app.t("common.search"),
+        page == Page::Search,
+    )
+    .clicked()
+    {
         app.actions.push(Action::FocusSearch);
     }
     ui.add_space(10.0);
@@ -116,16 +132,22 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
         ui.add_space(6.0);
         theme::icon(ui, Icon::Library, 22.0, palette.secondary);
         ui.add_space(2.0);
-        theme::text(ui, "Your Library", theme::bold(15.0), palette.text);
+        theme::text(
+            ui,
+            app.t("sidebar.your_library"),
+            theme::bold(15.0),
+            palette.text,
+        );
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
+            let hide_sidebar = app.shortcut("sidebar.hide");
             if theme::icon_button(
                 ui,
                 Icon::PanelLeft,
                 16.0,
                 palette.secondary,
                 palette.text,
-                "Hide sidebar (Cmd+B)",
+                &hide_sidebar,
             )
             .clicked()
             {
@@ -138,7 +160,7 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
                 16.0,
                 palette.secondary,
                 palette.text,
-                "Create a playlist",
+                app.t("sidebar.create_playlist"),
             )
             .clicked()
             {
@@ -154,7 +176,7 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
                 16.0,
                 palette.secondary,
                 palette.text,
-                "Search Your Library",
+                app.t("sidebar.search_library"),
             )
             .clicked()
             {
@@ -172,10 +194,10 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
         for (value, label) in [
-            (Filter::Playlists, "Playlists"),
-            (Filter::Albums, "Albums"),
-            (Filter::Artists, "Artists"),
-            (Filter::Podcasts, "Podcasts"),
+            (Filter::Playlists, app.t("sidebar.filter.playlists")),
+            (Filter::Albums, app.t("sidebar.filter.albums")),
+            (Filter::Artists, app.t("sidebar.filter.artists")),
+            (Filter::Podcasts, app.t("sidebar.filter.podcasts")),
         ] {
             if theme::soft_button(ui, &palette, None, label, filter == value).clicked() {
                 filter = value;
@@ -188,12 +210,13 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
     });
     if show_search {
         ui.add_space(4.0);
+        let library_search = app.catalog.get("sidebar.search_in_library");
         super::widgets::search_field(
             ui,
             &palette,
             egui::Id::new("sidebar-search"),
             &mut app.library.filter,
-            "Search in Your Library",
+            library_search,
             ui.available_width() - 4.0,
         );
     }
@@ -228,13 +251,17 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
     match filter {
         Filter::Playlists => {
             if needle.is_empty() || "liked songs".contains(&needle) {
+                let subtitle = match app.library.liked.total {
+                    Some(total) => {
+                        let count = total.to_string();
+                        app.tf("sidebar.subtitle.playlist_songs", &[("count", &count)])
+                    }
+                    None => app.t("sidebar.subtitle.playlist").to_string(),
+                };
                 entries.push(Entry {
                     image: None,
-                    name: "Liked Songs".into(),
-                    subtitle: match app.library.liked.total {
-                        Some(total) => format!("Playlist • {total} songs"),
-                        None => "Playlist".into(),
-                    },
+                    name: app.t("sidebar.liked_songs").to_string(),
+                    subtitle,
                     page: Page::LikedSongs,
                     uri: String::new(),
                     round: false,
@@ -260,10 +287,12 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
                             continue;
                         }
                         let owned = playlist.owned_by(&user_id);
+                        let owner = playlist.owner_name();
                         entries.push(Entry {
                             image: pick_image(&playlist.images, 64).map(str::to_string),
                             name: playlist.name.clone(),
-                            subtitle: format!("Playlist • {}", playlist.owner_name()),
+                            subtitle: app
+                                .tf("sidebar.subtitle.playlist_owner", &[("owner", &owner)]),
                             page: Page::Playlist(playlist.id.clone()),
                             uri: playlist.uri.clone(),
                             round: false,
@@ -294,7 +323,7 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
                     name: album.name.clone(),
                     subtitle: format!(
                         "{} • {}",
-                        album.kind_label(),
+                        album.kind_label(app.catalog),
                         crate::api::models::join_names(
                             album.artists.iter().map(|a| a.name.as_str())
                         )
@@ -321,7 +350,7 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
                 entries.push(Entry {
                     image: pick_image(&artist.images, 64).map(str::to_string),
                     name: artist.name.clone(),
-                    subtitle: "Artist".into(),
+                    subtitle: app.t("sidebar.subtitle.artist").to_string(),
                     page: Page::Artist(artist.id.clone()),
                     uri: artist.uri.clone(),
                     round: true,
@@ -345,7 +374,10 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
                 entries.push(Entry {
                     image: pick_image(&show.images, 64).map(str::to_string),
                     name: show.name.clone(),
-                    subtitle: format!("Podcast • {}", show.publisher),
+                    subtitle: app.tf(
+                        "sidebar.subtitle.podcast",
+                        &[("publisher", &show.publisher)],
+                    ),
                     page: Page::Show(show.id.clone()),
                     uri: show.uri.clone(),
                     round: false,
@@ -414,7 +446,7 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
         .auto_shrink([false, false])
         .show(ui, |ui| {
             if loading {
-                super::widgets::loading_row(ui, &palette);
+                super::widgets::loading_row(ui, app);
             }
             if let Some(error) = &error {
                 super::widgets::error_row(ui, app, error, None);
@@ -425,9 +457,9 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
                     ui,
                     &palette,
                     if needle.is_empty() {
-                        "Nothing here yet."
+                        app.t("sidebar.empty")
                     } else {
-                        "No matches."
+                        app.t("sidebar.no_matches")
                     },
                 );
             }
@@ -724,7 +756,11 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
                                 ui,
                                 &palette,
                                 Some(if pinned { Icon::PinOff } else { Icon::Pin }),
-                                if pinned { "Unpin" } else { "Pin to top" },
+                                if pinned {
+                                    app.t("sidebar.unpin")
+                                } else {
+                                    app.t("sidebar.pin")
+                                },
                             ) {
                                 if pinned {
                                     app.settings
@@ -741,7 +777,7 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
                                     ui,
                                     &palette,
                                     Some(Icon::Clock),
-                                    "Sort by recently played",
+                                    app.t("sidebar.sort_recent"),
                                 )
                             {
                                 // Dragging a row brings the listener's own
@@ -754,8 +790,12 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
                     egui::Popup::context_menu(&response)
                         .frame(super::widgets::menu_frame(&palette))
                         .show(|ui| {
-                            if super::widgets::menu_item(ui, &palette, Some(Icon::Play), "Play")
-                                && let Some(user) = &app.user
+                            if super::widgets::menu_item(
+                                ui,
+                                &palette,
+                                Some(Icon::Play),
+                                app.t("common.play"),
+                            ) && let Some(user) = &app.user
                             {
                                 app.actions.push(Action::PlayContext {
                                     uri: format!("spotify:user:{}:collection", user.id),

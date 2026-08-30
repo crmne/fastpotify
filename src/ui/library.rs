@@ -12,24 +12,24 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, page: Page) {
     ui.add_space(8.0);
     let (title, empty_title, empty_body) = match page {
         Page::Albums => (
-            "Albums",
-            "No saved albums",
-            "Albums you save will appear here.",
+            app.t("library.albums"),
+            app.t("library.albums.empty_title"),
+            app.t("library.albums.empty_body"),
         ),
         Page::Artists => (
-            "Artists",
-            "No followed artists",
-            "Artists you follow will appear here.",
+            app.t("library.artists"),
+            app.t("library.artists.empty_title"),
+            app.t("library.artists.empty_body"),
         ),
         Page::Podcasts => (
-            "Podcasts",
-            "No podcasts yet",
-            "Podcasts you follow will appear here.",
+            app.t("library.podcasts"),
+            app.t("library.podcasts.empty_title"),
+            app.t("library.podcasts.empty_body"),
         ),
         _ => (
-            "Episodes",
-            "No saved episodes",
-            "Episodes you save will appear here.",
+            app.t("library.episodes"),
+            app.t("library.episodes.empty_title"),
+            app.t("library.episodes.empty_body"),
         ),
     };
     theme::text(ui, title, theme::bold(28.0), palette.text);
@@ -98,7 +98,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, page: Page) {
                         app,
                         pick_image(&artist.images, 300),
                         &artist.name,
-                        "Artist",
+                        app.t("common.artist"),
                         true,
                         true,
                     );
@@ -234,7 +234,7 @@ fn footer(
     let palette = app.palette;
     if loading {
         ui.add_space(8.0);
-        widgets::loading_row(ui, &palette);
+        widgets::loading_row(ui, app);
     }
     if let Some(error) = error {
         widgets::error_row(ui, app, &error, Some(page.clone()));

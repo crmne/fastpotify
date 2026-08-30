@@ -112,7 +112,7 @@ pub struct Actions<'a> {
     pub view: Option<Vec<String>>,
     pub saved: Option<(String, bool)>,
     pub saved_icons: (Icon, Icon),
-    pub saved_tooltips: (&'a str, &'a str),
+    pub saved_tooltips: (&'static str, &'static str),
     pub owned_playlist: Option<Playlist>,
     pub name: &'a str,
 }
@@ -137,7 +137,13 @@ pub fn actions_row(
                 Icon::PlayFilled
             };
             if app.play_pending(uri) {
-                theme::circle_spinner(ui, 56.0, palette.accent, palette.on_accent, "Starting…");
+                theme::circle_spinner(
+                    ui,
+                    56.0,
+                    palette.accent,
+                    palette.on_accent,
+                    app.t("collection.starting"),
+                );
             } else if theme::circle_button(
                 ui,
                 icon,
@@ -145,7 +151,11 @@ pub fn actions_row(
                 palette.accent,
                 palette.accent_hover,
                 palette.on_accent,
-                if now_playing_here { "Pause" } else { "Play" },
+                if now_playing_here {
+                    app.t("common.pause")
+                } else {
+                    app.t("common.play")
+                },
             )
             .clicked()
             {
@@ -181,11 +191,11 @@ pub fn actions_row(
                 },
                 palette.text,
                 if shuffling_here {
-                    "Shuffle off"
+                    app.t("collection.shuffle_off")
                 } else if context_here {
-                    "Shuffle"
+                    app.t("common.shuffle")
                 } else {
-                    "Shuffle play"
+                    app.t("collection.shuffle_play")
                 },
             )
             .clicked()
@@ -201,13 +211,13 @@ pub fn actions_row(
             let (icon, tooltip, color) = if *saved {
                 (
                     actions.saved_icons.1,
-                    actions.saved_tooltips.1,
+                    app.t(actions.saved_tooltips.1),
                     palette.accent,
                 )
             } else {
                 (
                     actions.saved_icons.0,
-                    actions.saved_tooltips.0,
+                    app.t(actions.saved_tooltips.0),
                     palette.secondary,
                 )
             };
@@ -222,7 +232,7 @@ pub fn actions_row(
                 26.0,
                 palette.secondary,
                 palette.text,
-                "More",
+                app.t("common.more"),
             );
             egui::Popup::menu(&more)
                 .frame(widgets::menu_frame(&palette))
@@ -243,7 +253,7 @@ pub fn actions_row(
                     &palette,
                     egui::Id::new(("collection-filter", actions.name)),
                     filter,
-                    "Filter",
+                    app.t("common.filter"),
                     220.0,
                 );
             });
@@ -347,7 +357,7 @@ pub fn table(app: &mut App, ui: &mut egui::Ui, table: Table<'_>) {
     if !table.items.is_empty()
         && let Some(column) = widgets::table_header(
             ui,
-            &palette,
+            app,
             table.show_album,
             table.show_added,
             table.show_added_by,
@@ -494,7 +504,7 @@ pub fn table(app: &mut App, ui: &mut egui::Ui, table: Table<'_>) {
     }
     if table.loading {
         ui.add_space(8.0);
-        widgets::loading_row(ui, &palette);
+        widgets::loading_row(ui, app);
     }
     if let Some(error) = table.error {
         ui.add_space(8.0);
@@ -505,8 +515,8 @@ pub fn table(app: &mut App, ui: &mut egui::Ui, table: Table<'_>) {
             ui,
             &palette,
             Icon::Music,
-            "Nothing here yet",
-            "Songs you add will show up here.",
+            app.t("collection.empty_title"),
+            app.t("collection.empty_body"),
         );
     } else if entry.visible.is_empty()
         && !needle.is_empty()
@@ -633,11 +643,16 @@ fn items_of(
 pub fn top_songs(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     ui.add_space(12.0);
-    theme::text(ui, "Your top songs", theme::bold(30.0), palette.text);
+    theme::text(
+        ui,
+        app.t("collection.top_songs"),
+        theme::bold(30.0),
+        palette.text,
+    );
     ui.add_space(4.0);
     theme::text(
         ui,
-        "Your most-listened tracks from the last four weeks.",
+        app.t("collection.top_songs_subtitle"),
         theme::regular(13.5),
         palette.secondary,
     );
@@ -646,7 +661,7 @@ pub fn top_songs(app: &mut App, ui: &mut egui::Ui) {
     let tracks = match &app.home.top_songs {
         Loadable::Loaded(tracks) => tracks.clone(),
         Loadable::Loading | Loadable::NotLoaded => {
-            widgets::loading_row(ui, &palette);
+            widgets::loading_row(ui, app);
             return;
         }
         Loadable::Failed(error) => {
@@ -686,7 +701,6 @@ pub fn playlist(app: &mut App, ui: &mut egui::Ui, id: &str) {
         app.ensure_loaded(Page::Playlist(id.to_string()));
         return;
     };
-    let palette = app.palette;
     let user_id = app.user_id().unwrap_or("").to_string();
     match &page.playlist {
         Loadable::Loaded(playlist) => {
@@ -722,23 +736,31 @@ pub fn playlist(app: &mut App, ui: &mut egui::Ui, id: &str) {
                     .collect();
                 byline.push((
                     if named.len() == others && others <= 2 {
-                        format!("with {}", named.join(" and "))
+                        app.tf("collection.with_others", &[("names", &named.join(" and "))])
                     } else if others == 1 {
-                        "and 1 other".to_string()
+                        app.t("collection.and_one_other").to_string()
                     } else {
-                        format!("and {others} others")
+                        app.tf("collection.and_n_others", &[("count", &others.to_string())])
                     },
                     None,
                 ));
             }
             let count_text = if page.items.is_complete() {
-                format!(
-                    "{} songs, {}",
-                    util::format_count(count as u64),
-                    util::format_total_ms(total_duration(&items))
+                app.tf(
+                    "collection.songs_duration",
+                    &[
+                        ("count", &util::format_count(count as u64)),
+                        (
+                            "duration",
+                            &util::format_total_ms(app.catalog, total_duration(&items)),
+                        ),
+                    ],
                 )
             } else {
-                format!("{} songs", util::format_count(count as u64))
+                app.tf(
+                    "collection.songs_count",
+                    &[("count", &util::format_count(count as u64))],
+                )
             };
             byline.push((count_text, None));
             hero(
@@ -748,11 +770,11 @@ pub fn playlist(app: &mut App, ui: &mut egui::Ui, id: &str) {
                     image: pick_image(&playlist.images, 300),
                     liked: false,
                     kind: if made_together {
-                        "Collaborative Playlist"
+                        app.t("collection.kind.collaborative")
                     } else if playlist.public == Some(true) {
-                        "Public Playlist"
+                        app.t("collection.kind.public")
                     } else {
-                        "Playlist"
+                        app.t("collection.kind.playlist")
                     },
                     title: &playlist.name,
                     description: playlist.description.as_deref().map(util::strip_html),
@@ -786,7 +808,7 @@ pub fn playlist(app: &mut App, ui: &mut egui::Ui, id: &str) {
                     view: view_play,
                     saved: (!owned).then(|| (playlist.uri.clone(), saved)),
                     saved_icons: (Icon::CirclePlus, Icon::CircleCheck),
-                    saved_tooltips: ("Add to Your Library", "Remove from Your Library"),
+                    saved_tooltips: ("menu.add_library", "menu.remove_library"),
                     owned_playlist: owned.then_some(playlist_clone),
                     name: &playlist.name,
                 },
@@ -818,7 +840,7 @@ pub fn playlist(app: &mut App, ui: &mut egui::Ui, id: &str) {
         }
         Loadable::Loading | Loadable::NotLoaded => {
             ui.add_space(40.0);
-            widgets::loading_row(ui, &palette);
+            widgets::loading_row(ui, app);
         }
         Loadable::Failed(error) => {
             let error = error.clone();
@@ -876,7 +898,7 @@ pub fn album(app: &mut App, ui: &mut egui::Ui, id: &str) {
                     view: album_view,
                     saved: Some((album.uri.clone(), saved)),
                     saved_icons: (Icon::CirclePlus, Icon::CircleCheck),
-                    saved_tooltips: ("Save to Your Library", "Remove from Your Library"),
+                    saved_tooltips: ("collection.save_library", "collection.remove_library"),
                     owned_playlist: None,
                     name: &album.name,
                 },
@@ -907,7 +929,7 @@ pub fn album(app: &mut App, ui: &mut egui::Ui, id: &str) {
             if let Some(date) = &album.release_date {
                 theme::text(
                     ui,
-                    util::format_date(date),
+                    util::format_date(app.catalog, date),
                     theme::regular(12.5),
                     palette.secondary,
                 );
@@ -944,7 +966,7 @@ pub fn album(app: &mut App, ui: &mut egui::Ui, id: &str) {
         }
         Loadable::Loading | Loadable::NotLoaded => {
             ui.add_space(40.0);
-            widgets::loading_row(ui, &palette);
+            widgets::loading_row(ui, app);
         }
         Loadable::Failed(error) => {
             let error = error.clone();
@@ -976,9 +998,15 @@ fn album_hero(
         .map(|track| track.duration_ms as u64)
         .sum();
     let count_text = if tracks.is_complete() {
-        format!("{count} songs, {}", util::format_total_ms(duration))
+        app.tf(
+            "collection.songs_duration",
+            &[
+                ("count", &count.to_string()),
+                ("duration", &util::format_total_ms(app.catalog, duration)),
+            ],
+        )
     } else {
-        format!("{count} songs")
+        app.tf("collection.songs_count", &[("count", &count.to_string())])
     };
     byline.push((count_text, None));
     hero(
@@ -987,7 +1015,7 @@ fn album_hero(
         Hero {
             image: pick_image(&album.images, 300),
             liked: false,
-            kind: album.kind_label(),
+            kind: album.kind_label(app.catalog),
             title: &album.name,
             description: None,
             byline,
@@ -1018,13 +1046,21 @@ pub fn liked(app: &mut App, ui: &mut egui::Ui) {
         .map(|user| user.name().to_string())
         .unwrap_or_default();
     let count_text = if app.library.liked.is_complete() {
-        format!(
-            "{} songs, {}",
-            util::format_count(total as u64),
-            util::format_total_ms(total_duration(&items))
+        app.tf(
+            "collection.songs_duration",
+            &[
+                ("count", &util::format_count(total as u64)),
+                (
+                    "duration",
+                    &util::format_total_ms(app.catalog, total_duration(&items)),
+                ),
+            ],
         )
     } else {
-        format!("{} songs", util::format_count(total as u64))
+        app.tf(
+            "collection.songs_count",
+            &[("count", &util::format_count(total as u64))],
+        )
     };
     hero(
         app,
@@ -1032,8 +1068,8 @@ pub fn liked(app: &mut App, ui: &mut egui::Ui) {
         Hero {
             image: None,
             liked: true,
-            kind: "Playlist",
-            title: "Liked Songs",
+            kind: app.t("collection.kind.playlist"),
+            title: app.t("collection.liked_songs"),
             description: None,
             byline: vec![(user, None), (count_text, None)],
             round: false,

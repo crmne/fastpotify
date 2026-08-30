@@ -19,8 +19,15 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, connecting: bool) {
             super::widgets::paint_vertical_gradient(ui, rect, top, palette.window);
             let card_width = 440.0;
             let card_height = 380.0;
-            let card = egui::Rect::from_center_size(rect.center() - Vec2::new(0.0, 20.0), Vec2::new(card_width, card_height));
-            let mut card_ui = ui.new_child(egui::UiBuilder::new().max_rect(card).layout(Layout::top_down(Align::Center)));
+            let card = egui::Rect::from_center_size(
+                rect.center() - Vec2::new(0.0, 20.0),
+                Vec2::new(card_width, card_height),
+            );
+            let mut card_ui = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(card)
+                    .layout(Layout::top_down(Align::Center)),
+            );
             Frame::new()
                 .fill(palette.panel)
                 .stroke(Stroke::new(1.0, palette.outline))
@@ -39,7 +46,12 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, connecting: bool) {
                     theme::logo(ui, logo.center(), 72.0, palette.accent, palette.on_accent);
                     ui.add_space(6.0);
                     theme::text(ui, "Fastpotify", theme::bold(30.0), palette.text);
-                    theme::text(ui, "A fast, native Spotify client.", theme::regular(14.5), palette.secondary);
+                    theme::text(
+                        ui,
+                        app.t("login.tagline"),
+                        theme::regular(14.5),
+                        palette.secondary,
+                    );
                     ui.add_space(22.0);
                     match &app.auth {
                         AuthStatus::WaitingForBrowser { url } => {
@@ -47,14 +59,28 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, connecting: bool) {
                             ui.horizontal(|ui| {
                                 ui.add_space((ui.available_width() - 250.0).max(0.0) / 2.0);
                                 theme::spinner(ui, 18.0, palette.accent);
-                                theme::text(ui, "Waiting for Spotify in your browser…", theme::medium(14.0), palette.text);
+                                theme::text(
+                                    ui,
+                                    app.t("login.waiting_browser"),
+                                    theme::medium(14.0),
+                                    palette.text,
+                                );
                             });
                             ui.add_space(6.0);
-                            if theme::link(ui, "Didn't open? Open the sign-in page again", theme::regular(13.0), palette.secondary).clicked() {
+                            if theme::link(
+                                ui,
+                                app.t("login.open_signin_again"),
+                                theme::regular(13.0),
+                                palette.secondary,
+                            )
+                            .clicked()
+                            {
                                 ctx.open_url(egui::OpenUrl::new_tab(url));
                             }
                             ui.add_space(14.0);
-                            if theme::pill_button(ui, &palette, "Cancel", false).clicked() {
+                            if theme::pill_button(ui, &palette, app.t("common.cancel"), false)
+                                .clicked()
+                            {
                                 app.actions.push(Action::CancelSignIn);
                             }
                         }
@@ -62,16 +88,26 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, connecting: bool) {
                             ui.horizontal(|ui| {
                                 ui.add_space((ui.available_width() - 200.0).max(0.0) / 2.0);
                                 theme::spinner(ui, 18.0, palette.accent);
-                                theme::text(ui, "Connecting to Spotify…", theme::medium(14.0), palette.text);
+                                theme::text(
+                                    ui,
+                                    app.t("login.connecting"),
+                                    theme::medium(14.0),
+                                    palette.text,
+                                );
                             });
                         }
                         AuthStatus::Failed(message) => {
                             let message = message.clone();
                             ui.add(
-                                egui::Label::new(egui::RichText::new(message).font(theme::regular(13.0)).color(palette.danger)).wrap(),
+                                egui::Label::new(
+                                    egui::RichText::new(message)
+                                        .font(theme::regular(13.0))
+                                        .color(palette.danger),
+                                )
+                                .wrap(),
                             );
                             ui.add_space(12.0);
-                            if big_button(ui, app, "Try again") {
+                            if big_button(ui, app, app.t("common.try_again")) {
                                 app.actions.push(Action::SignIn);
                             }
                             if app.settings.web_client_id.is_some() {
@@ -79,7 +115,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, connecting: bool) {
                                 if theme::pill_button(
                                     ui,
                                     &palette,
-                                    "Use the shared Spotify app instead",
+                                    app.t("login.use_shared_app"),
                                     false,
                                 )
                                 .clicked()
@@ -93,13 +129,13 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, connecting: bool) {
                             }
                         }
                         _ => {
-                            if big_button(ui, app, "Sign in with Spotify") {
+                            if big_button(ui, app, app.t("login.sign_in_button")) {
                                 app.actions.push(Action::SignIn);
                             }
                             ui.add_space(10.0);
                             ui.add(
                                 egui::Label::new(
-                                    egui::RichText::new("Sign-in happens in your browser; your password never touches this app. Playing music on this computer needs Spotify Premium.")
+                                    egui::RichText::new(app.t("login.privacy_note"))
                                         .font(theme::regular(12.5))
                                         .color(palette.secondary),
                                 )
@@ -114,7 +150,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, connecting: bool) {
                                 if theme::pill_button(
                                     ui,
                                     &palette,
-                                    "Use the shared Spotify app instead",
+                                    app.t("login.use_shared_app"),
                                     false,
                                 )
                                 .clicked()
@@ -127,10 +163,11 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, connecting: bool) {
                         }
                     }
                 });
+            let footer = app.tf("login.footer", &[("version", env!("CARGO_PKG_VERSION"))]);
             ui.painter().text(
                 egui::pos2(rect.center().x, rect.bottom() - 24.0),
                 egui::Align2::CENTER_BOTTOM,
-                format!("Fastpotify {} • not affiliated with Spotify", env!("CARGO_PKG_VERSION")),
+                footer,
                 theme::regular(11.5),
                 palette.dim,
             );

@@ -15,6 +15,8 @@ use std::time::Duration;
 use tray_icon::menu::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
+use crate::i18n::TrayLabels;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TrayCommand {
     Show,
@@ -44,18 +46,44 @@ fn command_for(id: &MenuId) -> Option<TrayCommand> {
     }
 }
 
-fn play_pause_label(playing: bool) -> &'static str {
-    if playing { "Pause" } else { "Play" }
+fn play_pause_label(labels: &TrayLabels, playing: bool) -> String {
+    if playing {
+        labels.pause.clone()
+    } else {
+        labels.play.clone()
+    }
 }
 
-/// The item, and the menu entry whose label follows playback.
+/// The item, and the menu entries whose labels follow playback or language.
 struct Item {
     _icon: TrayIcon,
+    labels: TrayLabels,
+    playing: bool,
+    show_hide: MenuItem,
     play_pause: MenuItem,
+    next: MenuItem,
+    previous: MenuItem,
+    quit: MenuItem,
+}
+
+impl Item {
+    fn apply_labels(&self, labels: &TrayLabels, playing: bool) {
+        self.show_hide.set_text(labels.show_hide.clone());
+        self.play_pause.set_text(play_pause_label(labels, playing));
+        self.next.set_text(labels.next.clone());
+        self.previous.set_text(labels.previous.clone());
+        self.quit.set_text(labels.quit.clone());
+        self._icon.set_tooltip(Some(labels.tooltip.clone()));
+    }
 }
 
 /// Builds the item on the current thread and routes its events to `sender`.
-fn build(sender: Sender<TrayCommand>, wake: Wake) -> Result<Item, Box<dyn std::error::Error>> {
+fn build(
+    sender: Sender<TrayCommand>,
+    wake: Wake,
+    labels: TrayLabels,
+    playing: bool,
+) -> Result<Item, Box<dyn std::error::Error>> {
     let size = 32u32;
     #[cfg(not(target_os = "macos"))]
     let icon = Icon::from_rgba(crate::util::app_icon_rgba(size as usize), size, size)?;
@@ -64,19 +92,23 @@ fn build(sender: Sender<TrayCommand>, wake: Wake) -> Result<Item, Box<dyn std::e
     #[cfg(target_os = "macos")]
     let icon = Icon::from_rgba(crate::util::tray_template_rgba(size as usize), size, size)?;
     let menu = Menu::new();
-    let play_pause = MenuItem::with_id(PLAY_PAUSE, play_pause_label(false), true, None);
+    let show_hide = MenuItem::with_id(SHOW, labels.show_hide.clone(), true, None);
+    let play_pause = MenuItem::with_id(PLAY_PAUSE, play_pause_label(&labels, playing), true, None);
+    let next = MenuItem::with_id(NEXT, labels.next.clone(), true, None);
+    let previous = MenuItem::with_id(PREVIOUS, labels.previous.clone(), true, None);
+    let quit = MenuItem::with_id(QUIT, labels.quit.clone(), true, None);
     menu.append_items(&[
-        &MenuItem::with_id(SHOW, "Show / hide Fastpotify", true, None),
+        &show_hide,
         &PredefinedMenuItem::separator(),
         &play_pause,
-        &MenuItem::with_id(NEXT, "Next", true, None),
-        &MenuItem::with_id(PREVIOUS, "Previous", true, None),
+        &next,
+        &previous,
         &PredefinedMenuItem::separator(),
-        &MenuItem::with_id(QUIT, "Quit", true, None),
+        &quit,
     ])?;
     let builder = TrayIconBuilder::new()
         .with_icon(icon)
-        .with_tooltip("Fastpotify")
+        .with_tooltip(labels.tooltip.clone())
         .with_menu(Box::new(menu));
     // A plain click shows or hides the window on every platform; the menu
     // stays on right click.
@@ -109,7 +141,13 @@ fn build(sender: Sender<TrayCommand>, wake: Wake) -> Result<Item, Box<dyn std::e
 
     Ok(Item {
         _icon: icon,
+        labels,
+        playing,
+        show_hide,
         play_pause,
+        next,
+        previous,
+        quit,
     })
 }
 
@@ -127,12 +165,16 @@ mod host {
         sender: Sender<TrayCommand>,
         wake: Wake,
         playing: Receiver<bool>,
+        labels: Receiver<TrayLabels>,
     ) -> Result<u32, String> {
         let (ready_tx, ready_rx) = std::sync::mpsc::channel();
         let spawned = std::thread::Builder::new()
             .name("fastpotify-tray".to_owned())
             .spawn(move || {
-                let item = match build(sender, wake) {
+                let initial_labels = labels
+                    .recv()
+                    .unwrap_or_else(|_| TrayLabels::from_catalog(crate::i18n::Catalog::default()));
+                let mut item = match build(sender, wake, initial_labels, false) {
                     Ok(item) => item,
                     Err(error) => {
                         let _ = ready_tx.send(Err(error.to_string()));
@@ -144,7 +186,13 @@ mod host {
                 while unsafe { GetMessageW(&mut message, std::ptr::null_mut(), 0, 0) } > 0 {
                     if message.message == WM_APP {
                         while let Ok(playing) = playing.try_recv() {
-                            item.play_pause.set_text(play_pause_label(playing));
+                            item.playing = playing;
+                            item.play_pause
+                                .set_text(play_pause_label(&item.labels, playing));
+                        }
+                        while let Ok(labels) = labels.try_recv() {
+                            item.labels = labels;
+                            item.apply_labels(&item.labels, item.playing);
                         }
                         continue;
                     }
@@ -175,20 +223,24 @@ pub struct TrayService {
     commands: Receiver<TrayCommand>,
     playing: bool,
     playing_tx: Sender<bool>,
+    labels_tx: Sender<TrayLabels>,
     thread_id: u32,
 }
 
 #[cfg(windows)]
 impl TrayService {
     /// Registers the tray item. `None` when it cannot be made.
-    pub fn spawn(wake: impl Fn() + Send + Sync + 'static) -> Option<Self> {
+    pub fn spawn(wake: impl Fn() + Send + Sync + 'static, labels: TrayLabels) -> Option<Self> {
         let (sender, commands) = std::sync::mpsc::channel();
         let (playing_tx, playing_rx) = std::sync::mpsc::channel();
-        match host::start(sender, Arc::new(wake), playing_rx) {
+        let (labels_tx, labels_rx) = std::sync::mpsc::channel();
+        let _ = labels_tx.send(labels);
+        match host::start(sender, Arc::new(wake), playing_rx, labels_rx) {
             Ok(thread_id) => Some(Self {
                 commands,
                 playing: false,
                 playing_tx,
+                labels_tx,
                 thread_id,
             }),
             Err(error) => {
@@ -209,6 +261,12 @@ impl TrayService {
             if self.playing_tx.send(playing).is_ok() {
                 host::poke(self.thread_id);
             }
+        }
+    }
+
+    pub fn set_labels(&mut self, labels: TrayLabels) {
+        if self.labels_tx.send(labels).is_ok() {
+            host::poke(self.thread_id);
         }
     }
 
@@ -297,16 +355,16 @@ mod host {
     }
 
     /// Creates the item, once, on the main thread.
-    pub fn create(sender: Sender<TrayCommand>, wake: Wake, playing: bool) {
+    pub fn create(sender: Sender<TrayCommand>, wake: Wake, playing: bool, labels: TrayLabels) {
         let Some(mtm) = MainThreadMarker::new() else {
             log::warn!("the status item can only be made on the main thread");
             return;
         };
         REOPEN.with(|slot| *slot.borrow_mut() = Some(sender.clone()));
         install_reopen_handler(&NSApplication::sharedApplication(mtm));
-        match build(sender, wake) {
+        match build(sender, wake, labels.clone(), playing) {
             Ok(item) => {
-                item.play_pause.set_text(play_pause_label(playing));
+                item.apply_labels(&labels, playing);
                 ITEM.with(|slot| *slot.borrow_mut() = Some(item));
             }
             Err(error) => log::info!("no status item: {error}"),
@@ -319,8 +377,19 @@ mod host {
 
     pub fn set_playing(playing: bool) {
         ITEM.with(|slot| {
-            if let Some(item) = slot.borrow().as_ref() {
-                item.play_pause.set_text(play_pause_label(playing));
+            if let Some(item) = slot.borrow_mut().as_mut() {
+                item.playing = playing;
+                item.play_pause
+                    .set_text(play_pause_label(&item.labels, playing));
+            }
+        });
+    }
+
+    pub fn set_labels(labels: TrayLabels) {
+        ITEM.with(|slot| {
+            if let Some(item) = slot.borrow_mut().as_mut() {
+                item.labels = labels.clone();
+                item.apply_labels(&labels, item.playing);
             }
         });
     }
@@ -364,6 +433,7 @@ mod host {
 pub struct TrayService {
     commands: Receiver<TrayCommand>,
     playing: bool,
+    labels: TrayLabels,
     /// What the item needs, until the first window lets it be made.
     pending: Option<(Sender<TrayCommand>, Wake)>,
 }
@@ -372,11 +442,12 @@ pub struct TrayService {
 impl TrayService {
     /// Prepares the item. It is made with the first window, when AppKit's
     /// event loop is running, which it must be.
-    pub fn spawn(wake: impl Fn() + Send + Sync + 'static) -> Option<Self> {
+    pub fn spawn(wake: impl Fn() + Send + Sync + 'static, labels: TrayLabels) -> Option<Self> {
         let (sender, commands) = std::sync::mpsc::channel();
         Some(Self {
             commands,
             playing: false,
+            labels,
             pending: Some((sender, Arc::new(wake))),
         })
     }
@@ -393,11 +464,16 @@ impl TrayService {
         }
     }
 
+    pub fn set_labels(&mut self, labels: TrayLabels) {
+        self.labels = labels.clone();
+        host::set_labels(labels);
+    }
+
     /// A window exists: make the item if this is the first one and bring the
     /// application forward.
     pub fn attach(&mut self) {
         if let Some((sender, wake)) = self.pending.take() {
-            host::create(sender, wake, self.playing);
+            host::create(sender, wake, self.playing, self.labels.clone());
         }
         if host::exists() {
             host::activate();

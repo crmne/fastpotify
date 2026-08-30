@@ -20,10 +20,11 @@ use crate::api::{
 use crate::images::{ArtLoader, accent_color};
 use crate::paths::AppDirs;
 use crate::player::{Engine, EngineConfig, EngineEvent, LoadSpec, LocalState, PlayerCommand};
+use crate::settings::Language;
 
 pub type ApiResult<T> = Result<T, ApiError>;
 
-const PREMIUM_NEEDED: &str = "Local playback needs Spotify Premium.";
+const PREMIUM_NEEDED: &str = "error.premium_required";
 pub const PLAYLIST_PAGE_SIZE: u32 = 50;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -438,6 +439,8 @@ pub enum Command {
     Lyrics(Box<LyricsRequest>),
     /// Add, replace, or remove the optional personal Web API application.
     ConfigurePersonalWebApp(Option<String>),
+    /// Keep browser pages and other backend-owned strings in the user's language.
+    SetLanguage(Language),
     /// Read a playlist's cached items from disk.
     LoadPlaylistCache {
         id: String,
@@ -679,6 +682,7 @@ struct Worker {
     /// What the engine was playing when it went down, to load again once
     /// the next one is up.
     resume: Option<LoadSpec>,
+    language: Language,
 }
 
 impl Worker {
@@ -714,7 +718,12 @@ impl Worker {
             pending_authorization: None,
             reconnects: Vec::new(),
             resume: None,
+            language: Language::System,
         }
+    }
+
+    fn catalog(&self) -> crate::i18n::Catalog {
+        crate::i18n::Catalog::new(self.language)
     }
 
     fn emit(&self, event: Event) {
@@ -748,12 +757,13 @@ impl Worker {
                 Command::Player(command) => match &self.engine {
                     Some(engine) => {
                         if let Err(error) = engine.command(command) {
-                            self.emit(Event::Error(format!("Playback error: {error}")));
+                            self.emit(Event::Error(crate::i18n::keyed_args(
+                                "error.playback",
+                                &[("error", &error.to_string())],
+                            )));
                         }
                     }
-                    None => self.emit(Event::Error(
-                        "Local playback isn't set up on this computer yet".into(),
-                    )),
+                    None => self.emit(Event::Error(crate::i18n::keyed("error.local_not_setup"))),
                 },
                 Command::Api(request) => self.dispatch(request),
                 Command::Accent { url } => self.accent(url),
@@ -810,6 +820,7 @@ impl Worker {
                 Command::ConfigurePersonalWebApp(client_id) => {
                     self.configure_personal_web_app(client_id)
                 }
+                Command::SetLanguage(language) => self.language = language,
             }
         }
         if let Some(engine) = self.engine.take() {
@@ -826,9 +837,9 @@ impl Worker {
                 self.emit(Event::Auth(AuthStatus::Connecting));
                 self.on_web_signed_in(ApiSource::Shared, token);
             }
-            Some(_) => self.emit(Event::Auth(AuthStatus::Failed(
-                "Fastpotify needs one more Spotify permission. Please sign in again.".into(),
-            ))),
+            Some(_) => self.emit(Event::Auth(AuthStatus::Failed(crate::i18n::keyed(
+                "error.permission_needed",
+            )))),
             None => self.emit(Event::Auth(AuthStatus::SignedOut)),
         }
         let personal = self.web_client_id.as_deref().and_then(|client_id| {
@@ -898,9 +909,11 @@ impl Worker {
             };
             gateway.clear(source);
             let message = match source {
-                ApiSource::Shared => format!("Shared Spotify sign-in failed: {error}"),
+                ApiSource::Shared => {
+                    crate::i18n::keyed_args("error.shared_signin", &[("error", &error.to_string())])
+                }
                 ApiSource::Personal => {
-                    format!("Personal app authorization failed: {error}")
+                    crate::i18n::keyed_args("error.personal_auth", &[("error", &error.to_string())])
                 }
             };
             let other_ready = match source {
@@ -1007,10 +1020,16 @@ impl Worker {
         let events = self.events.clone();
         let waker = self.waker.clone();
         let commands = self.commands.clone();
+        let catalog = self.catalog();
         tokio::spawn(async move {
             let result = async {
-                let code =
-                    crate::auth::wait_for_code(grant.redirect_port, &flow.state, cancel_rx).await?;
+                let code = crate::auth::wait_for_code(
+                    grant.redirect_port,
+                    &flow.state,
+                    cancel_rx,
+                    catalog,
+                )
+                .await?;
                 let response =
                     crate::auth::exchange_code(&http, &grant, &code, &flow.verifier).await?;
                 crate::auth::StoredToken::from_response(&grant.client_id, response, None)
@@ -1029,7 +1048,10 @@ impl Worker {
                     }
                     let message = error.to_string();
                     if !message.contains("cancelled") {
-                        let _ = events.send(Event::Error(format!("Sign-in failed: {message}")));
+                        let _ = events.send(Event::Error(crate::i18n::keyed_args(
+                            "error.signin_failed",
+                            &[("message", &message)],
+                        )));
                     }
                     waker.wake();
                     let _ = commands.send(Command::SignInEnded { source });
@@ -1136,9 +1158,9 @@ impl Worker {
             .retain(|attempt| now.duration_since(*attempt) < Duration::from_secs(600));
         if self.reconnects.len() >= 6 {
             self.resume = None;
-            self.emit(Event::Playback(LocalPlayback::Failed(
-                "Local playback keeps dropping. Re-enable it from Settings.".into(),
-            )));
+            self.emit(Event::Playback(LocalPlayback::Failed(crate::i18n::keyed(
+                "error.local_dropping",
+            ))));
             return;
         }
         self.reconnects.push(now);
@@ -1177,10 +1199,16 @@ impl Worker {
         let events = self.events.clone();
         let waker = self.waker.clone();
         let commands = self.commands.clone();
+        let catalog = self.catalog();
         tokio::spawn(async move {
             let result = async {
-                let code =
-                    crate::auth::wait_for_code(grant.redirect_port, &flow.state, cancel_rx).await?;
+                let code = crate::auth::wait_for_code(
+                    grant.redirect_port,
+                    &flow.state,
+                    cancel_rx,
+                    catalog,
+                )
+                .await?;
                 crate::auth::exchange_code(&http, &grant, &code, &flow.verifier).await
             }
             .await;
@@ -1256,7 +1284,7 @@ impl Worker {
                 }
                 Err(_) => Command::EngineConnected {
                     engine: Box::new(None),
-                    error: Some("Connecting to Spotify timed out".into()),
+                    error: Some(crate::i18n::keyed("error.connect_timeout")),
                 },
             };
             let _ = commands.send(outcome);
@@ -1287,7 +1315,8 @@ impl Worker {
             }
             None => {
                 self.resume = None;
-                let message = error.unwrap_or_else(|| "Local playback is unavailable".into());
+                let message =
+                    error.unwrap_or_else(|| crate::i18n::keyed("error.local_unavailable"));
                 self.emit(Event::Playback(LocalPlayback::Failed(message)));
             }
         }
@@ -1499,9 +1528,9 @@ impl Worker {
                 if api_source == ApiSource::Personal {
                     let _ = events.send(Event::WebApp { client_id: None });
                 } else {
-                    let _ = events.send(Event::Auth(AuthStatus::Failed(
-                        "Your Spotify sign-in expired. Please sign in again.".into(),
-                    )));
+                    let _ = events.send(Event::Auth(AuthStatus::Failed(crate::i18n::keyed(
+                        "error.signin_expired",
+                    ))));
                 }
             }
             if let ApiResponse::Me(result) = &response {
@@ -1540,11 +1569,11 @@ fn friendly_connect_error(error: &anyhow::Error) -> String {
     let text = format!("{error:#}");
     let lower = text.to_lowercase();
     if lower.contains("badcredentials") || lower.contains("bad credentials") {
-        "Spotify rejected the saved sign-in. Please sign in again.".to_string()
+        crate::i18n::keyed("error.bad_credentials")
     } else if lower.contains("premium") {
         PREMIUM_NEEDED.to_string()
     } else if lower.contains("dns") || lower.contains("connect") || lower.contains("resolve") {
-        format!("Couldn't reach Spotify: {text}")
+        crate::i18n::keyed_args("error.couldnt_reach", &[("error", &text)])
     } else {
         text
     }
@@ -1770,7 +1799,10 @@ async fn handle(api: &ApiGateway, request: ApiRequest) -> (ApiResponse, Option<A
         } => ApiResponse::PlaylistItemsChanged {
             result: routed!(add_playlist_items(&playlist_id, &uris, None)),
             id: playlist_id,
-            message: format!("Added to {playlist_name}"),
+            message: crate::i18n::keyed_args(
+                "toast.added_to_playlist",
+                &[("playlist", &playlist_name)],
+            ),
         },
         ApiRequest::RemoveFromPlaylist {
             playlist_id,
@@ -1783,7 +1815,7 @@ async fn handle(api: &ApiGateway, request: ApiRequest) -> (ApiResponse, Option<A
                 snapshot_id.as_deref()
             )),
             id: playlist_id,
-            message: "Removed from playlist".to_string(),
+            message: crate::i18n::keyed("toast.removed_from_playlist"),
         },
         ApiRequest::ReorderPlaylist {
             playlist_id,

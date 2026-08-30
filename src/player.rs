@@ -654,9 +654,9 @@ fn apply_event(state: &mut LocalState, event: PlayerEvent) -> bool {
         }
         PlayerEvent::Unavailable { track_id, .. } => set(
             &mut state.error,
-            Some(format!(
-                "This item isn't available: {}",
-                track_id.to_uri().unwrap_or_default()
+            Some(crate::i18n::keyed_args(
+                "error.item_unavailable",
+                &[("uri", &track_id.to_uri().unwrap_or_default())],
             )),
         ),
         PlayerEvent::VolumeChanged { volume } => set(&mut state.volume, volume),
