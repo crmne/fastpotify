@@ -468,6 +468,13 @@ impl PlayableItem {
     pub fn is_track(&self) -> bool {
         matches!(self, Self::Track(_))
     }
+
+    pub fn is_available(&self) -> bool {
+        match self {
+            Self::Track(track) => track.is_playable != Some(false) && !track.is_local,
+            Self::Episode(_) => true,
+        }
+    }
 }
 
 /// An entry in a playlist. `item` is the 2026 name, `track` the classic one.

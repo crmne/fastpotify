@@ -1558,4 +1558,332 @@ mod tests {
         let older: Settings = serde_json::from_str("{}").unwrap();
         assert!(older.sidebar_order.is_empty());
     }
+
+    /// An app with the sample data, the playlist page open, and a couple of
+    /// frames drawn, for the keyboard tests below.
+    fn playlist_app(name: &str, settings: Settings) -> (egui::Context, App, std::path::PathBuf) {
+        let root = std::env::temp_dir().join(format!("fastpotify-{name}-{}", std::process::id()));
+        let dirs = AppDirs {
+            config: root.join("config"),
+            state: root.join("state"),
+            cache: root.join("cache"),
+        };
+        let ctx = egui::Context::default();
+        let waker = crate::backend::Waker::default();
+        waker.attach(&ctx);
+        let mut app = App::new(
+            &waker,
+            dirs,
+            settings,
+            AppOptions {
+                media_controls: false,
+                tray: false,
+            },
+        );
+        app.attach(&ctx);
+        populate(&mut app);
+        app.open(Page::Playlist("pl1".into()));
+        for _ in 0..3 {
+            frame(&ctx, &mut app);
+        }
+        (ctx, app, root)
+    }
+
+    fn press(ctx: &egui::Context, app: &mut App, key: egui::Key) {
+        frame_events(
+            ctx,
+            app,
+            vec![egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+    }
+
+    fn type_text(ctx: &egui::Context, app: &mut App, text: &str) {
+        frame_events(ctx, app, vec![egui::Event::Text(text.into())]);
+    }
+
+    /// Typing on a playlist page jumps the list, and Enter plays the row
+    /// the search points at, through the same plumbing a double-click uses.
+    #[test]
+    fn typeahead_letters_play_the_matched_row_on_enter() {
+        let (ctx, mut app, root) = playlist_app("typeahead-enter", Settings::default());
+        // "rr": the first letter lands on the first Rosewood (trk0), the
+        // second cycles to the next one (trk20), as the same letter does in
+        // a file explorer.
+        type_text(&ctx, &mut app, "rr");
+        press(&ctx, &mut app, egui::Key::Enter);
+        assert!(
+            app.play_pending("spotify:track:trk20"),
+            "Enter should play the row the search points at"
+        );
+        app.backend.shutdown();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Letters typed in separate frames accumulate into one search, the
+    /// way typing works: "ro" narrows from "r" instead of starting over.
+    #[test]
+    fn typeahead_accumulates_across_frames() {
+        let (ctx, mut app, root) = playlist_app("typeahead-frames", Settings::default());
+        type_text(&ctx, &mut app, "r");
+        frame(&ctx, &mut app);
+        type_text(&ctx, &mut app, "o");
+        frame(&ctx, &mut app);
+        press(&ctx, &mut app, egui::Key::Enter);
+        assert!(
+            app.play_pending("spotify:track:trk0"),
+            "'ro' should keep the first Rosewood while it still matches"
+        );
+        app.backend.shutdown();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A space keypress mid-search joins the text instead of ending it:
+    /// "day", space, "b" still lands on "Day by Day".
+    #[test]
+    fn space_joins_an_active_search() {
+        let (ctx, mut app, root) = playlist_app("typeahead-space", Settings::default());
+        type_text(&ctx, &mut app, "day");
+        frame(&ctx, &mut app);
+        // A real space arrives as a key and as text in the same frame.
+        frame_events(
+            &ctx,
+            &mut app,
+            vec![
+                egui::Event::Key {
+                    key: egui::Key::Space,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+                egui::Event::Text(" ".into()),
+            ],
+        );
+        frame(&ctx, &mut app);
+        type_text(&ctx, &mut app, "b");
+        press(&ctx, &mut app, egui::Key::Enter);
+        assert!(
+            app.play_pending("spotify:track:trk9"),
+            "the search should carry the space and land on Day by Day"
+        );
+        app.backend.shutdown();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// With the loose setting on, letters that appear anywhere in a
+    /// title, in order, find it.
+    #[test]
+    fn loose_typeahead_matches_letters_anywhere() {
+        let settings = Settings {
+            typeahead_loose: true,
+            ..Settings::default()
+        };
+        let (ctx, mut app, root) = playlist_app("typeahead-loose", settings);
+        // "ey" is no prefix and no unbroken run in any title; loose mode
+        // reads it as letters in order, and Elysian is the first title
+        // that carries an e and then a y.
+        type_text(&ctx, &mut app, "ey");
+        press(&ctx, &mut app, egui::Key::Enter);
+        assert!(
+            app.play_pending("spotify:track:trk4"),
+            "loose mode should read 'ey' into Elysian"
+        );
+        app.backend.shutdown();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// While a song list is open, the plain keys it searches with are not
+    /// shortcuts; everywhere else they still are.
+    #[test]
+    fn while_a_song_list_is_open_the_plain_letters_belong_to_typeahead() {
+        let (ctx, mut app, root) = playlist_app("typeahead-gate", Settings::default());
+        press(&ctx, &mut app, egui::Key::L);
+        assert!(
+            !app.show_lyrics_panel,
+            "L should type into the search, not open the lyrics"
+        );
+        app.open(Page::Home);
+        frame(&ctx, &mut app);
+        press(&ctx, &mut app, egui::Key::L);
+        assert!(app.show_lyrics_panel);
+        app.backend.shutdown();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// With the setting off, typed letters mean nothing to the list.
+    #[test]
+    fn typeahead_off_leaves_the_list_alone() {
+        let settings = Settings {
+            typeahead_jump: false,
+            ..Settings::default()
+        };
+        let (ctx, mut app, root) = playlist_app("typeahead-off", settings);
+        type_text(&ctx, &mut app, "rr");
+        press(&ctx, &mut app, egui::Key::Enter);
+        assert!(!app.play_pending("spotify:track:trk0"));
+        assert!(!app.play_pending("spotify:track:trk20"));
+        app.backend.shutdown();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A letter and Space can arrive in one frame. The list reads them in
+    /// order, so Space joins the new query rather than toggling playback.
+    #[test]
+    fn first_frame_space_joins_the_query_without_toggling_playback() {
+        let (ctx, mut app, root) = playlist_app("typeahead-first-space", Settings::default());
+        let playing = app.believed_playing();
+        frame_events(
+            &ctx,
+            &mut app,
+            vec![
+                egui::Event::Text("day".into()),
+                egui::Event::Key {
+                    key: egui::Key::Space,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+                egui::Event::Text(" ".into()),
+                egui::Event::Text("b".into()),
+            ],
+        );
+        assert_eq!(app.believed_playing(), playing);
+        press(&ctx, &mut app, egui::Key::Enter);
+        assert!(app.play_pending("spotify:track:trk9"));
+        app.backend.shutdown();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// The mini player has no song-table listener, even when the hidden main
+    /// window page is a playlist, so its ordinary shortcuts keep working.
+    #[test]
+    fn winamp_keeps_plain_letter_shortcuts_from_a_playlist_page() {
+        let (ctx, mut app, root) = playlist_app("typeahead-winamp", Settings::default());
+        app.settings.winamp_window = true;
+        frame(&ctx, &mut app);
+        press(&ctx, &mut app, egui::Key::L);
+        assert!(app.show_lyrics_panel);
+        app.backend.shutdown();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A failed page has no type-ahead listener, so it must not reserve the
+    /// ordinary letter shortcuts while its Retry control is showing.
+    #[test]
+    fn a_failed_playlist_keeps_plain_letter_shortcuts() {
+        let (ctx, mut app, root) = playlist_app("typeahead-failed", Settings::default());
+        app.playlist_pages.get_mut("pl1").unwrap().playlist = Loadable::Failed("offline".into());
+        press(&ctx, &mut app, egui::Key::L);
+        assert!(app.show_lyrics_panel);
+        app.backend.shutdown();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A popup owns Enter while it is open; a highlighted row underneath it
+    /// must not start playing.
+    #[test]
+    fn device_picker_blocks_typeahead_playback() {
+        let (ctx, mut app, root) = playlist_app("typeahead-devices", Settings::default());
+        type_text(&ctx, &mut app, "r");
+        app.show_devices = true;
+        press(&ctx, &mut app, egui::Key::Enter);
+        assert!(!app.play_pending("spotify:track:trk0"));
+        assert!(!app.play_pending("spotify:track:trk20"));
+        app.backend.shutdown();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A type-ahead belongs to the visible page, not to a page that the
+    /// listener left and later revisited.
+    #[test]
+    fn navigating_away_clears_the_page_typeahead() {
+        let (ctx, mut app, root) = playlist_app("typeahead-navigation", Settings::default());
+        type_text(&ctx, &mut app, "r");
+        app.open(Page::Home);
+        frame(&ctx, &mut app);
+        app.open(Page::Playlist("pl1".into()));
+        frame(&ctx, &mut app);
+        press(&ctx, &mut app, egui::Key::Enter);
+        assert!(!app.play_pending("spotify:track:trk0"));
+        assert!(!app.play_pending("spotify:track:trk20"));
+        app.backend.shutdown();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A query typed while the first rows are loading survives until those
+    /// rows arrive, then resolves normally.
+    #[test]
+    fn typeahead_waits_for_an_initially_empty_loading_table() {
+        let (ctx, mut app, root) = playlist_app("typeahead-loading", Settings::default());
+        let items = {
+            let page = app.playlist_pages.get_mut("pl1").unwrap();
+            page.items.loading = true;
+            page.items.next_offset = Some(0);
+            page.items.revision = page.items.revision.wrapping_add(1);
+            std::mem::take(&mut page.items.items)
+        };
+        type_text(&ctx, &mut app, "rose");
+        {
+            let page = app.playlist_pages.get_mut("pl1").unwrap();
+            page.items.items = items;
+            page.items.loading = false;
+            page.items.next_offset = None;
+            page.items.revision = page.items.revision.wrapping_add(1);
+        }
+        frame(&ctx, &mut app);
+        press(&ctx, &mut app, egui::Key::Enter);
+        assert!(app.play_pending("spotify:track:trk0"));
+        app.backend.shutdown();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A failed next page waits for the visible Retry control instead of
+    /// being requested again every frame by an unmatched query.
+    #[test]
+    fn typeahead_does_not_retry_a_failed_page_automatically() {
+        let (ctx, mut app, root) = playlist_app("typeahead-error", Settings::default());
+        app.table_sorts.insert(
+            Page::Playlist("pl1".into()),
+            TableSort {
+                column: SortColumn::Title,
+                ascending: true,
+            },
+        );
+        {
+            let page = app.playlist_pages.get_mut("pl1").unwrap();
+            page.items.loading = false;
+            page.items.next_offset = Some(page.items.items.len() as u32);
+            page.items.error = Some("offline".into());
+        }
+        type_text(&ctx, &mut app, "zzzz");
+        assert!(!app.playlist_pages["pl1"].items.loading);
+        app.backend.shutdown();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Enter follows the same availability rule as clicking or
+    /// double-clicking a row.
+    #[test]
+    fn typeahead_enter_does_not_play_an_unavailable_track() {
+        let (ctx, mut app, root) = playlist_app("typeahead-unavailable", Settings::default());
+        let page = app.playlist_pages.get_mut("pl1").unwrap();
+        let item = &mut page.items.items[0];
+        let playable = item.item.as_mut().or(item.track.as_mut()).unwrap();
+        if let PlayableItem::Track(track) = playable {
+            track.is_local = true;
+        }
+        page.items.revision = page.items.revision.wrapping_add(1);
+        type_text(&ctx, &mut app, "r");
+        press(&ctx, &mut app, egui::Key::Enter);
+        assert!(!app.play_pending("spotify:track:trk0"));
+        app.backend.shutdown();
+        let _ = std::fs::remove_dir_all(root);
+    }
 }

@@ -315,6 +315,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         app.winamp.last_pos = Some([rect.min.x, rect.min.y]);
     }
     let focused = focused.unwrap_or(true);
+    super::typeahead::leave_page(app, &ctx);
     super::keys::handle(app, &ctx);
     for path in dropped_skins(&ctx) {
         app.actions.push(Action::InstallSkin(path));

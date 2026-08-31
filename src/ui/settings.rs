@@ -502,6 +502,28 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         widgets::setting_row(
             ui,
             &palette,
+            "Type-ahead in song lists",
+            "Typing letters jumps to the matching song in playlists and albums.",
+            |ui| {
+                if widgets::switch(ui, &palette, &mut app.settings.typeahead_jump).changed() {
+                    changed = true;
+                }
+            },
+        );
+        widgets::setting_row(
+            ui,
+            &palette,
+            "Loose type-ahead",
+            "Typing also matches when the letters appear anywhere in a song title, in order.",
+            |ui| {
+                if widgets::switch(ui, &palette, &mut app.settings.typeahead_loose).changed() {
+                    changed = true;
+                }
+            },
+        );
+        widgets::setting_row(
+            ui,
+            &palette,
             "Interface zoom",
             super::keys::platform_shortcut(
                 "Ctrl+Plus and Ctrl+Minus work anywhere; Ctrl+0 resets.",
