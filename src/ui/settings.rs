@@ -504,6 +504,17 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 });
             },
         );
+        widgets::setting_row(
+            ui,
+            &palette,
+            "Autoscroll",
+            "Click the middle mouse button in any scrollable list, then move the mouse — the page follows. Click again or press Esc to stop. On by default on Windows and macOS; on Linux it starts off, because the middle button pastes selected text there.",
+            |ui| {
+                if widgets::switch(ui, &palette, &mut app.settings.autoscroll).changed() {
+                    changed = true;
+                }
+            },
+        );
     });
 
     section(ui, &palette, "Winamp skins", |ui| {

@@ -258,7 +258,8 @@ Settings live in one readable JSON file (`~/.config/fastpotify/settings.json`
 on Linux). They include the Connect device name, bitrate, normalisation,
 autoplay, gapless playback, the audio backend (PulseAudio/PipeWire or ALSA on
 Linux), audio cache size, theme, sidebar state, whether pages take colour
-from artwork, and the mini player's skin and size.
+from artwork, autoscroll with the middle mouse button, and the mini player's
+skin and size.
 Playback settings apply when you press **Apply and restart playback**.
 
 Caches (audio, artwork) live under the cache directory and can be deleted at

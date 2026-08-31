@@ -106,6 +106,10 @@ pub struct Settings {
     pub skin_scale: Option<u8>,
     /// The Winamp window stays above other windows.
     pub winamp_on_top: bool,
+    /// Click the middle mouse button to anchor autoscroll, then move the
+    /// mouse to scroll. On by default on Windows and macOS; off on Linux,
+    /// where the middle button pastes the X11 selection instead.
+    pub autoscroll: bool,
     /// The mini player's visualiser: bars, scope, or off.
     pub vis: VisMode,
     /// The playlist window is open under the mini player.
@@ -179,6 +183,7 @@ impl Default for Settings {
             skin: None,
             skin_scale: None,
             winamp_on_top: false,
+            autoscroll: !cfg!(target_os = "linux"),
             vis: VisMode::default(),
             playlist_open: false,
             playlist_height: 174,
@@ -347,6 +352,27 @@ mod tests {
         let json = serde_json::to_string(&settings).unwrap();
         let restored: Settings = serde_json::from_str(&json).unwrap();
         assert!(restored.tracklist_compact);
+    }
+
+    #[test]
+    fn autoscroll_defaults_to_off_on_linux_and_older_files() {
+        let older: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(
+            older.autoscroll,
+            !cfg!(target_os = "linux"),
+            "the default follows the platform: on in Windows and macOS, off where middle-click pastes"
+        );
+    }
+
+    #[test]
+    fn autoscroll_round_trips() {
+        let settings = Settings {
+            autoscroll: false,
+            ..Settings::default()
+        };
+        let json = serde_json::to_string(&settings).unwrap();
+        let restored: Settings = serde_json::from_str(&json).unwrap();
+        assert!(!restored.autoscroll);
     }
 }
 
