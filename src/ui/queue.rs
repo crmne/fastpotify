@@ -1,10 +1,10 @@
 //! The playback queue, as a page or as a side panel.
 
-use egui::{Align, Frame, Layout, Margin};
+use egui::{Align, Frame, Layout, Margin, Stroke, Vec2, pos2};
 
 use crate::api::models::PlayableItem;
 use crate::app::App;
-use crate::model::{Action, Loadable, RowContext};
+use crate::model::{Action, Loadable, QueueTab, RowContext};
 use crate::theme::{self, Icon};
 
 use super::widgets::{self, TrackRow};
@@ -39,27 +39,94 @@ pub fn side_panel(app: &mut App, ui: &mut egui::Ui) {
     let response = panel.show(ui, |ui| {
         ui.horizontal(|ui| {
             ui.add_space(4.0);
-            theme::text(ui, "Queue", theme::bold(18.0), palette.text);
+            tabs(app, ui);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if theme::icon_button(ui, Icon::X, 18.0, palette.secondary, palette.text, "Close")
                     .clicked()
                 {
                     app.actions.push(Action::ToggleQueuePanel);
                 }
-                save_button(app, ui);
+                if app.queue_tab == QueueTab::Queue {
+                    save_button(app, ui);
+                }
             });
         });
         ui.add_space(8.0);
+        // Lazy load recents when tab becomes visible.
+        if app.queue_tab == QueueTab::Recents
+            && !app.recents.loading
+            && !app.recents.complete
+            && app.recents.items.is_empty()
+            && app.recents.error.is_none()
+        {
+            app.actions.push(Action::LoadMoreRecents);
+        }
         egui::ScrollArea::vertical()
             .id_salt("queue-panel-scroll")
             .auto_shrink([false, false])
-            .show(ui, |ui| contents(app, ui, true));
+            .show(ui, |ui| match app.queue_tab {
+                QueueTab::Queue => contents(app, ui, true),
+                QueueTab::Recents => recents_contents(app, ui),
+            });
     });
     let width = response.response.rect.width();
     if (width - app.settings.queue_width).abs() > 1.0 {
         app.settings.queue_width = width;
         app.actions.push(Action::SettingsChanged);
     }
+}
+
+fn tabs(app: &mut App, ui: &mut egui::Ui) {
+    let palette = app.palette;
+    let current = app.queue_tab;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 16.0;
+        for (tab, label) in [
+            (QueueTab::Queue, "Queue"),
+            (QueueTab::Recents, "Recently played"),
+        ] {
+            let active = current == tab;
+            let color = if active {
+                palette.text
+            } else {
+                palette.secondary
+            };
+            let font = if active {
+                theme::semibold(14.0)
+            } else {
+                theme::regular(14.0)
+            };
+            let galley = ui
+                .painter()
+                .layout_no_wrap(label.to_string(), font.clone(), color);
+            let size = galley.size() + Vec2::new(4.0, 6.0);
+            let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+            if ui.is_rect_visible(rect) {
+                let pos = pos2(
+                    rect.center().x - galley.size().x / 2.0,
+                    rect.center().y - galley.size().y / 2.0,
+                );
+                ui.painter().galley(pos, galley, color);
+                if active {
+                    let y = rect.bottom() + 2.0;
+                    ui.painter()
+                        .hline(rect.x_range(), y, Stroke::new(2.0, palette.accent));
+                }
+                if response.hovered() && !active {
+                    let y = rect.bottom() + 2.0;
+                    ui.painter()
+                        .hline(rect.x_range(), y, Stroke::new(1.0, palette.outline));
+                }
+            }
+            if response
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .clicked()
+                && !active
+            {
+                app.actions.push(Action::SetQueueTab(tab));
+            }
+        }
+    });
 }
 
 /// The queue, made permanent: a new playlist of the playing song and
@@ -195,6 +262,104 @@ fn contents(app: &mut App, ui: &mut egui::Ui, compact: bool) {
         widgets::virtual_rows(ui, items.len() - queued_len, row_height, |ui, index| {
             queue_row(app, ui, &items, queued_len + index, compact);
         });
+    }
+}
+
+fn recents_contents(app: &mut App, ui: &mut egui::Ui) {
+    let palette = app.palette;
+    // Snapshot to avoid borrow issues while drawing.
+    let items = app.recents.items.clone();
+    let loading = app.recents.loading;
+    let error = app.recents.error.clone();
+    let complete = app.recents.complete;
+    let loaded_once = app.recents.loaded_once;
+
+    if items.is_empty() {
+        if loading {
+            widgets::loading_row(ui, &palette);
+            return;
+        }
+        if let Some(err) = error {
+            ui.horizontal(|ui| {
+                ui.add_space(8.0);
+                theme::icon(ui, Icon::CircleAlert, 16.0, palette.danger);
+                theme::text(ui, &err, theme::regular(13.0), palette.secondary);
+                if theme::soft_button(ui, &palette, Some(Icon::Refresh), "Retry", false).clicked() {
+                    app.actions.push(Action::ReloadRecents);
+                }
+            });
+            return;
+        }
+        if loaded_once {
+            widgets::empty_state(
+                ui,
+                &palette,
+                Icon::Clock,
+                "No recent plays",
+                "Play something and it will show up here.",
+            );
+        } else {
+            widgets::loading_row(ui, &palette);
+        }
+        return;
+    }
+
+    // Show error inline if we have items but also an error on next page.
+    if let Some(err) = error {
+        ui.horizontal(|ui| {
+            theme::icon(ui, Icon::CircleAlert, 14.0, palette.danger);
+            theme::text(ui, &err, theme::regular(12.0), palette.secondary);
+            if theme::soft_button(ui, &palette, Some(Icon::Refresh), "Retry", false).clicked() {
+                app.actions.push(Action::LoadMoreRecents);
+            }
+        });
+        ui.add_space(6.0);
+    }
+
+    let row_height = theme::COMPACT_ROW_HEIGHT;
+    // Build PlayableItems on the fly; virtual_rows needs stable index.
+    widgets::virtual_rows(ui, items.len(), row_height, |ui, index| {
+        let entry = &items[index];
+        // Need owned PlayableItem for track_row; clone track.
+        let item = PlayableItem::Track(entry.track.clone());
+        let context = RowContext::Uris(vec![entry.track.uri.clone()]);
+        widgets::track_row(
+            ui,
+            app,
+            TrackRow {
+                index,
+                number: None,
+                item: &item,
+                context: &context,
+                show_cover: true,
+                show_album: false,
+                added_at: entry.played_at.as_deref(),
+                added_by: None,
+                show_added_by: false,
+                compact: true,
+                thin: false,
+                shift: 0.0,
+            },
+        );
+    });
+
+    // Footer: loading more or load more trigger
+    if loading {
+        ui.add_space(8.0);
+        widgets::loading_row(ui, &palette);
+    } else if !complete {
+        ui.add_space(8.0);
+        // Auto-load when near end, plus manual button as fallback.
+        let can_load = app.recents.can_load_more();
+        // Check if scroll is near end (same heuristic as widgets::load_more_when_near_end)
+        let clip = ui.clip_rect();
+        let cursor = ui.cursor().top();
+        if can_load && cursor - clip.bottom() < 900.0 {
+            app.actions.push(Action::LoadMoreRecents);
+        }
+        if theme::soft_button(ui, &palette, Some(Icon::Refresh), "Load more", false).clicked() {
+            app.actions.push(Action::LoadMoreRecents);
+        }
     }
 }
 

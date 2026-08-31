@@ -442,6 +442,28 @@ pub fn populate(app: &mut App) {
             })
             .collect(),
     );
+    // Recents tab (queue sidebar) – deduped, timestamped, paginated.
+    let recents_now = Timestamp::now();
+    app.recents.items = tracks
+        .iter()
+        .skip(2)
+        .take(24)
+        .enumerate()
+        .map(|(index, track)| PlayHistory {
+            track: track.clone(),
+            played_at: Some(demo_added_at(index, recents_now)),
+            context: None,
+        })
+        .collect();
+    app.recents.loaded_once = true;
+    app.recents.loading = false;
+    app.recents.error = None;
+    // Has more to load (before cursor of oldest item).
+    let oldest = recents_now - SignedDuration::from_hours(48);
+    // Cursor is unix millis; jiff Timestamp exposes seconds + nanos.
+    let millis = oldest.as_second() * 1000 + i64::from(oldest.subsec_nanosecond() / 1_000_000);
+    app.recents.after = Some(millis.to_string());
+    app.recents.complete = false;
     app.home.top_artists = Loadable::Loaded((0..8).map(artist).collect());
     app.home.top_tracks = Loadable::Loaded(tracks.iter().skip(10).take(10).cloned().collect());
     app.home.top_songs = Loadable::Loaded(tracks.iter().skip(10).cloned().collect());
@@ -589,6 +611,10 @@ pub fn apply_flags(app: &mut App, page: Option<&str>, show: Option<&str>) {
     for surface in show.unwrap_or("").split(',').map(str::trim) {
         match surface {
             "queue" => app.show_queue_panel = true,
+            "recents" => {
+                app.show_queue_panel = true;
+                app.queue_tab = QueueTab::Recents;
+            }
             "devices" => app.show_devices = true,
             "shortcuts" => app.dialog = Some(Dialog::Shortcuts),
             "premium" => app.dialog = Some(Dialog::PremiumNeeded),

@@ -15,6 +15,7 @@ use crate::backend::{
 };
 use crate::media::{MediaCommand, MediaState, MediaTrack};
 use crate::media_controls::MediaService;
+use crate::model::QueueTab;
 use crate::model::*;
 use crate::paths::AppDirs;
 use crate::player::{EngineConfig, LoadSpec, LocalState, Playback, PlayerCommand, RepeatMode};
@@ -206,6 +207,9 @@ pub struct App {
 
     pub library: Library,
     pub home: HomeData,
+    pub recents: crate::model::CursorList<crate::api::models::PlayHistory>,
+    pub recents_generation: u64,
+    pub queue_tab: QueueTab,
     pub search: SearchState,
     pub playlist_pages: HashMap<String, PlaylistPage>,
     load_generation: u64,
@@ -462,6 +466,13 @@ impl App {
             window_title: String::new(),
             library: Library::default(),
             home: HomeData::default(),
+            recents: crate::model::CursorList::default(),
+            recents_generation: 0,
+            queue_tab: session
+                .queue_tab
+                .as_deref()
+                .and_then(QueueTab::decode)
+                .unwrap_or_default(),
             search: SearchState::default(),
             playlist_pages: HashMap::new(),
             load_generation: 0,
@@ -2165,7 +2176,11 @@ impl App {
         if self.home.top_tracks.get().is_none() {
             self.home.top_tracks = Loadable::Loading;
         }
-        self.backend.api(ApiRequest::RecentlyPlayed { generation });
+        self.backend.api(ApiRequest::RecentlyPlayed {
+            generation,
+            after: None,
+            before: None,
+        });
         self.backend.api(ApiRequest::TopArtists { generation });
         self.backend.api(ApiRequest::TopTracks {
             offset: 0,
@@ -2202,6 +2217,39 @@ impl App {
             full: true,
             generation: self.home.top_songs_generation,
         });
+    }
+
+    pub fn load_recents(&mut self, force: bool) {
+        if self.recents.loading {
+            return;
+        }
+        if self.recents.complete && !force {
+            return;
+        }
+        if force {
+            self.recents.reset();
+        }
+        self.recents.loading = true;
+        self.recents.error = None;
+        self.recents_generation = self.recents_generation.wrapping_add(1);
+        let generation = self.recents_generation;
+        let before = self.recents.after.clone();
+        self.backend.api(ApiRequest::RecentlyPlayed {
+            generation,
+            after: None,
+            before,
+        });
+    }
+
+    pub fn load_more_recents(&mut self) {
+        if !self.recents.can_load_more() {
+            return;
+        }
+        self.load_recents(false);
+    }
+
+    pub fn reload_recents(&mut self) {
+        self.load_recents(true);
     }
 
     pub fn load_more(&mut self, page: Page) {
@@ -2861,22 +2909,109 @@ impl App {
                     self.request_contains(uris);
                 }
             }
-            ApiResponse::RecentlyPlayed { generation, result } => {
-                if generation != self.home.generation {
+            ApiResponse::RecentlyPlayed {
+                generation,
+                after: _,
+                before: _,
+                result,
+            } => {
+                let is_home = generation == self.home.generation;
+                let is_recents = generation == self.recents_generation;
+                if !is_home && !is_recents {
                     return;
                 }
-                if let Ok(history) = &result {
-                    // Oldest first, so the newest ends up at the front.
-                    let contexts: Vec<String> = history
-                        .iter()
-                        .rev()
-                        .filter_map(|play| play.context.as_ref().map(|context| context.uri.clone()))
-                        .collect();
-                    for context in contexts {
-                        self.note_recent_context(&context);
+                if is_home {
+                    if let Ok(page) = &result {
+                        let contexts: Vec<String> = page
+                            .items
+                            .iter()
+                            .rev()
+                            .filter_map(|play| {
+                                play.context.as_ref().map(|context| context.uri.clone())
+                            })
+                            .collect();
+                        for context in contexts {
+                            self.note_recent_context(&context);
+                        }
+                    }
+                    let mapped = result
+                        .as_ref()
+                        .map(|page| page.items.clone())
+                        .map_err(|e| e.to_string());
+                    self.home.recently_played.refresh(mapped);
+                    if !is_recents {
+                        return;
+                    }
+                    // Generation collision: also handle recents below, contexts already noted.
+                }
+                // Recents handling
+                if is_recents {
+                    match result {
+                        Ok(page) => {
+                            if !is_home {
+                                let contexts: Vec<String> = page
+                                    .items
+                                    .iter()
+                                    .rev()
+                                    .filter_map(|play| {
+                                        play.context.as_ref().map(|context| context.uri.clone())
+                                    })
+                                    .collect();
+                                for context in contexts {
+                                    self.note_recent_context(&context);
+                                }
+                            }
+                            let cursors = page.cursors.clone();
+                            let items_len = page.items.len();
+                            let next_before = cursors.as_ref().and_then(|c| c.before.clone());
+                            let fallback_after = cursors.as_ref().and_then(|c| c.after.clone());
+                            let mut seen: std::collections::HashSet<String> = self
+                                .recents
+                                .items
+                                .iter()
+                                .filter_map(|p| p.track.id.clone())
+                                .collect();
+                            let mut new_items = Vec::new();
+                            for entry in page.items {
+                                if let Some(id) = entry.track.id.clone()
+                                    && !seen.insert(id)
+                                {
+                                    continue;
+                                }
+                                new_items.push(entry);
+                            }
+                            let new_len = new_items.len();
+                            self.recents.items.extend(new_items);
+                            let cursor = next_before.or(fallback_after);
+                            if cursor.is_none() || items_len == 0 || items_len < 50 {
+                                self.recents.complete = true;
+                                self.recents.after = None;
+                            } else {
+                                self.recents.after = cursor;
+                                // If deduplication consumed everything, still keep cursor but not complete.
+                                if new_len == 0 && self.recents.after.is_some() {
+                                    // keep trying, not complete
+                                    self.recents.complete = false;
+                                }
+                            }
+                            self.recents.loading = false;
+                            self.recents.loaded_once = true;
+                            self.recents.error = None;
+                            let uris: Vec<String> = self
+                                .recents
+                                .items
+                                .iter()
+                                .map(|h| h.track.uri.clone())
+                                .collect();
+                            self.request_contains(uris);
+                        }
+                        Err(error) => {
+                            self.recents.loading = false;
+                            self.recents.error = Some(error.to_string());
+                            self.recents.loaded_once = true;
+                        }
                     }
                 }
-                self.home.recently_played.refresh(result);
             }
             ApiResponse::TopTracks {
                 offset,
@@ -4637,6 +4772,18 @@ impl App {
                 }
             }
             Action::LoadMore(page) => self.load_more(page),
+            Action::LoadMoreRecents => self.load_more_recents(),
+            Action::ReloadRecents => self.reload_recents(),
+            Action::SetQueueTab(tab) => {
+                self.queue_tab = tab;
+                self.session_dirty = true;
+                if tab == QueueTab::Recents
+                    && self.recents.items.is_empty()
+                    && !self.recents.loading
+                {
+                    self.load_recents(false);
+                }
+            }
             Action::LoadMoreArtistAlbums(id) => {
                 let Some(page) = self.artist_pages.get_mut(&id) else {
                     return;
@@ -5204,6 +5351,7 @@ impl App {
                 window_size: self.last_window_size.or(self.session_window_size),
                 window_pos: self.last_window_pos.or(self.session_window_pos),
                 queue_open: Some(self.show_queue_panel),
+                queue_tab: Some(self.queue_tab.encode().to_string()),
                 winamp_pos: self.winamp.last_pos.or(self.winamp.restore_pos),
                 milkdrop_pos: self.milkdrop_pos,
             }

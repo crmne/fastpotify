@@ -85,6 +85,32 @@ impl Page {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum QueueTab {
+    #[default]
+    Queue,
+    Recents,
+}
+
+impl QueueTab {
+    pub fn encode(self) -> &'static str {
+        match self {
+            Self::Queue => "queue",
+            Self::Recents => "recents",
+        }
+    }
+
+    pub fn decode(text: &str) -> Option<Self> {
+        match text {
+            "queue" => Some(Self::Queue),
+            "recents" => Some(Self::Recents),
+            // Backward compat: image label
+            "recently_played" => Some(Self::Recents),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub enum Loadable<T> {
     #[default]
@@ -602,6 +628,9 @@ pub enum Action {
     SetSearchFilter(SearchFilter),
     FocusSearch,
     LoadMore(Page),
+    LoadMoreRecents,
+    ReloadRecents,
+    SetQueueTab(QueueTab),
     LoadMoreArtistAlbums(String),
     SetDiscographyFilter {
         artist_id: String,

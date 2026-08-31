@@ -751,6 +751,22 @@ pub fn track_row(ui: &mut Ui, app: &mut App, row: TrackRow<'_>) {
                     theme::regular(13.0),
                     subtitle_color,
                 );
+                if let Some(added) = row.added_at.filter(|a| !a.starts_with("1970-01-01"))
+                    && cols.added == 0.0
+                {
+                    let label = util::format_relative_date(added, jiff::Timestamp::now());
+                    theme::text(
+                        &mut child,
+                        "•",
+                        theme::regular(12.0),
+                        palette.secondary.gamma_multiply(0.6),
+                    );
+                    theme::text(&mut child, &label, theme::regular(12.0), palette.secondary);
+                    if label.ends_with(" ago") {
+                        ui.ctx()
+                            .request_repaint_after(std::time::Duration::from_secs(1));
+                    }
+                }
             }
             PlayableItem::Episode(episode) => {
                 let subtitle = episode
@@ -772,6 +788,22 @@ pub fn track_row(ui: &mut Ui, app: &mut App, row: TrackRow<'_>) {
                         && let Some(id) = show_id
                     {
                         app.actions.push(Action::Open(Page::Show(id)));
+                    }
+                }
+                if let Some(added) = row.added_at.filter(|a| !a.starts_with("1970-01-01"))
+                    && cols.added == 0.0
+                {
+                    theme::text(
+                        &mut child,
+                        "•",
+                        theme::regular(12.0),
+                        palette.secondary.gamma_multiply(0.6),
+                    );
+                    let label = util::format_relative_date(added, jiff::Timestamp::now());
+                    theme::text(&mut child, &label, theme::regular(12.0), palette.secondary);
+                    if label.ends_with(" ago") {
+                        ui.ctx()
+                            .request_repaint_after(std::time::Duration::from_secs(1));
                     }
                 }
             }
@@ -805,6 +837,22 @@ pub fn track_row(ui: &mut Ui, app: &mut App, row: TrackRow<'_>) {
                         theme::regular(12.5),
                         subtitle_color,
                     );
+                    if let Some(added) = row.added_at.filter(|a| !a.starts_with("1970-01-01"))
+                        && cols.added == 0.0
+                    {
+                        theme::text(
+                            ui,
+                            "•",
+                            theme::regular(12.0),
+                            palette.secondary.gamma_multiply(0.6),
+                        );
+                        let label = util::format_relative_date(added, jiff::Timestamp::now());
+                        theme::text(ui, &label, theme::regular(12.0), palette.secondary);
+                        if label.ends_with(" ago") {
+                            ui.ctx()
+                                .request_repaint_after(std::time::Duration::from_secs(1));
+                        }
+                    }
                 }
                 PlayableItem::Episode(episode) => {
                     let subtitle = episode
@@ -818,6 +866,22 @@ pub fn track_row(ui: &mut Ui, app: &mut App, row: TrackRow<'_>) {
                         && let Some(id) = show_id
                     {
                         app.actions.push(Action::Open(Page::Show(id)));
+                    }
+                    if let Some(added) = row.added_at.filter(|a| !a.starts_with("1970-01-01"))
+                        && cols.added == 0.0
+                    {
+                        theme::text(
+                            ui,
+                            "•",
+                            theme::regular(12.0),
+                            palette.secondary.gamma_multiply(0.6),
+                        );
+                        let label = util::format_relative_date(added, jiff::Timestamp::now());
+                        theme::text(ui, &label, theme::regular(12.0), palette.secondary);
+                        if label.ends_with(" ago") {
+                            ui.ctx()
+                                .request_repaint_after(std::time::Duration::from_secs(1));
+                        }
                     }
                 }
             }

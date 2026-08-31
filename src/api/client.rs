@@ -502,12 +502,20 @@ impl ApiClient {
         self.get("/me/player/queue", &[]).await
     }
 
-    pub async fn recently_played(&self, limit: u32) -> Result<CursorPage<PlayHistory>> {
-        self.get(
-            "/me/player/recently-played",
-            &[("limit", limit.to_string())],
-        )
-        .await
+    pub async fn recently_played(
+        &self,
+        limit: u32,
+        after: Option<&str>,
+        before: Option<&str>,
+    ) -> Result<CursorPage<PlayHistory>> {
+        let mut query = vec![("limit", limit.to_string())];
+        if let Some(after) = after {
+            query.push(("after", after.to_string()));
+        }
+        if let Some(before) = before {
+            query.push(("before", before.to_string()));
+        }
+        self.get("/me/player/recently-played", &query).await
     }
 
     fn device_query(device_id: Option<&str>) -> Vec<(&'static str, String)> {

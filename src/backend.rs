@@ -60,6 +60,8 @@ pub enum ApiRequest {
     },
     RecentlyPlayed {
         generation: u64,
+        after: Option<String>,
+        before: Option<String>,
     },
     TopTracks {
         offset: u32,
@@ -242,7 +244,9 @@ pub enum ApiResponse {
     },
     RecentlyPlayed {
         generation: u64,
-        result: ApiResult<Vec<PlayHistory>>,
+        after: Option<String>,
+        before: Option<String>,
+        result: ApiResult<CursorPage<PlayHistory>>,
     },
     TopTracks {
         offset: u32,
@@ -1759,9 +1763,15 @@ async fn handle(api: &ApiGateway, request: ApiRequest) -> (ApiResponse, Option<A
             seq,
             result: routed!(queue()),
         },
-        ApiRequest::RecentlyPlayed { generation } => ApiResponse::RecentlyPlayed {
+        ApiRequest::RecentlyPlayed {
             generation,
-            result: routed!(recently_played(50)).map(|page| page.items),
+            after,
+            before,
+        } => ApiResponse::RecentlyPlayed {
+            generation,
+            after: after.clone(),
+            before: before.clone(),
+            result: routed!(recently_played(50, after.as_deref(), before.as_deref())),
         },
         ApiRequest::TopTracks {
             offset,
