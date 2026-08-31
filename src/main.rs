@@ -117,6 +117,22 @@ enum Control {
     },
     /// Bring the window of the running instance forward
     Show,
+    /// Manage the running instance's colour palette
+    Palette {
+        #[command(subcommand)]
+        action: PaletteAction,
+    },
+}
+
+/// A colour palette command sent to the running instance.
+#[derive(Clone, Debug, clap::Subcommand)]
+enum PaletteAction {
+    /// Load a custom palette from a JSON file
+    Set { path: std::path::PathBuf },
+    /// Re-read the active palette's file from disk
+    Reload,
+    /// Drop the active palette, back to the built-in default
+    Reset,
 }
 
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
@@ -178,6 +194,11 @@ fn run_control(control: Control) -> i32 {
         Control::Transfer { device_id } => format!("transfer {device_id}"),
         Control::NowPlaying { .. } => "nowplaying".to_owned(),
         Control::Show => "show".to_owned(),
+        Control::Palette { action } => match action {
+            PaletteAction::Set { path } => format!("palette-set {}", path.display()),
+            PaletteAction::Reload => "palette-reload".to_owned(),
+            PaletteAction::Reset => "palette-reset".to_owned(),
+        },
     };
     match single_instance::send(&verb) {
         Ok(single_instance::Reply::Ok) => 0,
@@ -563,6 +584,11 @@ fn native_options(fullscreen: bool, mini: Option<MiniWindow>) -> eframe::NativeO
             .with_fullsize_content_view(true)
             .with_titlebar_shown(false)
             .with_title_shown(false)
+            // Opaque by default (the built-in and built-in-name palettes
+            // never set alpha below 255 on `window`), but a custom palette
+            // can make the window translucent, so the surface itself has
+            // to allow it.
+            .with_transparent(true)
             .with_inner_size([1240.0, 800.0])
             .with_min_inner_size([760.0, 520.0])
             .with_fullscreen(fullscreen),
@@ -722,16 +748,18 @@ impl eframe::App for Shell {
     }
 
     /// The mini player's window is see-through where the skin leaves it
-    /// out; the big window paints itself over eframe's own ground.
+    /// out. The main window clears to its palette's `window` colour,
+    /// alpha included, so a custom palette with a translucent `window`
+    /// shows the desktop behind it; the built-in palettes are opaque, so
+    /// this changes nothing for them.
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
-        if self
-            .app
-            .as_ref()
-            .is_some_and(|app| app.settings.winamp_window)
-        {
+        let Some(app) = self.app.as_ref() else {
+            return egui::Color32::from_rgba_unmultiplied(12, 12, 12, 180).to_normalized_gamma_f32();
+        };
+        if app.settings.winamp_window {
             [0.0; 4]
         } else {
-            egui::Color32::from_rgba_unmultiplied(12, 12, 12, 180).to_normalized_gamma_f32()
+            app.palette.window.to_normalized_gamma_f32()
         }
     }
 

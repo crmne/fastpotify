@@ -611,6 +611,14 @@ pub enum Action {
     ToggleDevicesPopup,
     SettingsChanged,
     RestartEngine,
+    /// Load a custom colour palette from a JSON file and make it active.
+    LoadPalette(std::path::PathBuf),
+    /// Make one of the built-in palettes active, by name.
+    LoadBuiltinPalette(String),
+    /// Re-read the active palette's file from disk.
+    ReloadPalette,
+    /// Drop the active palette, back to the built-in default.
+    ResetPalette,
     EnablePlayback,
     ShowWindow,
     HideWindow,

@@ -1,6 +1,6 @@
 //! User preferences, stored as one readable JSON file.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -62,6 +62,9 @@ pub struct Settings {
     pub audio_cache: bool,
     pub audio_cache_mb: u64,
     pub theme: ThemeChoice,
+    /// A custom colour palette file, loaded over the built-in dark/light
+    /// palette. `None` uses the built-in palette only.
+    pub palette_file: Option<PathBuf>,
     /// Tint the interface with the colour of the playing album's art.
     pub accent_from_art: bool,
     /// Last local volume, 0..=65535.
@@ -157,6 +160,7 @@ impl Default for Settings {
             audio_cache: true,
             audio_cache_mb: 1024,
             theme: ThemeChoice::Dark,
+            palette_file: None,
             accent_from_art: true,
             volume: (u16::MAX as u32 * 70 / 100) as u16,
             sidebar_visible: true,
@@ -347,6 +351,23 @@ mod tests {
         let json = serde_json::to_string(&settings).unwrap();
         let restored: Settings = serde_json::from_str(&json).unwrap();
         assert!(restored.tracklist_compact);
+    }
+
+    #[test]
+    fn older_settings_have_no_palette_file() {
+        let settings: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(settings.palette_file, None);
+    }
+
+    #[test]
+    fn palette_file_round_trips() {
+        let settings = Settings {
+            palette_file: Some("/home/user/theme.json".into()),
+            ..Settings::default()
+        };
+        let json = serde_json::to_string(&settings).unwrap();
+        let restored: Settings = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.palette_file, settings.palette_file);
     }
 }
 

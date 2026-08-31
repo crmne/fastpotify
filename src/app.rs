@@ -152,6 +152,7 @@ pub struct App {
     pub offline: bool,
     pub palette: Palette,
     applied_dark: Option<bool>,
+    pub palette_manager: crate::palette::PaletteManager,
 
     pub auth: AuthStatus,
     pub user: Option<User>,
@@ -387,6 +388,15 @@ impl App {
             .filter(|page| !matches!(page, Page::Settings | Page::Queue))
             .unwrap_or(Page::Home);
 
+        // Grabbed before `settings` moves into the struct below.
+        let palette_file = settings.palette_file.clone();
+        let palette_manager = crate::palette::PaletteManager::new();
+        if let Some(path) = &palette_file
+            && let Err(error) = palette_manager.load_from_file(path)
+        {
+            log::warn!("could not load palette from {}: {error}", path.display());
+        }
+
         let mut app = Self {
             dirs,
             settings,
@@ -406,6 +416,7 @@ impl App {
             offline: false,
             palette: Palette::dark(),
             applied_dark: None,
+            palette_manager,
             auth: AuthStatus::Starting,
             user: None,
             local_device_id: None,
@@ -1685,14 +1696,59 @@ impl App {
         self.settings.save(&self.dirs.settings_file());
     }
 
+    /// Loads a custom palette from `path` and applies it immediately.
+    fn load_palette_file(&mut self, ctx: &egui::Context, path: std::path::PathBuf) {
+        match self.palette_manager.load_from_file(&path) {
+            Ok(()) => {
+                self.settings.palette_file = Some(path);
+                self.settings_dirty = true;
+                self.applied_dark = None;
+                self.apply_theme(ctx);
+                self.toast("Palette loaded");
+            }
+            Err(error) => self.toast_error(format!("Could not load palette: {error}")),
+        }
+    }
+
+    /// Makes a built-in palette active immediately. Built-in palettes have
+    /// no file, so `settings.palette_file` is cleared.
+    fn load_builtin_palette(&mut self, ctx: &egui::Context, name: String) {
+        match self.palette_manager.load_builtin(&name) {
+            Ok(()) => {
+                self.settings.palette_file = None;
+                self.settings_dirty = true;
+                self.applied_dark = None;
+                self.apply_theme(ctx);
+            }
+            Err(error) => self.toast_error(format!("Could not load palette: {error}")),
+        }
+    }
+
+    /// Drops the active palette and returns to the built-in default.
+    fn reset_palette(&mut self, ctx: &egui::Context) {
+        self.palette_manager.reset();
+        self.settings.palette_file = None;
+        self.settings_dirty = true;
+        self.applied_dark = None;
+        self.apply_theme(ctx);
+    }
+
+    /// Re-reads the active palette's file from disk, if it has one.
+    fn reload_palette(&mut self, ctx: &egui::Context) {
+        match self.palette_manager.reload() {
+            Ok(()) => {
+                self.applied_dark = None;
+                self.apply_theme(ctx);
+                self.toast("Palette reloaded");
+            }
+            Err(error) => self.toast_error(format!("Could not reload palette: {error}")),
+        }
+    }
+
     fn apply_theme(&mut self, ctx: &egui::Context) {
         let dark = ctx.theme() == egui::Theme::Dark;
         if self.applied_dark != Some(dark) {
-            self.palette = if dark {
-                Palette::dark()
-            } else {
-                Palette::light()
-            };
+            self.palette = self.palette_manager.current(dark).palette;
             theme::apply(ctx, &self.palette);
             self.applied_dark = Some(dark);
             self.accents.clear();
@@ -1756,6 +1812,9 @@ impl App {
                 }),
                 ControlCommand::Transfer(device_id) => Some(Action::Transfer(device_id)),
                 ControlCommand::RefreshDevices => Some(Action::RefreshDevices),
+                ControlCommand::SetPalette(path) => Some(Action::LoadPalette(path)),
+                ControlCommand::ReloadPalette => Some(Action::ReloadPalette),
+                ControlCommand::ResetPalette => Some(Action::ResetPalette),
             };
             if let Some(action) = action {
                 self.actions.push(action);
@@ -4286,6 +4345,10 @@ impl App {
                     ThemeChoice::System => egui::ThemePreference::System,
                 });
             }
+            Action::LoadPalette(path) => self.load_palette_file(ctx, path),
+            Action::LoadBuiltinPalette(name) => self.load_builtin_palette(ctx, name),
+            Action::ReloadPalette => self.reload_palette(ctx),
+            Action::ResetPalette => self.reset_palette(ctx),
             Action::RestartEngine => {
                 self.save_settings();
                 let config = engine_config(

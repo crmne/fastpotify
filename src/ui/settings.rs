@@ -11,6 +11,7 @@ use crate::theme::{self, Icon, Palette};
 use super::widgets;
 
 const PLAYBACK_DIRTY_ID: &str = "playback-settings-dirty";
+const PALETTE_PATH_ID: &str = "palette-file-path";
 
 fn section(
     ui: &mut egui::Ui,
@@ -442,6 +443,95 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 }
             });
         });
+
+        // Custom colour palettes: hex-defined, loaded from a JSON file or
+        // picked from the built-in set. A fresh snapshot every frame, like
+        // the rest of this page reads `app.settings` directly.
+        let palette_path_id = egui::Id::new(PALETTE_PATH_ID);
+        let palette_state = app.palette_manager.current(palette.dark);
+        let mut palette_path_text = ui
+            .data(|data| data.get_temp::<String>(palette_path_id))
+            .unwrap_or_else(|| {
+                app.settings
+                    .palette_file
+                    .as_ref()
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_default()
+            });
+
+        widgets::setting_row(
+            ui,
+            &palette,
+            "Colour palette",
+            &match &palette_state.name {
+                Some(name) => format!("Active: {name}"),
+                None => "Using the built-in palette.".to_string(),
+            },
+            |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    if palette_state.source_file.is_some()
+                        && theme::soft_button(ui, &palette, Some(Icon::Refresh), "Reload", false)
+                            .clicked()
+                    {
+                        app.actions.push(Action::ReloadPalette);
+                    }
+                    if palette_state.name.is_some()
+                        && theme::soft_button(ui, &palette, Some(Icon::X), "Reset", false)
+                            .clicked()
+                    {
+                        app.actions.push(Action::ResetPalette);
+                    }
+                });
+            },
+        );
+        widgets::setting_row(
+            ui,
+            &palette,
+            "Load from file",
+            "Path to a palette JSON file with hex colours. 8-digit hex (#RRGGBBAA) adds transparency.",
+            |ui| {
+                let response = Frame::new()
+                    .fill(palette.surface)
+                    .corner_radius(CornerRadius::same(6))
+                    .inner_margin(Margin::symmetric(10, 6))
+                    .show(ui, |ui| {
+                        ui.add(
+                            egui::TextEdit::singleline(&mut palette_path_text)
+                                .hint_text(
+                                    egui::RichText::new("/path/to/theme.json").color(palette.dim),
+                                )
+                                .font(theme::regular(13.0))
+                                .frame(egui::Frame::NONE)
+                                .desired_width(260.0),
+                        )
+                    })
+                    .inner;
+                let submit_on_enter = response.lost_focus()
+                    && ui.input(|input| input.key_pressed(egui::Key::Enter));
+                ui.data_mut(|data| data.insert_temp(palette_path_id, palette_path_text.clone()));
+                ui.add_space(6.0);
+                if (theme::pill_button(ui, &palette, "Load", true).clicked() || submit_on_enter)
+                    && !palette_path_text.trim().is_empty()
+                {
+                    app.actions.push(Action::LoadPalette(std::path::PathBuf::from(
+                        palette_path_text.trim(),
+                    )));
+                }
+            },
+        );
+        widgets::setting_row(ui, &palette, "Built-in palettes", "", |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                for name in app.palette_manager.list_builtins() {
+                    let active = palette_state.name.as_deref() == Some(name);
+                    if theme::soft_button(ui, &palette, None, name, active).clicked() && !active {
+                        app.actions.push(Action::LoadBuiltinPalette(name.to_string()));
+                    }
+                }
+            });
+        });
+
         widgets::setting_row(
             ui,
             &palette,

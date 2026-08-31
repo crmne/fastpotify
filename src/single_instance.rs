@@ -97,6 +97,12 @@ pub enum ControlCommand {
     /// Refresh the device list. Sent by the `devices` read, which answers
     /// from a snapshot that is only as fresh as the app's last look.
     RefreshDevices,
+    /// Load a custom colour palette from this JSON file.
+    SetPalette(std::path::PathBuf),
+    /// Re-read the active palette's file from disk.
+    ReloadPalette,
+    /// Drop the active palette, back to the built-in default.
+    ResetPalette,
 }
 
 /// Holds whatever marks this process as the running instance. Dropping it
@@ -346,6 +352,9 @@ fn parse(line: &str) -> Option<Request> {
         ("save-toggle", None) => ControlCommand::ToggleSaved,
         ("play-uri", Some(uri)) => ControlCommand::PlayUri(spotify_uri(uri)?),
         ("transfer", Some(id)) => ControlCommand::Transfer(device_id(id)?),
+        ("palette-set", Some(path)) => ControlCommand::SetPalette(file_path(path)?.into()),
+        ("palette-reload", None) => ControlCommand::ReloadPalette,
+        ("palette-reset", None) => ControlCommand::ResetPalette,
         ("nowplaying", None) => return Some(Request::NowPlaying),
         ("devices", None) => return Some(Request::Devices),
         _ => return None,
@@ -377,6 +386,16 @@ fn device_id(text: &str) -> Option<String> {
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'));
     shaped.then(|| text.to_owned())
+}
+
+/// A file path argument, shaped enough to be worth trying: non-empty, no
+/// control characters, and short enough to have come from a command line
+/// rather than an attempt to overrun the read buffer.
+#[cfg(not(target_os = "linux"))]
+fn file_path(text: &str) -> Option<&str> {
+    let shaped =
+        !text.is_empty() && text.len() <= 240 && !text.chars().any(|c| c.is_control());
+    shaped.then_some(text)
 }
 
 /// Reads up to the first newline. A line too long to be one of ours, or any
@@ -555,6 +574,18 @@ mod tests {
         assert_eq!(
             command("fastpotify:transfer a1b2c3d4e5"),
             Some(ControlCommand::Transfer("a1b2c3d4e5".to_owned()))
+        );
+        assert_eq!(
+            command("fastpotify:palette-set /home/user/theme.json"),
+            Some(ControlCommand::SetPalette("/home/user/theme.json".into()))
+        );
+        assert_eq!(
+            command("fastpotify:palette-reload"),
+            Some(ControlCommand::ReloadPalette)
+        );
+        assert_eq!(
+            command("fastpotify:palette-reset"),
+            Some(ControlCommand::ResetPalette)
         );
         assert!(matches!(
             parse("fastpotify:nowplaying"),
