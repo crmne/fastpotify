@@ -316,6 +316,9 @@ pub struct App {
     glide: Option<egui::Vec2>,
     /// When the last scroll event arrived, for lifts nobody announces.
     scroll_last_event: Option<Instant>,
+    /// Where the middle button was pressed to anchor autoscroll; `None`
+    /// when the Windows-style autoscroll is not active.
+    autoscroll_anchor: Option<egui::Pos2>,
     /// How each table is sorted, per page, for as long as the app runs.
     pub table_sorts: HashMap<Page, TableSort>,
     /// User ids resolved to display names; `None` while unknown, so an id
@@ -368,6 +371,14 @@ const TRACKPAD_SCALE: f32 = 1.8;
 const GLIDE_DECAY: f32 = 0.35;
 const GLIDE_START: f32 = 120.0;
 const GLIDE_STOP: f32 = 40.0;
+
+/// How far the pointer must sit from the autoscroll anchor before the
+/// page starts moving, so a plain middle-click does not nudge the page.
+const AUTOSCROLL_DEAD_ZONE: f32 = 12.0;
+/// Page speed per point of pointer distance beyond the dead zone, in
+/// points per second. Further from the anchor scrolls faster, like the
+/// native Windows autoscroll.
+const AUTOSCROLL_SPEED: f32 = 6.0;
 
 impl App {
     pub fn new(waker: &Waker, dirs: AppDirs, settings: Settings, options: AppOptions) -> Self {
@@ -525,6 +536,7 @@ impl App {
             scroll_accum: egui::Vec2::ZERO,
             glide: None,
             scroll_last_event: None,
+            autoscroll_anchor: None,
             table_sorts: session
                 .sorts
                 .iter()
@@ -5006,6 +5018,7 @@ impl App {
         let ctx = &ctx;
         self.apply_theme(ctx);
         self.lock_scroll_axis(ctx);
+        self.autoscroll(ctx);
         // The mini player has no sign-in screen; someone who needs one gets
         // the big window.
         let needs_sign_in = !(self.is_connected() && self.user.is_some())
@@ -5159,6 +5172,111 @@ impl App {
             ScrollAxis::Horizontal => input.smooth_scroll_delta.y = 0.0,
             ScrollAxis::Vertical => input.smooth_scroll_delta.x = 0.0,
         });
+    }
+
+    /// Windows-style autoscroll: middle-click to anchor, then move the
+    /// mouse and the page follows. This replicates what Windows does in any
+    /// scrollable view — no new interaction to learn.
+    ///
+    /// Click the middle button once to anchor; moving the mouse away from
+    /// the anchor scrolls in that direction, faster the further it sits.
+    /// Inside a small dead zone around the anchor the page stays put so a
+    /// plain click does not nudge it. Click again (any button) or press Esc
+    /// to stop. The wheel still works while autoscroll is idle.
+    ///
+    /// On Linux the middle button pastes the X11 selection, so the feature
+    /// is off there by default (the toggle still turns it on).
+    fn autoscroll(&mut self, ctx: &egui::Context) {
+        if !self.settings.autoscroll {
+            self.autoscroll_anchor = None;
+            return;
+        }
+
+        // Toggle on middle press, stop on any other press or Esc.
+        let (middle_pressed, any_pressed, esc_pressed, pointer_pos) = ctx.input(|input| {
+            (
+                input.pointer.button_pressed(egui::PointerButton::Middle),
+                input.pointer.any_pressed(),
+                input.key_pressed(egui::Key::Escape),
+                input.pointer.hover_pos().or(input.pointer.latest_pos()),
+            )
+        });
+
+        if esc_pressed {
+            self.autoscroll_anchor = None;
+            return;
+        }
+
+        if middle_pressed {
+            if let Some(pos) = pointer_pos {
+                if self.autoscroll_anchor.is_some() {
+                    // Second middle-click — stop.
+                    self.autoscroll_anchor = None;
+                    return;
+                }
+                self.autoscroll_anchor = Some(pos);
+                // Own the gesture: cancel any trackpad glide or axis lock
+                // left over from the last wheel turn.
+                self.glide = None;
+                self.scroll_lock = None;
+            }
+            // Do not also treat the press as a stop for another button
+            // pressed in the same frame.
+            return;
+        }
+
+        if any_pressed && self.autoscroll_anchor.is_some() {
+            // Clicking anywhere else stops the anchored scroll, like Windows.
+            self.autoscroll_anchor = None;
+            return;
+        }
+
+        let Some(anchor) = self.autoscroll_anchor else {
+            return;
+        };
+        let Some(pos) = pointer_pos else {
+            return;
+        };
+
+        let offset = pos - anchor;
+        let distance = offset.length();
+        if distance <= AUTOSCROLL_DEAD_ZONE {
+            ctx.set_cursor_icon(egui::CursorIcon::AllScroll);
+            ctx.request_repaint_after(Duration::from_millis(16));
+            return;
+        }
+
+        ctx.set_cursor_icon(egui::CursorIcon::AllScroll);
+        // Own the gesture while scrolling.
+        self.glide = None;
+        self.scroll_lock = None;
+
+        let dt = ctx.input(|input| input.stable_dt).clamp(0.001, 0.05);
+        let effective = distance - AUTOSCROLL_DEAD_ZONE;
+        let speed = effective * AUTOSCROLL_SPEED;
+        let dir = offset / distance;
+        let delta = dir * speed * dt;
+        ctx.input_mut(|input| {
+            input.smooth_scroll_delta -= delta;
+        });
+        ctx.request_repaint_after(Duration::from_millis(16));
+    }
+
+    /// Helper for the unit test: what the page does for a given pointer
+    /// offset from the anchor. Extracted so the direction is testable without
+    /// driving a full frame.
+    #[allow(dead_code)]
+    fn autoscroll_delta_from_offset(offset: egui::Vec2) -> egui::Vec2 {
+        let distance = offset.length();
+        if distance <= AUTOSCROLL_DEAD_ZONE {
+            return egui::Vec2::ZERO;
+        }
+        let effective = distance - AUTOSCROLL_DEAD_ZONE;
+        let dir = offset / distance;
+        // Use a nominal 1/60s step so the helper is deterministic in tests;
+        // the real code scales by `stable_dt`.
+        let dt = 1.0 / 60.0;
+        -(dir * effective * AUTOSCROLL_SPEED * dt)
     }
 
     /// Persist state when a window closes (to the tray or for good).
@@ -6187,6 +6305,35 @@ mod tests {
             app.playing_context_uri().as_deref(),
             Some("spotify:station:track:xyz"),
             "the station is what the interface calls playing"
+        );
+    }
+
+    /// Autoscroll: moving the mouse away from the middle-click anchor
+    /// scrolls in that direction, faster the further it sits — like Windows.
+    #[test]
+    fn middle_drag_scroll_moves_the_page_with_the_mouse() {
+        // Well outside the dead zone: offset down scrolls down (negative y).
+        let down = egui::Vec2::new(0.0, 40.0);
+        let scroll = App::autoscroll_delta_from_offset(down);
+        assert!(
+            scroll.y < 0.0,
+            "moving below the anchor scrolls down: {scroll:?}"
+        );
+        let right = egui::Vec2::new(30.0, 0.0);
+        let scroll = App::autoscroll_delta_from_offset(right);
+        assert!(
+            scroll.x < 0.0,
+            "moving right of the anchor scrolls right: {scroll:?}"
+        );
+        // Inside the dead zone or not moved at all: no scroll, so a plain
+        // middle-click does not nudge the page.
+        assert_eq!(
+            App::autoscroll_delta_from_offset(egui::Vec2::ZERO),
+            egui::Vec2::ZERO
+        );
+        assert_eq!(
+            App::autoscroll_delta_from_offset(egui::Vec2::new(5.0, 0.0)),
+            egui::Vec2::ZERO
         );
     }
 

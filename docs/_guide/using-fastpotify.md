@@ -174,7 +174,18 @@ On macOS, `Cmd` replaces `Ctrl`.
 Settings (Ctrl+,) includes the Connect device name, audio quality up to
 320 kbps, volume normalisation, autoplay, gapless playback, the audio backend
 on Linux, the audio cache size, the equalizer, themes, album-art tinting,
-compact views of the sidebar and of track lists (Spotify's compact views:
-names only, one line a row, no covers),
+autoscroll, compact views of the sidebar and of track lists (Spotify's
+compact views: names only, one line a row, no covers),
 the mini player's skin and size, and close-to-tray behaviour. Applying playback settings restarts the local player. Other
 settings take effect immediately.
+
+### Autoscroll
+
+Click the middle mouse button in any scrollable list, then move the mouse —
+the page follows, faster the further the cursor sits from where you
+clicked. Move down to read further down, right to reveal the rest of a
+wide row. A small dead zone around the click keeps a plain middle-click
+from nudging the page. Click again (any button) or press Esc to stop. It
+is on by default on Windows and macOS, and off by default on Linux, where
+the middle button instead pastes selected text — turn it on there with the
+**Autoscroll** switch in Settings, Appearance.
