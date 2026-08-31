@@ -471,7 +471,10 @@ impl Processor {
                 frame[1] = middle;
             }
             for (sample, gain) in frame.iter_mut().zip(gains) {
-                *sample = (*sample * gain).clamp(-1.0, 1.0);
+                // Keep floating-point headroom for the default sink's later
+                // output volume. Clipping here would make an otherwise-safe
+                // boost distort even when the listener turned the volume down.
+                *sample *= gain;
             }
         }
     }
@@ -583,6 +586,24 @@ mod tests {
             .balance,
             1.0
         );
+    }
+
+    #[test]
+    fn processing_does_not_clip_before_output_volume() {
+        let shared = shared();
+        let mut processor = Processor::new(shared.clone());
+        shared.lock().unwrap().on = true;
+        shared.lock().unwrap().preamp_db = 6.0;
+
+        let mut samples = vec![0.8, -0.8];
+        processor.process(&mut samples);
+
+        let boosted = 0.8 * 10f64.powf(6.0 / 20.0);
+        assert!((samples[0] - boosted).abs() < 1e-12);
+        assert!((samples[1] + boosted).abs() < 1e-12);
+        // The output volume is applied downstream. At half volume this
+        // signal fits, so clipping it in the equalizer would be irreversible.
+        assert!(samples.iter().all(|sample| (sample * 0.5).abs() < 1.0));
     }
 
     /// Every preset, played, meets its sliders at every band's centre,
