@@ -1591,6 +1591,7 @@ dependencies = [
  "image",
  "jiff",
  "ksni",
+ "libc",
  "librespot-connect",
  "librespot-core",
  "librespot-metadata",

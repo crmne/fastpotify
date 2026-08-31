@@ -42,13 +42,13 @@ const DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 /// How often playback looks at which output the system calls its default.
 const DEFAULT_CHECK_INTERVAL: Duration = Duration::from_secs(2);
 
-/// How much sound the Windows audio engine holds for the device, in
-/// seconds. Its default is a period of ten milliseconds, which a busy
-/// PC misses now and then, and every miss is a click; a tenth of a
-/// second rides out the misses at the cost of a tenth of a second's
-/// delay, which a music player never notices. (#88)
-#[cfg(windows)]
-const ENGINE_BUFFER: u32 = 10;
+/// How many engine buffers fit in one second. Ten makes each buffer a
+/// tenth of a second: long enough for a music player to ride out a missed
+/// deadline without making its controls feel sluggish. Windows needs this
+/// instead of its roughly ten-millisecond default (#88); macOS benefits for
+/// the same reason when CoreAudio and a Bluetooth device are busy.
+#[cfg(any(windows, target_os = "macos", test))]
+const ENGINE_BUFFERS_PER_SECOND: u32 = 10;
 
 pub struct RodioSink {
     /// The output device name from Settings; `None` means the default.
@@ -223,19 +223,30 @@ impl Sink for RodioSink {
 /// Opens the stream at Spotify's stereo 44.1 kHz, so nothing is converted,
 /// else at the device's own rate, which Windows insists on for a shared
 /// device, else at whatever rodio can find. The first two carry the
-/// engine buffer Windows needs; rodio's own fallback would not.
+/// engine buffer Windows and macOS need; rodio's own fallback would not.
 fn open_stream(
     device: &cpal::Device,
     on_error: impl FnMut(cpal::StreamError) + Send + Clone + 'static,
 ) -> Result<rodio::OutputStream, rodio::StreamError> {
+    #[cfg(target_os = "macos")]
+    let supported_buffer = device
+        .default_output_config()
+        .map(|config| *config.buffer_size())
+        .unwrap_or(cpal::SupportedBufferSize::Unknown);
     let builder = |sample_rate: u32| -> Result<_, rodio::StreamError> {
         let builder = rodio::OutputStreamBuilder::from_device(device.clone())?
             .with_channels(NUM_CHANNELS as rodio::ChannelCount)
             .with_sample_rate(sample_rate as rodio::SampleRate)
             .with_error_callback(on_error.clone());
         #[cfg(windows)]
-        let builder =
-            builder.with_buffer_size(cpal::BufferSize::Fixed(sample_rate / ENGINE_BUFFER));
+        let builder = builder.with_buffer_size(cpal::BufferSize::Fixed(
+            sample_rate / ENGINE_BUFFERS_PER_SECOND,
+        ));
+        #[cfg(target_os = "macos")]
+        let builder = match macos_engine_buffer(sample_rate, supported_buffer) {
+            Some(buffer) => builder.with_buffer_size(buffer),
+            None => builder,
+        };
         Ok(builder)
     };
     if let Ok(stream) = builder(SAMPLE_RATE)?.open_stream() {
@@ -249,6 +260,24 @@ fn open_stream(
     builder(SAMPLE_RATE)?.open_stream_or_fallback()
 }
 
+/// CoreAudio rejects a fixed buffer outside the device's advertised range.
+/// Aim for a tenth of a second, then stay within that range; if the driver
+/// cannot describe one, leave its default alone instead of risking a stream
+/// that no longer opens.
+#[cfg(any(target_os = "macos", test))]
+fn macos_engine_buffer(
+    sample_rate: u32,
+    supported: cpal::SupportedBufferSize,
+) -> Option<cpal::BufferSize> {
+    let target = (sample_rate / ENGINE_BUFFERS_PER_SECOND).max(1);
+    match supported {
+        cpal::SupportedBufferSize::Range { min, max } if min <= max && max > 0 => {
+            Some(cpal::BufferSize::Fixed(target.clamp(min.max(1), max)))
+        }
+        cpal::SupportedBufferSize::Range { .. } | cpal::SupportedBufferSize::Unknown => None,
+    }
+}
+
 /// The player's thread decodes the music and hands it here with about a
 /// fifth of a second in hand. Under load a PC gives the foreground app
 /// the cores first, and a fifth of a second is soon gone; Windows lets a
@@ -256,9 +285,8 @@ fn open_stream(
 /// ahead of an app's ordinary threads, behind the audio engine's own,
 /// and never so high that a stuck loop here could hold the machine. (#88)
 ///
-/// Only Windows has a knob an unprivileged thread can turn: on Linux a
-/// thread cannot raise itself without rtkit, and on macOS the equivalent
-/// is a QoS class, worth wiring up when a report calls for it.
+/// Windows and macOS both have a knob an unprivileged thread can turn. On
+/// Linux a thread cannot raise itself without rtkit.
 #[cfg(windows)]
 fn take_precedence() {
     use windows_sys::Win32::System::Threading::{
@@ -271,7 +299,22 @@ fn take_precedence() {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+fn take_precedence() {
+    // SAFETY: this changes only the calling thread's scheduling class. Zero
+    // is the documented relative priority for this QoS class.
+    let result = unsafe {
+        libc::pthread_set_qos_class_self_np(libc::qos_class_t::QOS_CLASS_USER_INITIATED, 0)
+    };
+    if result != 0 {
+        log::warn!(
+            "cannot prioritize the audio producer thread: {}",
+            std::io::Error::from_raw_os_error(result)
+        );
+    }
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 fn take_precedence() {}
 
 /// The name of the system's default output, as last asked. Asking
@@ -365,6 +408,10 @@ fn open_output(preferred: Option<&str>) -> Result<Output, OpenError> {
     let mut stream = open_stream(&device, on_error)?;
     stream.log_on_drop(false);
     let sample_rate = stream.config().sample_rate();
+    if let &cpal::BufferSize::Fixed(frames) = stream.config().buffer_size() {
+        let milliseconds = u64::from(frames) * 1000 / u64::from(sample_rate);
+        log::info!("audio engine buffer: {frames} frames ({milliseconds} ms)");
+    }
     let resampler = Resampler::new(SAMPLE_RATE, sample_rate, NUM_CHANNELS as usize);
     if resampler.is_some() {
         log::info!(
@@ -386,6 +433,38 @@ fn open_output(preferred: Option<&str>) -> Result<Output, OpenError> {
 mod tests {
     use super::*;
     use std::sync::Mutex;
+
+    #[test]
+    fn macos_engine_buffer_holds_a_tenth_second_within_device_limits() {
+        use cpal::{BufferSize, SupportedBufferSize};
+
+        assert_eq!(
+            macos_engine_buffer(44_100, SupportedBufferSize::Range { min: 32, max: 8192 }),
+            Some(BufferSize::Fixed(4410))
+        );
+        assert_eq!(
+            macos_engine_buffer(48_000, SupportedBufferSize::Range { min: 32, max: 4096 }),
+            Some(BufferSize::Fixed(4096))
+        );
+        assert_eq!(
+            macos_engine_buffer(
+                44_100,
+                SupportedBufferSize::Range {
+                    min: 8192,
+                    max: 16384
+                }
+            ),
+            Some(BufferSize::Fixed(8192))
+        );
+        assert_eq!(
+            macos_engine_buffer(44_100, SupportedBufferSize::Unknown),
+            None
+        );
+        assert_eq!(
+            macos_engine_buffer(44_100, SupportedBufferSize::Range { min: 512, max: 256 }),
+            None
+        );
+    }
 
     /// A machine without audio (CI, a PC with nothing plugged in) must get
     /// an error and a message for the interface, never a panic. A machine

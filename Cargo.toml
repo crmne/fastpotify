@@ -112,6 +112,10 @@ tray-icon = { version = "0.24", default-features = false }
 souvlaki = { version = "0.8", default-features = false }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+# Give the long-lived audio producer a latency-sensitive QoS class. CoreAudio's
+# own render callback is already scheduled by the system; this covers the
+# thread that decodes and keeps rodio's queue supplied.
+libc = "0.2"
 # Serving AppKit while no window exists: the status item and Dock reopen
 # callback live on the main thread.
 objc2 = "0.6"
