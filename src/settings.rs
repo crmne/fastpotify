@@ -104,6 +104,9 @@ pub struct Settings {
     /// Screen pixels per skin pixel; `None` picks double size for the
     /// display.
     pub skin_scale: Option<u8>,
+    /// Screen pixels per WMP skin pixel; `None` picks double size for
+    /// the display.
+    pub wmp_scale: Option<u8>,
     /// The Winamp window stays above other windows.
     pub winamp_on_top: bool,
     /// The mini player's visualiser: bars, scope, or off.
@@ -178,6 +181,7 @@ impl Default for Settings {
             winamp_window: false,
             skin: None,
             skin_scale: None,
+            wmp_scale: None,
             winamp_on_top: false,
             vis: VisMode::default(),
             playlist_open: false,
@@ -268,6 +272,7 @@ mod tests {
         assert!(!settings.winamp_window);
         assert_eq!(settings.skin, None);
         assert_eq!(settings.skin_scale, None);
+        assert_eq!(settings.wmp_scale, None);
         assert!(!settings.winamp_on_top);
         assert_eq!(settings.vis, super::VisMode::Bars);
         assert!(!settings.playlist_open);

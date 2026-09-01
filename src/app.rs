@@ -5023,16 +5023,21 @@ impl App {
         if self.settings.winamp_window && needs_sign_in && !self.switch_intent {
             self.actions.push(Action::ToggleWinampWindow);
         }
+        // The skin is the window: no sign-in screen, no Spotify chrome,
+        // only the view the skin defines.
+        #[cfg(any(test, feature = "demo"))]
+        if self.wmp_preview.is_some() {
+            crate::ui::wmp::show_window(self, ui);
+        } else if self.settings.winamp_window {
+            crate::ui::winamp::show(self, ui);
+        } else {
+            crate::ui::show(self, ui);
+        }
+        #[cfg(not(any(test, feature = "demo")))]
         if self.settings.winamp_window {
             crate::ui::winamp::show(self, ui);
         } else {
             crate::ui::show(self, ui);
-            // A demo surface draws a WMP skin over the big window's
-            // ground; nothing of it exists in a release build.
-            #[cfg(any(test, feature = "demo"))]
-            if self.wmp_preview.is_some() {
-                crate::ui::wmp::preview(self, ui);
-            }
         }
         // MilkDrop is a window of its own, in a child process; the app opens,
         // updates, and hears back from it here.

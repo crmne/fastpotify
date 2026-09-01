@@ -64,6 +64,12 @@ pub struct Render {
     /// A mapping bitmap's region for one button colour, by file and
     /// colour: the pixels that are that button's to click.
     regions: HashMap<(String, ir::Color), Mask>,
+    /// Whether a control held the pointer down this frame: the window's
+    /// move handle yields to a control that took the press.
+    pub pointer_taken: bool,
+    /// The window's shape as the last frame painted it, for the move
+    /// handle to hit-test against.
+    pub mask: Option<Mask>,
 }
 
 /// A bitmap that would not decode, kept so the attempt is not repeated.
@@ -194,6 +200,7 @@ pub fn show(
         media,
         actions: &mut actions,
         next_id: &mut next_id,
+        took_pointer: false,
     };
     if let Some(color) = view.background.color {
         skin.fill(0, 0, size.0, size.1, color);
@@ -213,48 +220,204 @@ pub fn show(
     for (_, element) in ordered {
         paint_element(&mut skin, &mut art, element, (0, 0));
     }
+    render.pointer_taken = skin.took_pointer;
+    render.mask = mask;
     actions
 }
 
-/// The demo's look at a skin: it floats over the big window, small
-/// margin, at one-to-one pixels, with the player it has. The screenshot
-/// surface answers "does Toothy show its tooth" and, since the controls
-/// landed, lets a skin drive the demo's player.
+/// The view's size in skin pixels, straight from the definition: what
+/// its attributes say, or failing that, what its background layers
+/// cover. Used where the window is sized, before any drawing state
+/// exists; the paint path uses the cached [`view_size`] instead.
+pub fn skin_size(document: &SkinDocument) -> (u32, u32) {
+    let Some(view) = document.main_view() else {
+        return (0, 0);
+    };
+    if let (Some(width), Some(height)) = (view.width, view.height) {
+        return (width.max(0) as u32, height.max(0) as u32);
+    }
+    let mut widest = 0u32;
+    let mut tallest = 0u32;
+    for (x, y, file, _) in background_layers(view) {
+        if let Some(bitmap) = document.assets.bitmap(&file) {
+            widest = widest.max(x.max(0) as u32 + bitmap.width);
+            tallest = tallest.max(y.max(0) as u32 + bitmap.height);
+        }
+    }
+    (widest, tallest)
+}
+
+/// The window's size on screen for a unit of screen pixels to the skin
+/// pixel.
+pub fn window_size(document: &SkinDocument, unit: f32) -> Vec2 {
+    let (width, height) = skin_size(document);
+    Vec2::new(width as f32, height as f32) * unit
+}
+
+/// A first guess at the window's size, before the display's scale is
+/// known; the first frame corrects it.
 #[cfg(any(test, feature = "demo"))]
-pub fn preview(app: &mut crate::app::App, ui: &mut Ui) {
+pub fn initial_size(document: &SkinDocument, settings: &crate::settings::Settings) -> Vec2 {
+    window_size(document, device_scale(settings, 1.0) as f32)
+}
+
+/// Screen pixels per skin pixel: the setting, or else double size on
+/// this display, the size people remember skins at.
+#[cfg(any(test, feature = "demo"))]
+pub fn device_scale(settings: &crate::settings::Settings, pixels_per_point: f32) -> u32 {
+    let chosen = settings
+        .wmp_scale
+        .map(u32::from)
+        .unwrap_or_else(|| (2.0 * pixels_per_point).round() as u32);
+    chosen.clamp(1, 4)
+}
+
+/// Logical points per skin pixel: a whole number of screen pixels.
+#[cfg(any(test, feature = "demo"))]
+fn unit(settings: &crate::settings::Settings, ctx: &egui::Context) -> f32 {
+    device_scale(settings, ctx.pixels_per_point()) as f32 / ctx.pixels_per_point()
+}
+
+/// Keeps the window exactly the skin's size. The size it was made with
+/// is a guess, since the display's scale is only known once the window
+/// exists.
+#[cfg(any(test, feature = "demo"))]
+fn fit_window(ctx: &egui::Context, document: &SkinDocument, unit: f32) {
+    let wanted = window_size(document, unit);
+    let current = ctx.input(|input| {
+        input
+            .viewport()
+            .inner_rect
+            .map_or(wanted, |rect| rect.size())
+    });
+    if (current - wanted).abs().max_elem() < 1.0 {
+        return;
+    }
+    // A desktop that will not grant the size is asked again only now
+    // and then, not every frame.
+    let asked = Id::new("wmp-fit-asked");
+    let last: Option<f64> = ctx.data(|data| data.get_temp(asked));
+    let now = ctx.input(|input| input.time);
+    if last.is_some_and(|last| now - last < 1.0) {
+        return;
+    }
+    ctx.data_mut(|data| data.insert_temp(asked, now));
+    ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(wanted));
+    ctx.send_viewport_cmd(egui::ViewportCommand::MaxInnerSize(wanted));
+    ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(wanted));
+}
+
+/// The skin as the whole window: transparent and chromeless, sized to
+/// the view, drawn from the top-left corner. Dragging the background
+/// moves the window — the handle is registered before any control, so
+/// the controls keep the pointer that is theirs. Escape quits, since a
+/// window without chrome has no close button to offer.
+#[cfg(any(test, feature = "demo"))]
+pub fn show_window(app: &mut crate::app::App, ui: &mut Ui) {
     let media = app.now_playing();
+    let ctx = ui.ctx().clone();
+    let scale = unit(&app.settings, &ctx);
+    let mut settings = app.settings.clone();
+    zoom_keys(&mut settings, &ctx);
+    if settings != app.settings {
+        app.settings = settings;
+        app.mark_settings_dirty();
+    }
     let Some((document, render)) = app.wmp_preview.as_mut() else {
         return;
     };
-    let origin = ui.max_rect().min + Vec2::splat(16.0);
-    for action in show(ui, document, render, origin, 1.0, media.as_ref()) {
-        let action = match action {
-            SkinAction::TogglePlay => crate::model::Action::TogglePlay,
-            // Stopping where Winamp stops: a playing track pauses, a
-            // paused one goes back to its start.
-            SkinAction::Stop => {
-                if media.as_ref().is_some_and(|now| now.playing) {
-                    crate::model::Action::TogglePlay
-                } else {
-                    crate::model::Action::Seek(0)
-                }
-            }
-            SkinAction::Next => crate::model::Action::Next,
-            SkinAction::Previous => crate::model::Action::Previous,
-            SkinAction::SeekTo(seconds) => {
-                crate::model::Action::Seek((seconds.max(0.0) * 1000.0) as u32)
-            }
-            SkinAction::SetVolume(volume) => {
-                crate::model::Action::SetVolume(volume.round().clamp(0.0, 100.0) as u8)
-            }
-            SkinAction::ToggleMute => crate::model::Action::ToggleMute,
-            SkinAction::ToggleShuffle => crate::model::Action::ToggleShuffle,
-            SkinAction::CycleRepeat => crate::model::Action::CycleRepeat,
-            // The window verbs wait for the skin to be a window.
-            SkinAction::Minimize | SkinAction::Close | SkinAction::ReturnToMediaCenter => continue,
-        };
-        app.actions.push(action);
+    fit_window(&ctx, document, scale);
+
+    if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
+        app.quit_requested = true;
     }
+
+    let origin = ui.max_rect().min;
+    for action in show(ui, document, render, origin, scale, media.as_ref()) {
+        if let Some(action) = player_action(action, media.as_ref()) {
+            app.actions.push(action);
+        }
+    }
+
+    // The move handle: a press on the skin's own shape that no control
+    // took. The window's rectangle reaches past the shape into the
+    // transparent nothing around it, so the shape, not the rect,
+    // decides.
+    if ui.input(|input| input.pointer.primary_pressed()) && !render.pointer_taken {
+        let pos = ui.input(|input| input.pointer.interact_pos());
+        let size = window_size(document, scale);
+        let inside = pos.map(|pos| {
+            (
+                Rect::from_min_size(origin, size).contains(pos),
+                ((pos.x - origin.x) / scale) as i32,
+                ((pos.y - origin.y) / scale) as i32,
+            )
+        });
+        let on_shape = inside.is_some_and(|(in_rect, x, y)| {
+            in_rect
+                && y >= 0
+                && render
+                    .mask
+                    .as_ref()
+                    .is_some_and(|mask| mask.contains(x.max(0) as u32, y as u32))
+        });
+        if on_shape {
+            // AppKit begins the move from the mouse-down event that is
+            // still live, so the command goes out on the press itself.
+            ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+        }
+    }
+}
+
+/// Command (or Control) with plus and minus steps the skin's scale, the
+/// way the Winamp window is zoomed from its own keys.
+#[cfg(any(test, feature = "demo"))]
+fn zoom_keys(settings: &mut crate::settings::Settings, ctx: &egui::Context) {
+    let (zoom_in, zoom_out) = ctx.input(|input| {
+        (
+            (input.key_pressed(egui::Key::Equals) || input.key_pressed(egui::Key::Plus))
+                && (input.modifiers.command || input.modifiers.ctrl),
+            input.key_pressed(egui::Key::Minus)
+                && (input.modifiers.command || input.modifiers.ctrl),
+        )
+    });
+    if !(zoom_in || zoom_out) {
+        return;
+    }
+    let current = device_scale(settings, ctx.pixels_per_point());
+    let stepped = if zoom_in {
+        (current + 1).min(4)
+    } else {
+        current.saturating_sub(1).max(1)
+    };
+    settings.wmp_scale = Some(stepped as u8);
+}
+
+/// A skin's wish as a player action. The window's own verbs — minimize,
+/// close, back to the media center — have no player to ask yet.
+#[cfg(any(test, feature = "demo"))]
+fn player_action(action: SkinAction, media: Option<&NowPlaying>) -> Option<crate::model::Action> {
+    use crate::model::Action;
+    Some(match action {
+        SkinAction::TogglePlay => Action::TogglePlay,
+        // Stopping where Winamp stops: a playing track pauses, a paused
+        // one goes back to its start.
+        SkinAction::Stop => {
+            if media.is_some_and(|now| now.playing) {
+                Action::TogglePlay
+            } else {
+                Action::Seek(0)
+            }
+        }
+        SkinAction::Next => Action::Next,
+        SkinAction::Previous => Action::Previous,
+        SkinAction::SeekTo(seconds) => Action::Seek((seconds.max(0.0) * 1000.0) as u32),
+        SkinAction::SetVolume(volume) => Action::SetVolume(volume.round().clamp(0.0, 100.0) as u8),
+        SkinAction::ToggleMute => Action::ToggleMute,
+        SkinAction::ToggleShuffle => Action::ToggleShuffle,
+        SkinAction::CycleRepeat => Action::CycleRepeat,
+        SkinAction::Minimize | SkinAction::Close | SkinAction::ReturnToMediaCenter => None?,
+    })
 }
 
 /// The view's size in skin pixels: what its attributes say, or failing
@@ -365,6 +528,8 @@ struct Skin<'a> {
     actions: &'a mut Vec<SkinAction>,
     /// The source of interaction ids: elements in a stable walk order.
     next_id: &'a mut usize,
+    /// Whether a control held the pointer down this frame.
+    took_pointer: bool,
 }
 
 impl Skin<'_> {
@@ -387,9 +552,14 @@ impl Skin<'_> {
     ) -> egui::Response {
         let id = self.next_id();
         let rect = self.rect(x, y, width, height);
-        self.ui
+        let response = self
+            .ui
             .interact(rect, id, sense)
-            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .on_hover_cursor(egui::CursorIcon::PointingHand);
+        if response.is_pointer_button_down_on() {
+            self.took_pointer = true;
+        }
+        response
     }
 
     /// The pointer's position in skin coordinates, when it is over the
@@ -1092,6 +1262,23 @@ mod tests {
     use super::*;
     use crate::wmp::ir::theme;
     use crate::wmp::xml;
+
+    #[test]
+    fn the_scale_setting_picks_screen_pixels_per_skin_pixel() {
+        let mut settings = crate::settings::Settings::default();
+        // Unset, on a plain display: double size.
+        assert_eq!(device_scale(&settings, 1.0), 2);
+        // Unset, on a retina display: still double size.
+        assert_eq!(device_scale(&settings, 2.0), 4);
+        // A choice is kept.
+        settings.wmp_scale = Some(3);
+        assert_eq!(device_scale(&settings, 2.0), 3);
+        // A choice outside the range is clamped into it.
+        settings.wmp_scale = Some(9);
+        assert_eq!(device_scale(&settings, 1.0), 4);
+        settings.wmp_scale = Some(0);
+        assert_eq!(device_scale(&settings, 1.0), 1);
+    }
 
     /// A PNG of the given size, magenta in the corners, the rest green.
     fn toothy_png(width: u32, height: u32) -> Vec<u8> {

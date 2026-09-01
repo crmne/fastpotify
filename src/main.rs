@@ -343,12 +343,13 @@ fn main() -> eframe::Result<()> {
         None
     };
 
-    // A capture run is a throwaway process next to the real one: no tray
-    // icon of its own, and no second MPRIS service to fight over media keys.
+    // A demo run is a throwaway process next to the real one, whether it
+    // stays for a screenshot or for hands on it: no tray icon of its own,
+    // and no second MPRIS service to fight over media keys.
     #[allow(unused_mut)]
     let mut options = app::AppOptions::default();
     #[cfg(feature = "demo")]
-    if cli.demo_shot.is_some() {
+    if demo {
         options = app::AppOptions {
             media_controls: false,
             tray: false,
@@ -520,6 +521,18 @@ struct MiniWindow {
 
 impl MiniWindow {
     fn wanted(app: &app::App) -> Option<Self> {
+        // A WMP skin is the window: transparent and chromeless, sized
+        // to the view, wherever the skin sits. The feature, not `test`:
+        // the field lives in the library, and a test build of this file
+        // links the library without its own tests.
+        #[cfg(feature = "demo")]
+        if let Some((document, _)) = app.wmp_preview.as_ref() {
+            return Some(Self {
+                size: fastpotify::ui::wmp::initial_size(document, &app.settings),
+                position: None,
+                on_top: false,
+            });
+        }
         app.settings.winamp_window.then(|| Self {
             size: fastpotify::ui::winamp::initial_size(&app.settings),
             position: app.winamp.restore_pos,
@@ -734,11 +747,14 @@ impl eframe::App for Shell {
     /// The mini player's window is see-through where the skin leaves it
     /// out; the big window paints itself over eframe's own ground.
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
-        if self
-            .app
-            .as_ref()
-            .is_some_and(|app| app.settings.winamp_window)
-        {
+        let skinned = self.app.as_ref().is_some_and(|app| {
+            #[cfg(feature = "demo")]
+            let wmp = app.wmp_preview.is_some();
+            #[cfg(not(feature = "demo"))]
+            let wmp = false;
+            app.settings.winamp_window || wmp
+        });
+        if skinned {
             [0.0; 4]
         } else {
             egui::Color32::from_rgba_unmultiplied(12, 12, 12, 180).to_normalized_gamma_f32()
