@@ -1,15 +1,10 @@
-//! The Winamp window: a classic skin's main window, as Fastpotify's own
-//! window while the mini player is on.
+//! Winamp-style mini player using classic skins.
 //!
-//! The app has one window at a time. Switching to the mini player closes
-//! the big window and the loop in `main` opens this one in its place: a
-//! borderless window the size of the skin at a whole number of screen
-//! pixels per skin pixel, sampled nearest, so the pixels stay pixels. The
-//! logo in the corner brings the big window back. The controls emit the
-//! same actions as the player bar. Fastpotify has no equalizer and no
-//! balance, so those are drawn at rest and do nothing; Stop is pause and
-//! rewind, and Eject, like the logo, opens the big window, which is where
-//! the music is chosen.
+//! The app has one main window at a time. Switching modes closes the current
+//! window and `main` opens the other. The mini player is borderless and uses
+//! nearest-neighbor scaling at an integer screen-pixel ratio. Its controls emit
+//! the same actions as the main player. Stop pauses and rewinds; Eject and the
+//! logo return to the main window.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -98,9 +93,7 @@ fn unit(app: &App, ctx: &egui::Context) -> f32 {
     WinampState::scale(&app.settings, pixels_per_point) as f32 / pixels_per_point
 }
 
-/// Keeps the window exactly the skin's size. The size it was made with is
-/// a guess, since the display's scale is only known once the window
-/// exists, and the size changes when the listener picks another.
+/// Fits the window to the skin after the display scale is known.
 fn fit_window(ctx: &egui::Context, settings: &crate::settings::Settings, unit: f32) {
     let wanted = window_size(settings, unit);
     // Not `inner_rect`: Wayland reports no window positions, so that is
@@ -109,8 +102,7 @@ fn fit_window(ctx: &egui::Context, settings: &crate::settings::Settings, unit: f
     if (current - wanted).abs().max_elem() < 1.0 {
         return;
     }
-    // A desktop that will not grant the size is asked again only now and
-    // then, not every frame.
+    // Retry rejected resize requests at most once per second.
     let asked = Id::new("winamp-fit-asked");
     let last: Option<f64> = ctx.data(|data| data.get_temp(asked));
     let now = ctx.input(|input| input.time);
@@ -855,7 +847,7 @@ fn clutter_bar(app: &mut App, view: &mut View, now: Option<&NowPlaying>) {
             false,
             "clutter-i",
         )
-        .on_hover_text("About the song")
+        .on_hover_text("Song info")
         .clicked()
         && let Some(now) = now
     {
@@ -1597,14 +1589,8 @@ mod tests {
             "Balance: center"
         );
         assert_eq!(
-            marquee_text(
-                Some(&playing),
-                None,
-                None,
-                None,
-                Some("Added the Zaxon skin")
-            ),
-            "Added the Zaxon skin"
+            marquee_text(Some(&playing), None, None, None, Some("Added Zaxon skin")),
+            "Added Zaxon skin"
         );
         assert_eq!(balance_of(0.5), 0.0);
         assert_eq!(balance_of(0.52), 0.0);

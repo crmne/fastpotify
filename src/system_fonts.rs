@@ -1,12 +1,8 @@
-//! Faces borrowed from the system for scripts the interface font cannot draw.
+//! System fallback fonts for scripts not covered by the interface font.
 //!
-//! Inter draws Latin, Greek, and Cyrillic and nothing else, and the faces
-//! egui bundles add no more, so a title in any other script arrives as a row
-//! of tofu boxes. Shipping the fonts that would cover them is not an option
-//! -- Noto CJK alone is ten times this binary -- but a desktop that displays
-//! a script already carries a face for it. This asks every installed font
-//! what it covers, with the parser epaint rasterizes with, and lends the best
-//! face per script to the interface.
+//! Inter covers Latin, Greek, and Cyrillic. Bundling fonts for every other
+//! script would greatly increase the binary size, so Fastpotify scans installed
+//! fonts and registers one suitable fallback per script.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -14,21 +10,17 @@ use std::sync::OnceLock;
 
 use skrifa::MetadataProvider as _;
 
-/// One borrowed face: the name to register it under, the file, and the face
-/// to open inside it.
+/// Registered font name, file bytes, and face index.
 pub struct Fallback {
     pub name: String,
     pub bytes: Vec<u8>,
     pub index: u32,
 }
 
-/// The scripts Inter cannot draw: a character that says whether a face covers
-/// one, and the word a face designed for it puts in its name.
+/// Scripts Inter does not cover, with a probe character and family-name hint.
 ///
-/// One face is borrowed per entry, in this order, so a font that covers
-/// several scripts is registered once and the rest fall through to it. Only
-/// the glyphs a title actually uses are ever rasterized, so an entry that
-/// finds a face costs the file in memory and nothing in drawing.
+/// One face is selected per entry in this order. A face covering multiple
+/// scripts is registered once. Glyphs are rasterized only when used.
 const FALLBACK_SCRIPTS: &[(&str, char, &str)] = &[
     ("han", '\u{4e2d}', "cjk"),
     ("kana", '\u{3042}', "cjk"),
@@ -79,7 +71,7 @@ const FONT_SCAN_DEPTH: usize = 4;
 /// can say billions. No real one holds more than a few dozen.
 const MAX_FACES: u32 = 64;
 
-/// One borrowed face per script this system can draw and Inter cannot.
+/// One system fallback face per unsupported script.
 ///
 /// The search happens once per process: `theme::install` runs again for
 /// every window the app creates, and this reads every font on the machine.

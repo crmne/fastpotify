@@ -17,8 +17,7 @@ cd fastpotify
 cargo install --path .
 ```
 
-On Linux the GUI needs the development packages any egui application does,
-plus audio. On Arch:
+On Linux, install the GUI and audio development packages. On Arch:
 
 ```sh
 sudo pacman -S --needed alsa-lib libpulse libxkbcommon wayland
@@ -42,10 +41,9 @@ A desktop entry ships in `packaging/applications/fastpotify.desktop`.
 
 ## Sign in
 
-Start the app and press **Sign in with Spotify**. Your browser opens
-Spotify's own consent page; your password never touches Fastpotify. When
-Spotify redirects back, your library loads and you can search, browse, and
-control your other devices immediately.
+Start the app and press **Sign in with Spotify**. Your browser opens Spotify's
+consent page, so Fastpotify never sees your password. When the browser returns
+to the app, your library loads.
 
 Fastpotify stores a refresh token in your platform's state directory
 (`~/.local/state/fastpotify` on Linux). You normally need the browser only
@@ -53,16 +51,13 @@ once per machine.
 
 ## Enable playback on this computer
 
-Playing music *on this machine* requires a second browser approval because
-Spotify treats streaming as a separate grant
-([why](/how-it-connects/)). Take it from the device menu (the speaker icon
-in the player bar, then **Play here, set up once**) or from Settings.
-It needs Spotify Premium. Fastpotify saves the resulting playback credential
-for later sessions.
+Playing music *on this machine* needs a second browser approval because
+Spotify authorizes streaming separately ([why](/how-it-connects/)). Open the
+device menu in the player bar and select **Set up playback here**, or use
+Settings. This needs Spotify Premium. Fastpotify saves the playback credential.
 
-After that, this computer shows up as a Spotify Connect device named
-**Fastpotify** (rename it in Settings), visible from your phone like any
-speaker.
+The computer then appears as a Spotify Connect device named **Fastpotify**.
+You can rename it in Settings.
 
 ## Basics
 
@@ -70,8 +65,7 @@ speaker.
   from the system tray; reopen it from the tray icon and quit from the tray
   menu or Ctrl+Q. On macOS you can also reopen it from the Dock. Settings can
   turn this off.
-- **Play requests show their progress.** A pressed play button spins until
-  Spotify responds.
+- **Play buttons show progress.** The button spins until Spotify responds.
 - **Common actions have shortcuts.** Space plays and pauses, Ctrl+F or `/`
   searches, and `Q` opens the queue. Ctrl+/ shows the full list.
 - **Rows and cards have context menus.** Right-click a song, playlist, album,

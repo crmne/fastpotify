@@ -39,7 +39,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, connecting: bool) {
                     theme::logo(ui, logo.center(), 72.0, palette.accent, palette.on_accent);
                     ui.add_space(6.0);
                     theme::text(ui, "Fastpotify", theme::bold(30.0), palette.text);
-                    theme::text(ui, "A fast, native Spotify client.", theme::regular(14.5), palette.secondary);
+                    theme::text(ui, "A native Spotify client.", theme::regular(14.5), palette.secondary);
                     ui.add_space(22.0);
                     match &app.auth {
                         AuthStatus::WaitingForBrowser { url } => {
@@ -99,7 +99,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, connecting: bool) {
                             ui.add_space(10.0);
                             ui.add(
                                 egui::Label::new(
-                                    egui::RichText::new("Sign-in happens in your browser; your password never touches this app. Playing music on this computer needs Spotify Premium.")
+                                    egui::RichText::new("Sign in through your browser. Fastpotify never sees your password. Local playback needs Spotify Premium.")
                                         .font(theme::regular(12.5))
                                         .color(palette.secondary),
                                 )

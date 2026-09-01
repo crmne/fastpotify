@@ -68,18 +68,24 @@ work done with the maintainer, does not go through them.
 
 ## Releases
 
-A release is not the tag alone. Every one of these moves together:
+A release is not the tag alone. Do these in order:
 
-- `Cargo.toml` version (and the lockfile via a build), committed before
-  the tag so the binaries report the right version.
-- The `v*` tag, which triggers the release workflow; replace its
-  generated notes with written ones.
-- `docs/_config.yml` `fastpotify_version` (the download page's links)
-  and `docs/_data/versions.yml` (the version dropdown: the new version
-  becomes `current` and points at `/download/`, the previous one keeps a
-  link to its own GitHub release).
-- The Homebrew cask in the maintainer's tap and the AUR package, both
-  from the release's `checksums.txt`.
+1. Change the `Cargo.toml` version and update the lockfile with a build.
+   Commit and push this before the tag so the binaries report the right
+   version.
+2. Push the `v*` tag, which triggers the release workflow. Wait for every
+   required artifact and `checksums.txt`, then replace the generated notes
+   with written ones.
+3. A prerelease stops here. Keep the stable version current on the website,
+   Homebrew, and AUR. The prerelease remains available from GitHub's releases
+   page.
+4. For a stable release, only after the GitHub release exists, update
+   `docs/_config.yml` `fastpotify_version` and
+   `docs/_data/versions.yml`. The new version becomes `current` and points
+   at `/download/`; the previous version keeps a link to its GitHub release.
+   Never make the download page point at files that do not exist yet.
+5. Update the Homebrew cask in the maintainer's tap and the AUR package from
+   the release's `checksums.txt`.
 
-Missing any of these ships a release that lies somewhere; the dropdown
+Skipping an applicable step ships a release that lies somewhere; the dropdown
 was forgotten once already.

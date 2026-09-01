@@ -1,18 +1,11 @@
-//! Windows executables carry their icon and version information as
-//! resources, and link GLEW for libprojectM; everywhere else there is
-//! nothing to do.
+//! Embeds Windows resources and links GLEW for libprojectM.
 
-/// The names vcpkg has given the static GLEW library, best first. The
-/// port has moved between them across versions and triplets, and linking
-/// the wrong one fails a long way from here, so take whichever is on
-/// disk rather than trusting a name.
+/// Known names for vcpkg's static GLEW library, in preferred order.
+/// Names differ across vcpkg versions and triplets, so use the installed one.
 #[cfg(windows)]
 const GLEW_NAMES: &[&str] = &["glew32s", "libglew32", "glew32"];
 
-/// The GLEW library actually sitting in `lib`, by the name the linker
-/// wants. `None` means the folder holds no library this build knows, and
-/// the caller says so with the listing rather than leaving the linker to
-/// report a missing name with nothing to go on.
+/// Returns the known GLEW library installed in `lib`.
 #[cfg(windows)]
 fn glew_library(lib: &std::path::Path) -> Option<&'static str> {
     let present: Vec<String> = std::fs::read_dir(lib)
@@ -45,10 +38,7 @@ fn main() {
         if let Err(error) = resource.compile() {
             println!("cargo:warning=Windows resources not embedded: {error}");
         }
-        // libprojectM reads OpenGL through GLEW on Windows, and as a static
-        // library leaves GLEW itself to whoever links it: the copy vcpkg
-        // installed (`vcpkg install glew:x64-windows-static-md`), from the
-        // same root projectm-sys builds with.
+        // Static libprojectM requires the GLEW library installed by vcpkg.
         if std::env::var_os("CARGO_FEATURE_MILKDROP").is_some() {
             println!("cargo:rerun-if-env-changed=VCPKG_INSTALLATION_ROOT");
             if let Some(root) = std::env::var_os("VCPKG_INSTALLATION_ROOT") {
@@ -60,9 +50,7 @@ fn main() {
                 match glew_library(&lib) {
                     Some(name) => println!("cargo:rustc-link-lib=static={name}"),
                     None => {
-                        // Name what is there. The linker's own complaint
-                        // names only what is missing, which is the one
-                        // thing already known.
+                        // Include the directory listing in the error for diagnosis.
                         let listing = std::fs::read_dir(&lib)
                             .map(|entries| {
                                 entries

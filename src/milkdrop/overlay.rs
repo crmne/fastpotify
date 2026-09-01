@@ -1,14 +1,9 @@
-//! Text over the picture: the keys, what is playing, and short notes.
+//! Text overlays for help, track details, and short messages.
 //!
-//! MilkDrop overlaid its help and the playing title on the picture and let
-//! them fade; this does the same, in the app's own type rather than the
-//! system faces of 1998. Text is drawn on the CPU with skrifa and
-//! tiny-skia, into one bitmap, and the bitmap rides a textured quad
-//! blended over the frame projectM just drew.
+//! Text is rasterized on the CPU with skrifa and tiny-skia, uploaded as one
+//! bitmap, and blended over projectM's frame on a textured quad.
 //!
-//! Sizes are in the pixels of a 480-tall screen, the size MilkDrop drew
-//! for, and grow with the window, so the picture keeps its proportions
-//! whatever the window's size.
+//! Sizes are based on a 480-pixel-tall reference and scale with the window.
 
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};

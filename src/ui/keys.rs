@@ -135,7 +135,7 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
             other => app.actions.push(other),
         }
     }
-    // A mouse's back and forward buttons, the way a browser takes them.
+    // Map mouse back and forward buttons to navigation.
     let (back, forward) = ctx.input(|input| {
         (
             input.pointer.button_pressed(egui::PointerButton::Extra1),

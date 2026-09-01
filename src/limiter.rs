@@ -1,74 +1,29 @@
-//! The one thing between the music and the speaker that says "no louder".
+//! Look-ahead soft-knee limiter for final audio output.
 //!
-//! A player has to stop somewhere. The equalizer works in floats and keeps
-//! its boosts whole, so by the time sound arrives here a +12 dB preamp
-//! really is four times the signal, and something has to decide what
-//! reaches an output that only goes to one.
+//! Equalizer and preamp boosts can exceed full scale. Hard clipping would add
+//! audible harmonics, so this limiter reduces gain before the output:
 //!
-//! The crude answer is to cut every sample off at the ceiling. It is one
-//! line and it sounds terrible: a hard corner in a waveform is a burst of
-//! odd harmonics reaching up past half the sample rate, which then folds
-//! back down as tones that were never in the music. It is the harshest
-//! distortion available and it lands on the loudest, most exposed part of
-//! the song.
+//! - Both channels use the same gain to preserve the stereo image.
+//! - Fast attack and slow release catch transients without pumping.
+//! - A soft knee introduces gain reduction gradually.
+//! - A -1 dBFS threshold leaves room for inter-sample peaks after resampling.
+//! - Eight milliseconds of look-ahead lets gain settle before a peak arrives.
 //!
-//! So this is a limiter instead, the way a mastering chain ends:
-//!
-//! * It watches the loudest of the two channels and turns them both by the
-//!   same amount, so a peak on the left never drags the image left.
-//! * It moves in and out over milliseconds rather than per sample, which
-//!   is what keeps the distortion out. Coming in is quick enough to catch
-//!   a drum, going out slow enough not to breathe.
-//! * It has a soft knee, so gain reduction arrives gradually instead of
-//!   switching on. Below the knee it is exactly unity, so ordinary music
-//!   passes through untouched and this costs nothing.
-//! * The threshold sits a decibel under full scale. Sound is resampled
-//!   downstream when the output does not run at 44.1 kHz, and a waveform
-//!   sitting exactly on the ceiling comes out of a resampler slightly
-//!   over it: the peaks between the samples are not bounded by the
-//!   samples. A decibel of room is the usual allowance.
-//!
-//! * It looks ahead. The music is held back by a few milliseconds while
-//!   the gain is worked out from sound that has not been heard yet, so by
-//!   the time a drum hit arrives at the output the limiter is already
-//!   turned down for it. Without this a limiter is always late by its own
-//!   attack time, and the front edge of every transient goes through
-//!   untouched, which is the thing it was put there to stop.
-//!
-//! The cost is eight milliseconds of delay on the whole stream, once,
-//! which no one can hear and which the output's own buffering dwarfs. A
-//! clamp still sits at the very end, but as a guarantee rather than a
-//! mechanism: nothing in real music reaches it, because the gain is
-//! already down before the sample gets there.
+//! Samples below the knee pass unchanged. A final clamp only guards against
+//! numerical overshoot.
 
-/// Where limiting is complete, under full scale. Room for the peaks
-/// between samples, which a resampler downstream can turn into real ones.
+/// Limiting threshold, below full scale to allow for inter-sample peaks.
 ///
-/// This and [`KNEE_DB`] also decide where this limiter meets librespot's.
-/// librespot has one of its own, for the gain volume normalisation adds,
-/// and it runs inside its player: upstream of the equalizer, the preamp
-/// and the volume, so it cannot see anything this crate does and is not
-/// a substitute for this one. It holds its output to about -2 dBFS
-/// (`normalisation_threshold_dbfs`), and unity here reaches exactly that
-/// far: threshold minus half the knee is -2 dB. So with normalisation
-/// on, a flat equalizer and full volume, what librespot hands over sits
-/// precisely at the foot of this knee and passes untouched, and this
-/// limiter only ever acts on gain added after librespot had its say.
-///
-/// That the two numbers meet is worth keeping. Moving either threshold
-/// or the knee without looking at the other puts two limiters on the
-/// same signal for no reason.
+/// With [`KNEE_DB`], unity gain begins at -2 dBFS. This matches librespot's
+/// normalisation threshold, so flat normalized audio passes unchanged. Keep
+/// both values aligned when changing either one.
 const THRESHOLD_DB: f64 = -1.0;
-/// How far below the threshold gain reduction starts to come in. Under
-/// this the limiter is exactly unity, so ordinary music never meets it.
+/// Width of the soft knee below the threshold.
 const KNEE_DB: f64 = 2.0;
-/// How quickly the limiter takes hold, and how slowly it lets go. Fast
-/// enough for a drum hit, slow enough that a held note does not pump.
+/// Attack and release times in milliseconds.
 const ATTACK_MS: f64 = 1.5;
 const RELEASE_MS: f64 = 100.0;
-/// How far ahead the limiter reads. Comfortably more than the attack, so
-/// the gain has all but arrived by the time the sound it was worked out
-/// for reaches the output.
+/// Look-ahead duration, long enough for the attack to settle.
 const LOOKAHEAD_MS: f64 = 8.0;
 
 /// One-pole smoothing coefficient for a time constant in milliseconds:
@@ -88,9 +43,8 @@ fn from_db(db: f64) -> f64 {
     10f64.powf(db / 20.0)
 }
 
-/// How much to turn down, in decibels, a signal that is `over_db` above
-/// the threshold. Zero below the knee, the whole excess above it, and a
-/// quadratic curve joining the two so there is no corner.
+/// Gain reduction for a signal `over_db` above the threshold.
+/// Uses a quadratic curve through the knee.
 fn reduction_db(over_db: f64) -> f64 {
     if over_db <= -KNEE_DB / 2.0 {
         0.0
@@ -102,16 +56,13 @@ fn reduction_db(over_db: f64) -> f64 {
     }
 }
 
-/// The limiter's memory between blocks: where the gain has got to, and
-/// the sound being held back while it gets there.
+/// Limiter state shared across audio blocks.
 pub struct Limiter {
-    /// The gain being applied, as a factor. One is out of the way.
+    /// Current linear gain. One means no reduction.
     gain: f64,
     attack: f64,
     release: f64,
-    /// The frames not yet let out, oldest first. It starts full of
-    /// silence, so every block leaves as long as it arrived and the whole
-    /// stream is simply late by the length of this queue.
+    /// Delayed frames, oldest first. Initial silence preserves block lengths.
     held: std::collections::VecDeque<[f64; 2]>,
 }
 
@@ -126,13 +77,10 @@ impl Limiter {
         }
     }
 
-    /// Holds `frames` of interleaved stereo within `full_scale`.
+    /// Limits interleaved stereo `frames` to `full_scale`.
     ///
-    /// `full_scale` is where the ceiling sits in the numbers being handed
-    /// over, which is not always one. When the output applies the volume
-    /// after this, a quarter volume means four times the signal reaches
-    /// full scale, and the limiter has to know that or it would hold
-    /// everything to a quarter of what the speaker could have had.
+    /// `full_scale` may exceed one when output volume is applied later. For
+    /// example, at quarter volume a sample level of four reaches full scale.
     pub fn process(&mut self, frames: &mut [f64], full_scale: f64) {
         if !(full_scale.is_finite() && full_scale > 0.0) {
             return;
@@ -140,19 +88,13 @@ impl Limiter {
         let threshold_db = to_db(full_scale) + THRESHOLD_DB;
         let ceiling = full_scale;
         for frame in frames.chunks_mut(2) {
-            // The gain is worked out from the sound arriving now, and
-            // applied to the sound that arrived a few milliseconds ago.
-            // That is the whole trick: by the time this frame is let out,
-            // the gain has already come down for it.
-            //
-            // Both channels answer to the louder of them, so limiting
-            // never moves the stereo image.
+            // Calculate gain from the incoming frame and apply it to the
+            // delayed frame. Use the louder channel for both channels.
             let peak = frame
                 .iter()
                 .fold(0.0f64, |loudest, sample| loudest.max(sample.abs()));
             let target = from_db(-reduction_db(to_db(peak) - threshold_db));
-            // Down quickly, up slowly: the ear forgives a slow recovery
-            // and hears a slow catch as distortion.
+            // Reduce gain quickly and restore it slowly.
             let coefficient = if target < self.gain {
                 self.attack
             } else {
@@ -164,8 +106,7 @@ impl Limiter {
                 .push_back([frame[0], frame.get(1).copied().unwrap_or(0.0)]);
             let due = self.held.pop_front().unwrap_or([0.0; 2]);
             for (sample, held) in frame.iter_mut().zip(due) {
-                // The clamp is the guarantee, not the mechanism: the gain
-                // is already down, so nothing in real music meets it.
+                // Guard against numerical overshoot after gain reduction.
                 *sample = (held * self.gain).clamp(-ceiling, ceiling);
             }
         }
@@ -177,8 +118,7 @@ mod tests {
     use super::*;
 
     const RATE: f64 = 44_100.0;
-    /// Frames the limiter holds back, so a test can skip past the delay
-    /// to the sound that has actually been through it.
+    /// Number of frames held for look-ahead.
     const DELAY: usize = 353;
 
     fn tone(level: f64, frames: usize) -> Vec<f64> {
@@ -191,8 +131,7 @@ mod tests {
             .fold(0.0f64, |loudest, sample| loudest.max(sample.abs()))
     }
 
-    /// Rule: ordinary music never meets the limiter. Below the knee the
-    /// gain is exactly one, so nothing is coloured for nothing.
+    /// Samples below the knee pass unchanged.
     #[test]
     fn quiet_sound_passes_through_untouched() {
         let mut limiter = Limiter::new(RATE);
@@ -206,8 +145,7 @@ mod tests {
         );
     }
 
-    /// Rule: nothing leaves louder than full scale, however hard it is
-    /// pushed. A +12 dB preamp is four times the signal.
+    /// Output never exceeds full scale, including with a +12 dB preamp.
     #[test]
     fn a_loud_boost_is_held_to_full_scale() {
         let mut limiter = Limiter::new(RATE);
@@ -216,19 +154,15 @@ mod tests {
         assert!(peak(&samples) <= 1.0, "nothing may leave above full scale");
     }
 
-    /// Rule: the point of looking ahead. Silence, then full tilt with no
-    /// warning: the gain must already be down when the first loud sample
-    /// arrives, so the clamp never has a corner to cut.
+    /// Look-ahead reduces gain before the first loud sample reaches output.
     #[test]
     fn a_sudden_transient_is_caught_before_it_arrives() {
         let mut limiter = Limiter::new(RATE);
         let mut samples = tone(0.0, DELAY);
         samples.extend(tone(4.0, DELAY * 2));
         limiter.process(&mut samples, 1.0);
-        // The gain closes on its target exponentially and never quite
-        // arrives, so the first instant sits a fraction of a decibel over
-        // the threshold. What matters is that it is nowhere near the
-        // ceiling: the clamp is untouched, so there is no corner to hear.
+        // Exponential smoothing approaches but does not reach its target. The
+        // first sample may slightly exceed the threshold but not the ceiling.
         let loudest = peak(&samples);
         assert!(
             loudest < 0.95,
@@ -240,8 +174,7 @@ mod tests {
         );
     }
 
-    /// Rule: it settles at the threshold, not at the ceiling, so the peaks
-    /// between samples that a resampler makes real still have room.
+    /// Sustained output settles at the threshold, leaving resampling headroom.
     #[test]
     fn it_settles_a_decibel_under_the_ceiling() {
         let mut limiter = Limiter::new(RATE);
@@ -255,9 +188,7 @@ mod tests {
         );
     }
 
-    /// Rule: the ceiling is where the sound will be heard, not where it
-    /// is now. When the output multiplies by a quarter afterwards, four
-    /// times the signal is exactly right and must not be held back.
+    /// The ceiling accounts for volume applied after the limiter.
     #[test]
     fn a_volume_still_to_come_raises_the_ceiling() {
         let mut limiter = Limiter::new(RATE);
@@ -271,12 +202,11 @@ mod tests {
         );
     }
 
-    /// Rule: both channels are turned by the same amount, so a peak on
-    /// one side never drags the image towards the other.
+    /// Both channels use the same gain, preserving the stereo image.
     #[test]
     fn the_stereo_image_does_not_move() {
         let mut limiter = Limiter::new(RATE);
-        // Left slams, right sits still.
+        // Only the left channel peaks.
         let mut samples: Vec<f64> = (0..DELAY * 4).flat_map(|_| [4.0, 0.25]).collect();
         limiter.process(&mut samples, 1.0);
         for frame in samples[DELAY * 2..].chunks(2) {
@@ -288,22 +218,20 @@ mod tests {
         }
     }
 
-    /// Rule: it lets go slowly. A loud passage followed by a quiet one
-    /// must not snap back to unity and pump.
+    /// Gain recovers slowly after a loud passage.
     #[test]
     fn it_lets_go_slowly() {
         let mut limiter = Limiter::new(RATE);
         limiter.process(&mut tone(4.0, 4410), 1.0);
         let held = limiter.gain;
         assert!(held < 0.3, "a four-times signal is well turned down");
-        // A tenth of a second of quiet: on the way back, not all the way.
+        // After 100 ms of quiet, gain is recovering but has not reached unity.
         limiter.process(&mut tone(0.1, 441), 1.0);
         assert!(limiter.gain > held, "it recovers");
         assert!(limiter.gain < 1.0, "but not all at once");
     }
 
-    /// Rule: every block leaves exactly as long as it arrived, whatever
-    /// is being held back, or the output would run short.
+    /// Output block length always matches input block length.
     #[test]
     fn a_block_leaves_as_long_as_it_arrived() {
         let mut limiter = Limiter::new(RATE);

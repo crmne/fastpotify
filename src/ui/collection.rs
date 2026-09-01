@@ -419,9 +419,7 @@ pub fn table(app: &mut App, ui: &mut egui::Ui, table: Table<'_>) {
         table.context.clone()
     };
     let sorted = sort.is_some();
-    // Dragging a row within an owned playlist moves it, but only while
-    // the rows on screen sit at their server positions: no sort and no
-    // filter, the same rule the menu's move items live by.
+    // Allow playlist reordering only when displayed rows match server order.
     let move_playlist = (sort.is_none() && needle.is_empty())
         .then(|| match &table.context {
             RowContext::Context {
@@ -431,10 +429,8 @@ pub fn table(app: &mut App, ui: &mut egui::Ui, table: Table<'_>) {
             _ => None,
         })
         .flatten();
-    // While one of this table's own rows is in hand, the slot nearest the
-    // pointer: neighbours shift before that row draws, so the spot cannot
-    // be discovered row by row, but the fixed row height makes it
-    // arithmetic even through the virtualised rows.
+    // Calculate the nearest drop slot from fixed row height because virtualized
+    // rows are not all available during drawing.
     let list_top = ui.cursor().top();
     let move_slot = move_playlist.as_ref().and_then(|playlist_id| {
         let track = egui::DragAndDrop::payload::<DragTrack>(ui.ctx())?;
@@ -450,17 +446,13 @@ pub fn table(app: &mut App, ui: &mut egui::Ui, table: Table<'_>) {
         (row >= 0.0 && row <= entry.visible.len() as f32)
             .then(|| (row.round() as usize).min(entry.visible.len()))
     });
-    // Rows picked out here are picked by their place in what is on
-    // screen, so a sort or a filter that reorders them lets them go
-    // rather than acting on whatever now sits at those numbers. The view
-    // is remembered as the sort, the filter, and how many rows there are;
-    // a change to any of them is a different list.
+    // Selection uses display indices. Clear it when sorting, filtering, or row
+    // count changes.
     let view = format!("{sort:?}|{needle}|{}", entry.visible.len());
     app.keep_picked_rows_for(&table.page, &view);
     let picked: std::collections::BTreeSet<usize> =
         app.picked_rows(&table.page).cloned().unwrap_or_default();
-    // Names travel with the uris so a queued run shows itself straight
-    // away, before Spotify has answered.
+    // Keep names with URIs for immediate optimistic queue rows.
     let picked_songs: Vec<(String, String)> = picked
         .iter()
         .filter_map(|row| entry.visible.get(*row))
@@ -472,8 +464,7 @@ pub fn table(app: &mut App, ui: &mut egui::Ui, table: Table<'_>) {
     widgets::virtual_rows(ui, entry.visible.len(), row_height, |ui, row| {
         let index = entry.visible[row];
         let (item, added_at, added_by) = &table.items[index];
-        // Neighbours part at the slot the dragged row would land in, the
-        // same eased few pixels the sidebar uses, and ease back after.
+        // Shift neighboring rows around the current drop slot.
         let shift = ui.ctx().animate_value_with_time(
             ui.id().with(("table-move-shift", row)),
             match move_slot {
@@ -509,22 +500,19 @@ pub fn table(app: &mut App, ui: &mut egui::Ui, table: Table<'_>) {
     if let Some((row, asked)) = pick {
         app.pick_row(&table.page, &view, row, asked, rows);
     }
-    // Escape lets them go, and so does a click on the empty space under
-    // the last row, which is where anyone reaches to mean "never mind".
+    // Escape clears the current selection.
     if !picked.is_empty() && ui.input(|input| input.key_pressed(egui::Key::Escape)) {
         app.clear_picked_rows();
     }
     if let Some(slot) = move_slot {
-        // A line in the gap the rows opened, so the eye lands where the
-        // row will.
+        // Draw the destination line between shifted rows.
         let y = list_top + slot as f32 * row_height;
         ui.painter().hline(
             ui.max_rect().x_range().shrink(8.0),
             y,
             egui::Stroke::new(2.0, palette.accent),
         );
-        // Gated on this table's own payload: taking a payload of the
-        // wrong type, or another list's row, would silently discard it.
+        // Accept only a drag payload from this playlist.
         if ui.input(|input| input.pointer.any_released())
             && let Some(track) = egui::DragAndDrop::take_payload::<DragTrack>(ui.ctx())
             && let Some((playlist_id, from)) = track.from.clone()
@@ -556,7 +544,7 @@ pub fn table(app: &mut App, ui: &mut egui::Ui, table: Table<'_>) {
             &palette,
             Icon::Music,
             "Nothing here yet",
-            "Songs you add will show up here.",
+            "Added songs appear here.",
         );
     } else if entry.visible.is_empty()
         && !needle.is_empty()
@@ -687,7 +675,7 @@ pub fn top_songs(app: &mut App, ui: &mut egui::Ui) {
     ui.add_space(4.0);
     theme::text(
         ui,
-        "Your most-listened tracks from the last four weeks.",
+        "Your most-played tracks from the last four weeks.",
         theme::regular(13.5),
         palette.secondary,
     );

@@ -448,7 +448,7 @@ fn topbar_contents(app: &mut App, ui: &mut egui::Ui, palette: Palette) {
                     .busy(std::time::Duration::from_millis(1000))
                 {
                     theme::spinner(ui, 15.0, palette.secondary)
-                        .on_hover_text("Talking to Spotify…");
+                        .on_hover_text("Waiting for Spotify…");
                 }
                 // Where playback is.
                 if let Some(now) = app.now_playing()
@@ -475,7 +475,7 @@ fn topbar_contents(app: &mut App, ui: &mut egui::Ui, palette: Palette) {
                     let label = format!("Update to {}", update.version);
                     if status_chip(ui, &palette, Icon::Info, &label, false)
                         .on_hover_text(format!(
-                            "Fastpotify {} is out. Opens the download page.",
+                            "Version {} is available. Open the download page.",
                             update.version
                         ))
                         .clicked()

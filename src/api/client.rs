@@ -1,9 +1,8 @@
 //! An authenticated, rate-limited transport for the Spotify Web API.
 //!
-//! The client is deliberately small: a handful of typed calls over one
-//! `request` helper that injects the bearer token, bounds concurrency,
-//! honours `Retry-After`, and maps error bodies to messages a person can
-//! read. The gateway supplies capability differences before dispatch.
+//! Typed calls share one `request` helper that adds the bearer token, limits
+//! concurrency, honors `Retry-After`, and formats API errors. The gateway
+//! handles capability differences before dispatch.
 
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};

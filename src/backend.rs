@@ -1,4 +1,4 @@
-//! The bridge between the interface thread and everything asynchronous.
+//! Bridge between the UI thread and asynchronous work.
 //!
 //! egui runs on the main thread and must never block. A dedicated tokio
 //! runtime hosts the librespot engine, the Web API client, sign-in, and
@@ -67,11 +67,8 @@ pub enum ApiRequest {
         seq: u64,
     },
     RecentlyPlayed {
-        /// Who asked. The Home shelf and the queue panel's Recents tab
-        /// both read this endpoint and each count their own requests, so
-        /// the generation alone cannot tell their answers apart: two
-        /// counters that both start at zero agree far more often than
-        /// not, and an answer meant for one would land in the other.
+        /// Request owner. Home and Recents use separate generation counters,
+        /// so generation alone cannot route the response.
         who: RecentsFor,
         generation: u64,
         before: Option<String>,
@@ -453,7 +450,7 @@ pub enum Command {
     Reconnect,
     /// Look for Spotify Connect receivers on the local network.
     DiscoverReceivers,
-    /// Hand the account to a receiver so it joins Spotify Connect.
+    /// Send the account to a receiver so it joins Spotify Connect.
     ActivateReceiver(Box<crate::zeroconf::Receiver>),
     /// Ask GitHub whether a newer release exists.
     CheckForUpdates,
@@ -506,7 +503,7 @@ pub enum Event {
         version: String,
         url: String,
     },
-    /// The words of a track, or `None` when nobody has transcribed it.
+    /// Track lyrics, or `None` when unavailable.
     Lyrics {
         uri: String,
         result: Result<Option<crate::lyrics::Lyrics>, String>,
@@ -863,7 +860,7 @@ impl Worker {
                 self.on_web_signed_in(ApiSource::Shared, token);
             }
             Some(_) => self.emit(Event::Auth(AuthStatus::Failed(
-                "Fastpotify needs one more Spotify permission. Please sign in again.".into(),
+                "Spotify permissions changed. Sign in again.".into(),
             ))),
             None => self.emit(Event::Auth(AuthStatus::SignedOut)),
         }
@@ -1309,11 +1306,9 @@ impl Worker {
                 let device_id = engine.device_id().to_string();
                 let engine = Arc::new(engine);
                 if let Some(spec) = self.resume.take() {
-                    // Not right away: a load fired into a session spirc is
-                    // still registering came back 400 once, and the player
-                    // sat stopped until a hand moved. The check below fires
-                    // the load, sees whether anything is playing a few
-                    // seconds later, and tries again when it is not.
+                    // Delay resume until Spirc finishes registering. An early
+                    // load can return 400 and leave playback stopped. Verify
+                    // the load and retry if needed.
                     self.resume_verify = Some((spec, 0));
                     self.schedule_resume_check(1_500);
                 }
@@ -1329,11 +1324,9 @@ impl Worker {
         }
     }
 
-    /// The plan gates the engine because librespot 0.8 calls `exit(1)` from
-    /// inside its session the moment Spotify tells it the account is not
-    /// Premium; no error path of ours can catch that, so a Free account must
-    /// never reach it. When the API cannot say, the engine comes back as it
-    /// always did.
+    /// Starts the engine only for Premium accounts. librespot 0.8 calls
+    /// `exit(1)` for Free accounts, which cannot be caught. If the plan is
+    /// unknown, preserve the previous behavior and start the engine.
     fn on_account_checked(&mut self, premium: Option<bool>) {
         self.premium = premium;
         if premium == Some(false) {
@@ -1374,8 +1367,7 @@ impl Worker {
         });
     }
 
-    /// Hands the stored playback credential to a receiver, which makes it log
-    /// in and appear in the ordinary device list.
+    /// Sends the stored playback credential to a receiver so it can sign in.
     fn activate_receiver(&self, receiver: crate::zeroconf::Receiver) {
         let events = self.events.clone();
         let waker = self.waker.clone();
@@ -1421,10 +1413,8 @@ impl Worker {
         });
     }
 
-    /// A moment after a reconnect's pickup, look whether anything is
-    /// actually playing; Spotify refused such a load once (a 400 from a
-    /// spirc still settling in) and nothing asked twice. Runs on the
-    /// backend's own clock, so no window needs to be awake.
+    /// Verifies playback after reconnect and retries loads rejected while
+    /// Spirc is still registering. Runs on the backend timer.
     fn verify_resume(&mut self) {
         let Some((spec, attempts)) = self.resume_verify.take() else {
             return;
@@ -1433,8 +1423,7 @@ impl Worker {
             return;
         };
         if engine.interrupted().is_some() {
-            // Something is loaded and not stopped: the pickup took, or the
-            // listener started something else. Either way, done.
+            // Playback resumed or another track started.
             return;
         }
         if attempts >= 3 {
@@ -1502,9 +1491,8 @@ impl Worker {
         });
     }
 
-    /// Hand the interface a playlist's cached items, if any are on disk.
-    /// Whether they are still true is the interface's call: it compares
-    /// the snapshot against the live playlist before adopting them.
+    /// Loads cached playlist items. The UI compares the cached snapshot with
+    /// the live playlist before using them.
     fn load_playlist_cache(&self, id: String) {
         let Some(account) = self.api.account() else {
             return;

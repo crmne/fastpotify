@@ -1,20 +1,17 @@
 # Contributing to Fastpotify
 
-Fastpotify is deliberately small, native, and focused. A contribution is a
-good fit when it makes the Spotify desktop experience better without turning
-the project into a browser, a collection of fallbacks, or a second backend.
+Fastpotify is a native Spotify client. Changes should improve the
+desktop app without adding a browser, fallback services, or another backend.
 
 ## Before opening an issue
 
-Search the open and closed issues first. For a bug, use the bug form and
-include the requested log and exact reproduction steps. A report that cannot
-be reproduced and contains no useful diagnostics may be closed until that
-information is available.
+Search open and closed issues first. For a bug, use the bug form and include
+the requested log and exact steps to reproduce it. Reports without enough
+information to investigate may be closed.
 
-For a feature, explain the user problem rather than only naming a feature.
-Large changes should be discussed in an issue before code is written. An
-implementation is not, by itself, a reason for the project to accept a new
-product direction.
+For a feature, explain the user problem. Discuss large changes in an issue
+before writing code. Existing code does not guarantee that a feature fits the
+project.
 
 Some boundaries come from Spotify or from upstream libraries:
 
@@ -27,9 +24,8 @@ Some boundaries come from Spotify or from upstream libraries:
 - Fastpotify will not embed a browser engine, add telemetry, or introduce a
   Fastpotify-operated service.
 
-Issues that are duplicates, outside these boundaries, or contain no actionable
-problem may be closed with a short explanation. That is scope management, not
-a judgement on the person who opened them.
+Duplicate, out-of-scope, or incomplete issues may be closed with a short
+explanation.
 
 ## Design principles
 
@@ -52,14 +48,12 @@ a judgement on the person who opened them.
 
 ## Pull requests
 
-Keep each pull request to one coherent change. Explain why the change belongs
-in Fastpotify, what behaviour changed, and how you verified it. Avoid unrelated
-formatting, drive-by refactors, generated prose, and large mechanical rewrites.
+Keep each pull request to one change. Explain why it belongs in Fastpotify,
+what changed, and how you tested it. Avoid unrelated formatting, refactors,
+generated prose, and large mechanical rewrites.
 
-Every pull request is held to the same standard whether it was written by a
-person, generated with an AI tool, or both. The author is responsible for
-understanding every line and for responding to review with specific technical
-reasoning.
+The same rules apply to hand-written and AI-assisted changes. The author must
+understand every line and answer review comments with specific reasoning.
 
 Code changes should include tests for behaviour that can regress. UI changes
 should include before/after screenshots or a short recording and should use

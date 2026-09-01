@@ -1,7 +1,7 @@
 ---
 title: Make It Even Faster
-description: "Use a personal Spotify app for a separate quota while shared coverage stays active."
-nav_order: 5
+description: "Use a personal Spotify app for a separate API quota."
+nav_order: 6
 ---
 
 ## API rate limits
@@ -11,9 +11,8 @@ is rate-limited per *app*. By default, Fastpotify shares a public app with
 several other open-source players. When that app reaches its limit, requests
 are delayed and the top bar shows a spinner.
 
-An app of your own gives supported requests a separate Development Mode
-quota. Fastpotify cannot ship one for everyone, but making yours is free and
-takes a few minutes.
+A personal app gives supported requests a separate Development Mode quota.
+Creating one is free and takes a few minutes.
 
 ## Shared coverage stays active
 
@@ -23,7 +22,7 @@ you own or collaborate on. Artist top tracks, related artists,
 recommendations, and some catalog fields are unavailable too. Fastpotify uses
 the shared app for the complete playlist library, playlist-bearing search,
 external playlist metadata and items, and those unavailable operations. Your
-app accelerates supported work without replacing shared coverage.
+app handles supported requests. The shared app handles the rest.
 
 ## Make a Spotify app
 
@@ -45,11 +44,11 @@ app accelerates supported work without replacing shared coverage.
 
 ## Use it in Fastpotify
 
-1. Open **Settings**, find **Make it even faster**, and paste the
+1. Open **Settings**, find **Personal Spotify app**, and paste the
    Client ID.
 2. Click **Authorize**. Your browser opens Spotify's sign-in for your app.
    Fastpotify verifies that it belongs to the same Spotify account, then shows
-   **Personal acceleration is ready**.
+   **Personal app ready**.
 
-That is all. Playing music on this computer is unaffected. Select **Remove**
-to delete only the personal grant; the shared session stays signed in.
+This does not affect local playback. Select **Remove** to delete the personal
+grant. The shared app stays signed in.

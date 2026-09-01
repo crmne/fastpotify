@@ -245,12 +245,9 @@ pub fn menu_frame(palette: &Palette) -> egui::Frame {
         })
 }
 
-/// Everything a track (or episode) can be asked to do, as a menu.
-/// The menu on a row when several are picked out: the same things the
-/// single-song menu offers, done to all of them at once.
+/// Context menu for actions on selected tracks.
 ///
-/// Order is the order they sit in the table, not the order they were
-/// picked, so queueing a run of songs plays them the way they read.
+/// Tracks stay in table order rather than selection order.
 pub fn picked_menu(ui: &mut Ui, app: &mut App, songs: &[(String, String)]) {
     let palette = app.palette;
     ui.set_min_width(220.0);
@@ -273,9 +270,7 @@ pub fn picked_menu(ui: &mut Ui, app: &mut App, songs: &[(String, String)]) {
             songs: songs.to_vec(),
         });
     }
-    // Saving is one switch for the whole set rather than a toggle per
-    // song: with some saved and some not, a toggle would leave the set
-    // split differently and nobody could say what the menu would do.
+    // Set one explicit saved state for the full selection.
     let all_saved = uris.iter().all(|uri| app.is_saved(uri).unwrap_or(false));
     let (icon, text) = if all_saved {
         (Icon::HeartFilled, "Remove from Liked Songs")
@@ -625,14 +620,10 @@ fn columns(width: f32, row: &TrackRow<'_>) -> Columns {
     }
 }
 
-/// Draws a track row; pushes actions for what the user did.
 /// Draws one song in a list.
 ///
-/// Returns what a click on the row's body asked of the selection: which
-/// row it means is the caller's to say, since a sorted or filtered table
-/// numbers its rows differently from the songs underneath. `None` for
-/// every other kind of click. Playing is a double-click or a click on
-/// the play control, which is what leaves the plain click free for this.
+/// Returns the selection behavior for a row-body click. The caller supplies
+/// the display index because sorting and filtering change row positions.
 pub fn track_row(ui: &mut Ui, app: &mut App, row: TrackRow<'_>) -> Option<RowPick> {
     let palette = app.palette;
     let row_height = if row.thin {
@@ -648,13 +639,9 @@ pub fn track_row(ui: &mut Ui, app: &mut App, row: TrackRow<'_>) -> Option<RowPic
     if !ui.is_rect_visible(rect) {
         return None;
     }
-    // Moving past the drag threshold puts the track in hand for the sidebar
-    // to catch. egui tells clicks and drags apart by that threshold, so
-    // single click, double click, and the context menu stay as they were.
+    // Start a sidebar drag only after egui's drag threshold.
     if row.item.is_track() && response.drag_started_by(egui::PointerButton::Primary) {
-        // A drag that begins on an editable playlist's own row remembers
-        // where, so that playlist's table can move the row while every
-        // other target keeps treating the drop as a copy.
+        // Keep the source index for moves within an editable playlist.
         let from = match row.context {
             RowContext::Context {
                 editable_playlist: Some((id, _)),
@@ -1360,7 +1347,7 @@ pub fn table_header(
         }
         if response
             .on_hover_cursor(egui::CursorIcon::PointingHand)
-            .on_hover_text("The list's own order, reversed")
+            .on_hover_text("Original order, reversed")
             .clicked()
         {
             number_clicked = true;

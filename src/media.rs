@@ -1,8 +1,7 @@
-//! What the desktop's own media controls say and hear.
+//! Shared state and commands for desktop media controls.
 //!
-//! MPRIS on Linux, the System Media Transport Controls on Windows and Now
-//! Playing on macOS answer the same questions, so the interface speaks this
-//! vocabulary and each platform module translates it.
+//! Platform modules translate this interface to MPRIS on Linux, System Media
+//! Transport Controls on Windows, and Now Playing on macOS.
 
 use crate::player::{Playback, RepeatMode};
 

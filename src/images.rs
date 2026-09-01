@@ -1,21 +1,25 @@
 //! Album art: fetched once, kept on disk, decoded by egui on demand.
 //!
-//! [`ArtLoader`] plugs into egui's image pipeline as a bytes loader for
-//! `http(s)` URIs, so every view simply asks for `ui.image(url)`. The first
-//! request for a URL starts a background download (or a disk-cache read);
-//! until it lands egui shows a placeholder. Entries that no view has drawn
-//! for a while are evicted so a long browsing session does not accumulate
-//! textures without bound.
+//! [`ArtLoader`] handles `http(s)` URIs in egui's image pipeline. The first
+//! request starts a background download or disk-cache read. A size limit keeps
+//! long sessions from retaining unlimited textures.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use egui::load::{Bytes, BytesLoadResult, BytesLoader, BytesPoll, LoadError};
 use sha1::{Digest, Sha1};
 
-const STALE_AFTER: Duration = Duration::from_secs(150);
+/// Maximum artwork bytes held in memory.
+///
+/// Time-based eviction does not work here: after creating a texture, egui no
+/// longer requests its source bytes. Visible images were therefore evicted and
+/// reloaded every two and a half minutes (#129).
+///
+/// Size-based eviction keeps visible images stable.
+const HELD_BYTES: usize = 64 * 1024 * 1024;
 const MAX_ART_BYTES: usize = 8 * 1024 * 1024;
 
 enum Entry {
@@ -57,22 +61,26 @@ impl ArtLoader {
         self.inner.fetch(url).await
     }
 
-    /// Drops artwork no view has drawn recently, freeing bytes and textures.
-    pub fn evict_stale(&self, ctx: &egui::Context) {
-        let stale: Vec<String> = {
+    /// Evicts failed entries and the oldest artwork above the memory limit.
+    pub fn evict(&self, ctx: &egui::Context) {
+        let letting_go: Vec<String> = {
             let entries = self.inner.entries.lock().unwrap_or_else(|p| p.into_inner());
-            entries
-                .iter()
-                .filter_map(|(url, entry)| match entry {
-                    Entry::Ready { last_used, .. } if last_used.elapsed() > STALE_AFTER => {
-                        Some(url.clone())
+            let mut failed: Vec<String> = Vec::new();
+            let mut held: Vec<(String, Instant, usize)> = Vec::new();
+            for (url, entry) in entries.iter() {
+                match entry {
+                    // Forget failures so a later request can retry.
+                    Entry::Failed(_) => failed.push(url.clone()),
+                    Entry::Ready { bytes, last_used } => {
+                        held.push((url.clone(), *last_used, bytes.len()))
                     }
-                    Entry::Failed(_) => Some(url.clone()),
-                    _ => None,
-                })
-                .collect()
+                    Entry::Pending => {}
+                }
+            }
+            failed.extend(over_budget(held, HELD_BYTES));
+            failed
         };
-        for url in stale {
+        for url in letting_go {
             ctx.forget_image(&url);
         }
     }
@@ -88,6 +96,32 @@ impl ArtLoader {
         }
         Ok(removed)
     }
+}
+
+/// Which artwork to let go of so that what is kept fits `budget`,
+/// oldest first.
+///
+/// "Oldest" is when egui last needed the bytes, which for a picture it
+/// has already made a texture of is when it first loaded. That makes
+/// this a rough order rather than a true reading of what is on screen,
+/// which is why the budget is generous: being roughly right about which
+/// to drop only matters once there is far more artwork than any window
+/// is showing.
+fn over_budget(mut held: Vec<(String, Instant, usize)>, budget: usize) -> Vec<String> {
+    let mut total: usize = held.iter().map(|(_, _, bytes)| bytes).sum();
+    if total <= budget {
+        return Vec::new();
+    }
+    held.sort_by_key(|(_, last_used, _)| *last_used);
+    let mut letting_go = Vec::new();
+    for (url, _, bytes) in held {
+        if total <= budget {
+            break;
+        }
+        total = total.saturating_sub(bytes);
+        letting_go.push(url);
+    }
+    letting_go
 }
 
 impl Inner {
@@ -290,5 +324,56 @@ mod tests {
             color[2] > color[0],
             "expected the blue field, got {color:?}"
         );
+    }
+
+    fn held(items: &[(&str, u64, usize)]) -> Vec<(String, Instant, usize)> {
+        let base = Instant::now();
+        items
+            .iter()
+            .map(|(url, age_secs, bytes)| {
+                (
+                    (*url).to_string(),
+                    base - std::time::Duration::from_secs(*age_secs),
+                    *bytes,
+                )
+            })
+            .collect()
+    }
+
+    /// Rule: nothing is let go of while it all fits. This is the case
+    /// that matters: an evening of listening never reaches the budget,
+    /// so no cover ever blinks out and back (#129).
+    #[test]
+    fn artwork_that_fits_is_all_kept() {
+        let art = held(&[("a", 600, 1000), ("b", 300, 1000), ("c", 1, 1000)]);
+        assert!(over_budget(art, 10_000).is_empty());
+    }
+
+    /// Rule: over the budget, the oldest go first, and only as many as
+    /// it takes to fit.
+    #[test]
+    fn the_oldest_go_until_the_rest_fit() {
+        let art = held(&[
+            ("oldest", 900, 1000),
+            ("middle", 600, 1000),
+            ("newest", 1, 1000),
+        ]);
+        assert_eq!(over_budget(art, 2000), vec!["oldest"]);
+    }
+
+    #[test]
+    fn enough_go_to_get_under_the_budget() {
+        let art = held(&[
+            ("oldest", 900, 1000),
+            ("middle", 600, 1000),
+            ("newest", 1, 1000),
+        ]);
+        assert_eq!(over_budget(art, 900), vec!["oldest", "middle", "newest"]);
+    }
+
+    /// Rule: an empty gallery asks nothing of anyone.
+    #[test]
+    fn nothing_held_lets_nothing_go() {
+        assert!(over_budget(Vec::new(), 0).is_empty());
     }
 }

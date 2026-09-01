@@ -24,24 +24,51 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
         });
     let response = egui::Modal::new(egui::Id::new("dialog"))
         .frame(frame)
-        .backdrop_color(egui::Color32::from_black_alpha(if palette.dark { 150 } else { 80 }))
+        .backdrop_color(egui::Color32::from_black_alpha(if palette.dark {
+            150
+        } else {
+            80
+        }))
         .show(ctx, |ui| {
             ui.set_width(420.0);
             match dialog {
                 Dialog::CreatePlaylist { .. } => create_playlist(app, ui),
                 Dialog::EditPlaylist { .. } => edit_playlist(app, ui),
                 Dialog::ConfirmDeletePlaylist { id, name, owned } => {
-                    theme::text(ui, if owned { "Delete playlist?" } else { "Remove from Your Library?" }, theme::bold(20.0), palette.text);
+                    theme::text(
+                        ui,
+                        if owned {
+                            "Delete playlist?"
+                        } else {
+                            "Remove from Your Library?"
+                        },
+                        theme::bold(20.0),
+                        palette.text,
+                    );
                     ui.add_space(8.0);
                     let body = if owned {
-                        format!("This will delete “{name}” from Your Library. Spotify keeps deleted playlists recoverable for 90 days.")
+                        format!("Delete “{name}”? You can recover it from Spotify for 90 days.")
                     } else {
                         format!("“{name}” will no longer appear in Your Library.")
                     };
-                    ui.add(egui::Label::new(egui::RichText::new(body).font(theme::regular(14.0)).color(palette.secondary)).wrap());
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(body)
+                                .font(theme::regular(14.0))
+                                .color(palette.secondary),
+                        )
+                        .wrap(),
+                    );
                     ui.add_space(20.0);
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if theme::pill_button(ui, &palette, if owned { "Delete" } else { "Remove" }, true).clicked() {
+                        if theme::pill_button(
+                            ui,
+                            &palette,
+                            if owned { "Delete" } else { "Remove" },
+                            true,
+                        )
+                        .clicked()
+                        {
                             app.actions.push(Action::DeletePlaylist(id.clone()));
                         }
                         if theme::pill_button(ui, &palette, "Cancel", false).clicked() {
@@ -105,10 +132,8 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     ui.add(
                         egui::Label::new(
                             egui::RichText::new(
-                                "Spotify only lets Premium accounts play through another \
-                                 app, on this computer or on any other device. With a Free \
-                                 account Fastpotify can show your library and search, but \
-                                 play, pause, and skip will not work.",
+                                "Playback needs Spotify Premium. Free accounts can browse \
+                                 and search, but cannot play music through Fastpotify.",
                             )
                             .font(theme::regular(14.0))
                             .color(palette.secondary),
@@ -242,9 +267,7 @@ fn edit_playlist(app: &mut App, ui: &mut egui::Ui) {
             ui.add(
                 egui::TextEdit::multiline(description)
                     .id(egui::Id::new("edit-description"))
-                    .hint_text(
-                        egui::RichText::new("Add an optional description").color(palette.dim),
-                    )
+                    .hint_text(egui::RichText::new("Optional description").color(palette.dim))
                     .font(theme::regular(14.0))
                     .frame(egui::Frame::NONE)
                     .desired_rows(3)

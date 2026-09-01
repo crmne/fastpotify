@@ -26,36 +26,35 @@ hero:
 features:
   - icon: ⚡
     title: Lightweight
-    details: A native binary with no embedded browser engine. It starts in well under a second and uses little memory while it runs.
+    details: A native binary with no browser engine. It starts in well under a second and typically uses 100–250 MB of RAM.
   - icon: 🔊
     title: Spotify Connect
     details: Play locally, gapless and at up to 320 kbps, or control playback on a speaker, phone, or TV from the same window.
   - icon: 📚
     title: Library and search
     details: Browse playlists, Liked Songs, albums, artists, and podcasts. Search the catalogue and edit playlists you own.
+  - icon: 🎨
+    title: Themes
+    details: Use light, dark, or system mode. Pages and the player bar can take their colour from the album art.
   - icon: 📻
     title: Winamp mini player
-    details: Ctrl+M turns it into a tiny player that wears any classic Winamp 2 skin, spectrum analyser, equalizer, and playlist included. 2000s vibes, pixel for pixel.
+    details: Ctrl+M opens a small player for classic Winamp 2 skins, with a spectrum analyser, equalizer, and playlist.
     link: /winamp/
     link_text: See it in action
+  - icon: 🌀
+    title: MilkDrop
+    details: Run projectM's MilkDrop visualiser in its own window, with fullscreen, preset packs, and keyboard controls.
+    link: /milkdrop/
+    link_text: Open the guide
   - icon: ⌨️
     title: Desktop controls
     details: Keyboard shortcuts, MPRIS media controls on Linux, and a tray option that keeps music playing after you close the window.
   - icon: 🔓
     title: Open source
-    details: MIT-licensed Rust built with egui and librespot. The connection and credential model is documented in full.
+    details: MIT-licensed Rust built with egui and librespot. The docs explain its connections and stored credentials.
     link: https://github.com/crmne/fastpotify
     link_text: Read the source
 ---
-
-## It turns into Winamp
-
-Load any classic `.wsz` skin from the
-[Winamp Skin Museum](https://skins.webamp.org) and Fastpotify becomes a
-period-accurate mini player: analyser, equalizer, playlist, shade modes,
-integer pixel scaling.
-
-![The mini player wearing the built-in skin](/assets/images/winamp.png)
 
 <style>
   /* The hero image slot is sized for a square logo; the screenshot needs the

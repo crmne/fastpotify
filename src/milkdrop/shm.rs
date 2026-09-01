@@ -1,16 +1,11 @@
-//! A shared-memory ring of the sound, for the MilkDrop child process.
+//! Shared-memory audio ring for the MilkDrop child process.
 //!
-//! MilkDrop runs in a child process (see `super::host`), so it cannot read
-//! the audio tap directly. The tap writes the last half second of stereo
-//! sound into a memory-mapped file instead, and the child reads it back with
-//! the same lag the analyser uses. It is a single-producer, single-consumer
-//! ring: the player's audio thread writes, the child's render loop reads, and
-//! the odd torn frame while the writer laps the reader is of no consequence to
-//! a visualiser.
+//! The player writes half a second of stereo audio to a memory-mapped file;
+//! the child reads it with the same lag as the analyser. It has one producer
+//! and one consumer. A torn frame is acceptable for visualization.
 //!
-//! The layout is a `u64` count of frames ever written, then the ring of
-//! stereo frames. The count is read and written atomically; the frames are
-//! plain, since a visualiser can live with a glitch.
+//! The layout is an atomic `u64` total-frame count followed by plain stereo
+//! frames.
 
 use std::fs::{File, OpenOptions};
 use std::io;

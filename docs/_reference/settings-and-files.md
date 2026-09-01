@@ -14,9 +14,10 @@ Fastpotify follows each platform's conventions. On Linux:
 | Winamp skins | `~/.config/fastpotify/skins/` | Yes, you add them again |
 | MilkDrop presets | `~/.config/fastpotify/milkdrop/` | Yes, you fetch them again |
 | Shared Web API sign-in | `~/.local/state/fastpotify/shared_web_api_token.json` | Yes, you sign in again |
-| Personal Web API sign-in | `~/.local/state/fastpotify/personal_web_api_token.json` | Yes, personal acceleration is removed |
+| Personal Web API sign-in | `~/.local/state/fastpotify/personal_web_api_token.json` | Yes, the personal app is disabled |
 | Playback credential | `~/.local/state/fastpotify/credentials/` | Yes, you approve playback again |
 | Last session | `~/.local/state/fastpotify/session.json` | Yes |
+| Play history | `~/.local/state/fastpotify/history.json` | Yes |
 | Audio cache | `~/.cache/fastpotify/audio/` | Always |
 | Artwork cache | `~/.cache/fastpotify/art/` | Always |
 | Lyrics cache | `~/.cache/fastpotify/lyrics/` | Always |
@@ -55,7 +56,7 @@ main fields are:
 | `sidebar_compact` | `false` | Names only in the library sidebar, no covers |
 | `tracklist_compact` | `false` | One-line track rows without covers |
 | `winamp_window` | `false` | The window is the Winamp mini player |
-| `skin` | none | A file or folder name in the skins folder; the built-in skin when absent |
+| `skin` | none | File or folder name in the skins folder; blank uses the built-in skin |
 | `skin_scale` | by display | Screen pixels per skin pixel, 1 to 4 |
 | `winamp_on_top` | `false` | Keep the mini player above other windows |
 | `vis` | `bars` | The mini player's visualiser: `bars`, `scope`, or `off` |
@@ -71,8 +72,8 @@ main fields are:
 | `winamp_shaded` | `false` | The main window is rolled up to its title bar |
 | `milkdrop_open` | `false` | The MilkDrop window is open |
 | `milkdrop_seconds` | `30` | How long each MilkDrop preset plays |
-| `milkdrop_fps` | `60` | The MilkDrop window's frame rate; `0` is uncapped. Set to match your screen the first time the window reports one |
-| `milkdrop_screen_hz` | `0` | What that screen refreshes at, as last reported; it marks the rate worth matching |
+| `milkdrop_fps` | `60` | MilkDrop frame rate; `0` is uncapped |
+| `milkdrop_screen_hz` | `0` | Last reported display refresh rate |
 | `milkdrop_fullscreen` | `false` | The MilkDrop window fills the screen |
 | `milkdrop_size` | `640, 480` | The MilkDrop window's size in points |
 | `keep_playing_in_background` | `true` | Close to tray |
@@ -88,16 +89,15 @@ fastpotify [OPTIONS]
   -v, --verbose         More logs from librespot and the API client
 ```
 
-`fastpotify.log` in the state directory is what to attach to a bug report:
-it contains the last run's output, including the additional lines printed by
-`fastpotify -v`. If the app crashed, attach `panic.log` from the same directory
-as well.
+Attach `fastpotify.log` from the state directory to bug reports. It contains
+the last run's output, including extra lines from `fastpotify -v`. After a
+crash, attach `panic.log` too.
 
 ## Demo mode
 
-Builds made with `cargo build --features demo` accept `--demo`, which fills
-the interface with sample data, useful for screenshots, theming, and
-interface work. Demo mode never writes settings.
+Builds made with `cargo build --features demo` accept `--demo`, which loads
+sample data for screenshots and interface work. Demo mode never writes
+settings.
 
 `--demo-page` opens a page, such as `home`, `playlist:pl1`, or `artist:art0`,
 and `--demo-show` adds surfaces on top of it: a comma separated list of

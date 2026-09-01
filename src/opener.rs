@@ -1,15 +1,9 @@
-//! Handing a link or a folder to the desktop.
+//! Opens links and folders with the desktop.
 //!
-//! Everywhere but Windows this is the `open` crate, which picks the right
-//! launcher for the desktop it finds. Windows gets `ShellExecuteW`, the
-//! call Explorer itself makes when someone clicks a link, for two
-//! reasons. The crate's Windows launcher runs PowerShell, and a Windows
-//! 10 without PowerShell on its path answers with "the system cannot
-//! find the file specified" and no browser, which is a sign-in button
-//! that does nothing (#107). Its usual alternative, `cmd /c start`, has
-//! a worse problem: `cmd` expands `%name%` inside quotes, and a sign-in
-//! URL is full of percent escapes, so `redirect_uri=http%3A%2F%2F...`
-//! reaches the browser with a piece eaten out of it.
+//! Other platforms use the `open` crate. Windows uses `ShellExecuteW` because
+//! the crate's PowerShell launcher can be unavailable (#107), while
+//! `cmd /c start` expands percent-encoded URL segments as environment
+//! variables.
 
 use std::ffi::OsStr;
 use std::io;
@@ -32,10 +26,8 @@ pub fn open(target: impl AsRef<OsStr>) -> io::Result<()> {
         text.encode_wide().chain(std::iter::once(0)).collect()
     }
 
-    // A verb can be handed to a COM shell extension, which wants the
-    // thread ready for one. Callers are worker threads that have done
-    // nothing of the sort. A thread already initialised says so and
-    // keeps the mode it has, which is not a failure to open anything.
+    // Shell extensions may require COM. Keep an existing apartment mode if
+    // the worker thread was already initialized.
     unsafe { CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED as u32) };
 
     let file = wide(target.as_ref());

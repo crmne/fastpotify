@@ -12,8 +12,7 @@ use super::widgets::{self, TrackRow};
 pub fn page(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     ui.add_space(8.0);
-    // No refresh button: the queue keeps itself fresh, on every track
-    // change, every add, and a rolling poll while it shows.
+    // The queue refreshes on track changes, additions, and while visible.
     let offer_save = !app.queue_playlist_uris().is_empty();
     ui.horizontal(|ui| {
         theme::text(ui, "Queue", theme::bold(28.0), palette.text);
@@ -43,12 +42,8 @@ pub fn side_panel(app: &mut App, ui: &mut egui::Ui, workspace_reserve: f32) {
                 .inner_margin(Margin::symmetric(12, 12)),
         );
     let response = panel.show(ui, |ui| {
-        // The buttons are measured first and the chips get what is left
-        // (`shrink_left`; left to itself, `Sides` lets both grow and the
-        // problem comes back). Laid out as an ordinary row, the chips
-        // claim the whole width for their own wrapping and the buttons
-        // come down on top of them, which used to put the close button
-        // through the second chip's name.
+        // Measure buttons first and give the remaining width to the chips.
+        // Without `shrink_left`, wrapped chips can overlap the close button.
         let tab = app.queue_tab;
         let offer_save = tab == QueueTab::Queue && !app.queue_playlist_uris().is_empty();
         let mut picked = None;
@@ -111,8 +106,7 @@ pub fn side_panel(app: &mut App, ui: &mut egui::Ui, workspace_reserve: f32) {
     );
 }
 
-/// The queue, made permanent: a new playlist of the playing song and
-/// every row after it. A station someone likes becomes theirs this way.
+/// Saves the current and upcoming queue as a playlist.
 fn save_button(ui: &mut egui::Ui, palette: &crate::theme::Palette, offer: bool) -> bool {
     offer
         && theme::icon_button(
@@ -126,8 +120,7 @@ fn save_button(ui: &mut egui::Ui, palette: &crate::theme::Palette, offer: bool) 
         .clicked()
 }
 
-/// Empties Playing next. Only where it can keep the promise: the queue
-/// of this computer's own player.
+/// Clears manual rows from the active local queue.
 fn clear_button(app: &mut App, ui: &mut egui::Ui) {
     if !app.can_clear_queue() {
         return;
@@ -162,9 +155,8 @@ fn contents(app: &mut App, ui: &mut egui::Ui, compact: bool) {
         }
     };
     let now = app.now_playing();
-    // The player's own report wins over the fetched snapshot: after a skip
-    // the Web API tells the old story for a second or two, and the row on
-    // top must be the song being heard, not the one before it.
+    // Prefer the player's current track because the Web API can lag after a
+    // skip.
     let current: Option<PlayableItem> = match &now {
         Some(now) => queue
             .currently_playing
@@ -205,7 +197,7 @@ fn contents(app: &mut App, ui: &mut egui::Ui, compact: bool) {
             &palette,
             Icon::ListVideo,
             "Nothing queued",
-            "Add songs to your queue and they'll show up here.",
+            "Queued songs appear here.",
         );
         return;
     }
@@ -276,7 +268,7 @@ fn recents_contents(app: &mut App, ui: &mut egui::Ui) {
                 &palette,
                 Icon::Clock,
                 "No recent plays",
-                "Play something and it will show up here.",
+                "Played songs appear here.",
             );
         } else {
             widgets::loading_row(ui, &palette);

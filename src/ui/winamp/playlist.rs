@@ -1,12 +1,9 @@
 //! The playlist window, joined to the bottom of the main one.
 //!
-//! Winamp's playlist editor is a resizable frame of tiles from `pledit.bmp`
-//! around a list drawn in the colours of `pledit.txt`. Here it shows the
-//! queue: what is playing, then what comes next, and a double-click plays
-//! from there. Fastpotify has none of the file menus along its bottom, so
-//! those stay painted and quiet. The window is one with the main window,
-//! which grows to hold it, since a desktop cannot be asked to keep two
-//! windows together.
+//! Uses `pledit.bmp` for the frame and `pledit.txt` for list colors. It shows
+//! the current track and queue; double-clicking plays a row. Unsupported file
+//! controls remain decorative. The panel shares the mini-player window so the
+//! two parts stay attached.
 
 use egui::{Color32, Sense};
 
@@ -613,10 +610,7 @@ fn times(app: &App, view: &mut View, now: Option<&NowPlaying>, rows: &[Row], hei
     }
 }
 
-/// The five menus along the bottom, each doing what Spotify allows of
-/// what Winamp's did: ADD finds music, REM says why it cannot, SEL picks
-/// rows, MISC opens a song's pages, and LIST OPTS loads a playlist or
-/// saves the queue as one.
+/// Bottom menus adapted to supported Spotify actions.
 fn menus(app: &mut App, view: &mut View, rows: &[Row], queue_uris: &[String], height: u32) {
     let bottom = height - layout::PLAYLIST_BOTTOM_HEIGHT;
     let unit = view.unit;
@@ -654,10 +648,10 @@ fn add_menu(app: &mut App, ui: &mut egui::Ui) {
 
 fn rem_menu(app: &mut App, ui: &mut egui::Ui) {
     ui.add_enabled(false, egui::Button::new("Remove selected"))
-        .on_disabled_hover_text("Spotify has no way to take one song from the queue.");
+        .on_disabled_hover_text("Spotify does not let apps remove one queued song.");
     if ui
         .add_enabled(app.can_clear_queue(), egui::Button::new("Remove all"))
-        .on_disabled_hover_text("Only this computer's own queue can be cleared.")
+        .on_disabled_hover_text("You can only clear this computer's queue.")
         .clicked()
     {
         app.actions.push(Action::ClearQueue);
@@ -742,7 +736,7 @@ fn list_menu(app: &mut App, ui: &mut egui::Ui, rows: &[Row], queue_uris: &[Strin
     let saveable = !queue_uris.is_empty() || rows.iter().any(|row| row.current);
     if ui
         .add_enabled(saveable, egui::Button::new("Save list"))
-        .on_hover_text("The queue, as a new playlist of yours")
+        .on_hover_text("Save the queue as a new playlist")
         .clicked()
     {
         let mut uris: Vec<String> = rows

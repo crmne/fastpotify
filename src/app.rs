@@ -37,26 +37,21 @@ const RESTART_BEFORE_PREVIOUS: u32 = 3_000;
 const TOAST_LIFETIME: Duration = Duration::from_millis(3200);
 const OPTIMISTIC_HOLD: Duration = Duration::from_millis(2500);
 
-/// How long a context the app just started is shown as playing while
-/// Spotify's state catches up. During a local takeover the cluster can
-/// report the old context, then the new, then the old again; the whole
-/// dance settles well inside this window, so no early hand-back.
+/// How long a newly started context remains visible while Spotify catches up.
+/// During local takeover, Spotify may briefly alternate between old and new
+/// context state.
 const ASSUMED_CONTEXT_HOLD: Duration = Duration::from_secs(8);
 /// How long the interface trusts its own play/pause over a polled state that
 /// has not caught up yet. Spotify can take a moment to report a command it
-/// has already carried out, and a button that springs back looks broken.
+/// has already carried out.
 const PLAYBACK_HOLD: Duration = Duration::from_secs(6);
-/// A second look after a command, so the button settles quickly rather than
-/// waiting for the ordinary poll.
+/// Delay before checking playback again after a command.
 const REMOTE_RECHECK: Duration = Duration::from_millis(1200);
-/// A second look at the queue after a change made here, because Spotify's
-/// queue endpoint can answer with a snapshot from before the change.
+/// Delay before checking the queue after a local change.
 const QUEUE_RECHECK: Duration = Duration::from_millis(700);
-/// How many stale queue answers are asked again before Spotify's version
-/// of events wins anyway.
+/// Number of stale queue responses accepted before trusting Spotify's state.
 const QUEUE_STALE_RETRIES: u8 = 6;
-/// Within this window a second Play next of the same song is the same
-/// click; beyond it, it is a second wish and queues a second row.
+/// Duplicate queue requests within this window count as one click.
 const QUEUE_ADD_DEBOUNCE: Duration = Duration::from_millis(1500);
 const CONTAINS_BATCH: usize = 40;
 
@@ -65,11 +60,10 @@ pub struct RemoteSnapshot {
     pub received_at: Instant,
 }
 
-/// A context the interface asked Spotify to play and shows as playing
-/// before any state says so.
+/// A context shown as playing before Spotify confirms it.
 struct AssumedContext {
     uri: String,
-    /// `Some` when the play asked for shuffle too.
+    /// Shuffle state included in the play request, if any.
     shuffle: Option<bool>,
     at: Instant,
 }
@@ -127,11 +121,10 @@ impl Default for AppOptions {
     }
 }
 
-/// A song being listened to, and how much of it has really been heard.
+/// Listening time for the current track.
 ///
-/// `listened` is the stretches already finished; `playing_since` is when
-/// the current stretch began, and is `None` while paused, so paused time
-/// never counts towards a play.
+/// `listened` stores completed intervals. `playing_since` starts the current
+/// interval and is `None` while paused.
 struct Listening {
     uri: String,
     listened: std::time::Duration,
@@ -150,8 +143,7 @@ pub struct App {
     pub window_hidden: bool,
     /// The window should close but the process should stay in the tray.
     pub hide_intent: bool,
-    /// A hidden app was asked to show itself; the outer loop recreates the
-    /// window.
+    /// The outer loop should recreate the hidden window.
     pub wants_show: bool,
     /// The window should close and reopen at once as the other kind: the
     /// big window or the Winamp mini player.
@@ -160,8 +152,7 @@ pub struct App {
     /// a Raycast script), on the platforms where they do not arrive through
     /// MPRIS. Drained every frame.
     control_commands: Option<std::sync::Arc<std::sync::Mutex<Vec<ControlCommand>>>>,
-    /// Where the now-playing snapshot goes for the control channel's
-    /// `nowplaying` verb to answer from.
+    /// Now-playing snapshot for the control channel.
     control_now_playing: Option<std::sync::Arc<std::sync::Mutex<String>>>,
     /// The same, for its `devices` verb.
     control_devices: Option<std::sync::Arc<std::sync::Mutex<String>>>,
@@ -170,7 +161,7 @@ pub struct App {
     /// moves every frame; a device list changes when Spotify answers, which
     /// is seconds apart, so it is written when it changes instead.
     control_devices_stale: bool,
-    /// Sample data is loaded and nothing is asked of Spotify.
+    /// Sample data is loaded; Spotify requests are disabled.
     pub offline: bool,
     pub palette: Palette,
     applied_dark: Option<bool>,
@@ -204,26 +195,21 @@ pub struct App {
     pub selected_device: Option<String>,
     pub queue: Loadable<Queue>,
     queue_fetched_at: Option<Instant>,
-    /// The latest queue request sent; an answer to an older one is a
-    /// story already overtaken and is dropped unread.
+    /// Latest queue request sequence. Older responses are discarded.
     queue_seq: u64,
-    /// When to look at the queue again because the last answer told a
-    /// story from before the user's latest change.
+    /// When to retry after a stale queue response.
     queue_recheck_at: Option<Instant>,
     queue_stale_retries: u8,
-    /// What a Clear queue just removed, so a fetched queue that still
-    /// carries those rows is recognised as stale.
+    /// Rows removed by Clear queue, used to detect stale responses.
     queue_cleared: Option<(std::collections::HashSet<String>, Instant)>,
     /// What the window's title bar says, as last set.
     window_title: String,
 
     pub library: Library,
     pub home: HomeData,
-    /// What was played here. Spotify never hears about it, so nothing
-    /// else can tell us later. See [`crate::history`].
+    /// Local play history. See [`crate::history`].
     pub plays: crate::history::History,
-    /// The song being listened to and how long for, so a play is written
-    /// down once it has really been listened to rather than skipped past.
+    /// Current track timing used to decide when a play counts.
     listening: Option<Listening>,
     pub recents: crate::model::CursorList<crate::api::models::PlayHistory>,
     /// The Recent tab's rows: what was played here and what
@@ -254,11 +240,10 @@ pub struct App {
     pub show_lyrics_panel: bool,
     /// The track the lyrics below are for.
     pub lyrics_uri: Option<String>,
-    /// `Loaded(None)` when nobody has transcribed the track.
+    /// `Loaded(None)` when no lyrics are available.
     pub lyrics: Loadable<Option<crate::lyrics::Lyrics>>,
-    /// Whether the panel scrolls to the line being sung. Off once the
-    /// reader scrolls by hand, on again with the Follow button or a new
-    /// track.
+    /// Whether the panel follows the current line. Manual scrolling disables
+    /// it until Follow is used or the track changes.
     pub lyrics_following: bool,
     /// The line the panel last positioned itself for (`Some(None)` before
     /// the first line), so it moves once per change; `None` until it has
@@ -268,19 +253,16 @@ pub struct App {
     pub toasts: Vec<Toast>,
     pub actions: Vec<Action>,
     volume_before_mute: Option<u8>,
-    /// What was just asked to play, until Spotify visibly reacts: the keys
-    /// (context and track URIs) whose play buttons show a spinner.
+    /// Context and track URIs whose pending play buttons show a spinner.
     pending_play_keys: Vec<String>,
     pending_play_at: Option<Instant>,
     /// A play request made while the local engine was still connecting; it
     /// starts the moment the engine reports ready.
     queued_play: Option<PlayRequest>,
-    /// The plain list of songs local playback was last given, so autoplay
-    /// can carry on from its last one when it ends: librespot only
-    /// continues from a context with a URI, and a list has none.
+    /// Last list sent to local playback. Used for autoplay because librespot
+    /// cannot continue a list without a context URI.
     local_list: Option<Vec<String>>,
-    /// A receiver just activated, waiting for Spotify to list it so playback
-    /// can move there.
+    /// Activated receiver waiting to appear in Spotify's device list.
     pending_transfer_to: Option<(String, Instant)>,
     /// When to take a confirming look at remote playback after a command.
     remote_recheck_at: Option<Instant>,
@@ -312,14 +294,11 @@ pub struct App {
     /// every second, so a snapshot must not undo the change on its way past.
     pending_local_volume: Option<(u16, Instant)>,
     optimistic_playing: Option<(bool, Instant)>,
-    /// The track a play just asked for, marked current at once; the
-    /// engine's report (or time) hands back to the reported state.
+    /// Track shown immediately after a play request, until the engine reports.
     intent_track: Option<(String, Instant)>,
-    /// Shuffle as the listener set it: a mode, not a property of one
-    /// context. Every play of a context applies it until turned off.
+    /// Requested shuffle mode, applied to every context until changed.
     shuffle_wanted: bool,
-    /// When the listener last set shuffle here, so an echo of that same
-    /// change from the engine is not mistaken for another client's toggle.
+    /// Last local shuffle change, used to ignore its echo from the engine.
     shuffle_set_at: Option<Instant>,
     /// When tracks recently came up unavailable, to spot a key-service
     /// cascade and reconnect once instead of skipping through an album.
@@ -327,8 +306,7 @@ pub struct App {
     last_unavailable_reconnect: Option<Instant>,
     /// The Premium notice has been shown for this sign-in.
     premium_notice_shown: bool,
-    /// The context the interface just started, shown as playing until
-    /// Spotify's own state says the same thing.
+    /// Context shown immediately after play, until Spotify confirms it.
     assumed_context: Option<AssumedContext>,
     last_now_playing_uri: Option<String>,
     pub playlist_busy: bool,
@@ -343,7 +321,7 @@ pub struct App {
     scroll_accum: egui::Vec2,
     /// The speed still carrying the page after the fingers lifted.
     glide: Option<egui::Vec2>,
-    /// When the last scroll event arrived, for lifts nobody announces.
+    /// Time of the last scroll event, used to detect the end of a gesture.
     scroll_last_event: Option<Instant>,
     /// How each table is sorted, per page, for as long as the app runs.
     /// The rows picked out in a track table, and the page they belong to.
@@ -363,13 +341,11 @@ pub struct App {
     pub resume_context: Option<String>,
     pub resume_track: Option<String>,
     pub resume_position_ms: u32,
-    /// The songs that were queued by hand, queued again when it resumes.
+    /// Manually queued songs restored with the remembered track.
     pub resume_queue: Vec<String>,
-    /// What the listener queued by hand this session, oldest first; the
-    /// context's own upcoming songs never belong here.
+    /// Manually queued songs from this session, oldest first.
     pub manual_queue: Vec<String>,
-    /// Adds shown in the queue before Spotify confirms them: the uri and
-    /// when it was asked, so a slow answer cannot erase or double them.
+    /// Queue additions shown before Spotify confirms them, with request time.
     pending_queue_adds: Vec<(String, Instant)>,
     /// The account's playlist tree from Spotify, folders and all; empty
     /// until the session answers.
@@ -379,7 +355,7 @@ pub struct App {
     /// A newer release than this build, once GitHub has said so.
     pub update: Option<crate::updates::Release>,
     last_update_check: Option<Instant>,
-    /// The Winamp window and the skin it wears.
+    /// Winamp window state and active skin.
     pub winamp: crate::winamp::WinampState,
 }
 
@@ -402,8 +378,7 @@ const TRACKPAD_SCALE: f32 = 1.8;
 /// How many plays the Home shelf asks for: it shows sixteen cards.
 const HOME_RECENTS: u32 = 50;
 /// How many plays the Recents tab asks for at a time. Spotify's own
-/// ceiling for this endpoint is fifty, and a page shorter than what was
-/// asked for is how the end of the history is known.
+/// endpoint limit is fifty. A shorter page marks the end.
 const RECENTS_PAGE: u32 = 50;
 
 const GLIDE_DECAY: f32 = 0.35;
@@ -430,17 +405,27 @@ impl App {
             settings.web_client_id.clone(),
             waker.clone(),
         );
+        let session = SessionState::load(&dirs.session_file());
         let wake = waker.clone();
         let media_controls = options
             .media_controls
             .then(|| MediaService::spawn(move || wake.wake()));
+        #[cfg(target_os = "macos")]
+        let media_controls = {
+            let mut media_controls = media_controls;
+            if let (Some(controls), Some(track)) =
+                (&mut media_controls, session.last_track.as_deref())
+            {
+                controls.claim_resume(track, session.last_position_ms);
+            }
+            media_controls
+        };
         let wake = waker.clone();
         let tray = options
             .tray
             .then(|| TrayService::spawn(move || wake.wake()))
             .flatten();
 
-        let session = SessionState::load(&dirs.session_file());
         let first_page = session
             .last_page
             .as_deref()
@@ -733,8 +718,7 @@ impl App {
         }
     }
 
-    /// The context playing as the interface should show it: the one just
-    /// asked for until Spotify's state confirms it, then Spotify's own.
+    /// Context shown as playing, including pending local play requests.
     pub fn playing_context_uri(&self) -> Option<String> {
         let remote = self
             .remote
@@ -743,9 +727,8 @@ impl App {
             .map(|context| context.uri.clone());
         if let Some(assumed) = &self.assumed_context {
             let held = assumed.at.elapsed() < ASSUMED_CONTEXT_HOLD;
-            // A view of a context plays as plain tracks, so no state will
-            // ever name the context: the assumption stands while nothing
-            // names another one and something is believed to be playing.
+            // A filtered or sorted context plays as plain tracks and will not
+            // report a context URI. Keep the assumed URI unless contradicted.
             let contradicted = remote.as_deref().is_some_and(|uri| uri != assumed.uri);
             if held || (!contradicted && self.believed_playing()) {
                 return Some(assumed.uri.clone());
@@ -754,10 +737,7 @@ impl App {
         remote
     }
 
-    /// Whether the playing context shuffles, honouring a shuffle the
-    /// interface just asked for ahead of Spotify's state.
-    /// The track the interface should mark as current: the one a click
-    /// just asked for, until a report names it or the moment passes.
+    /// Track shown as current, including a recent unconfirmed play request.
     pub fn current_track_uri(&self) -> Option<String> {
         if let Some((uri, at)) = &self.intent_track
             && at.elapsed() < PLAYBACK_HOLD
@@ -767,8 +747,7 @@ impl App {
         self.now_playing().map(|now| now.uri)
     }
 
-    /// Whether something plays, as the interface should show it: what it
-    /// just asked for, before any state reports back.
+    /// Playback state shown by the UI, including a recent local request.
     pub fn believed_playing(&self) -> bool {
         if let Some((playing, at)) = self.optimistic_playing
             && at.elapsed() < PLAYBACK_HOLD
@@ -782,8 +761,7 @@ impl App {
         self.shuffle_wanted
     }
 
-    /// The playing thing as a playable item, for menus that act on it:
-    /// the cached full track when known, a minimal one otherwise.
+    /// Current item for menus, using cached track details when available.
     pub fn now_playing_item(&self) -> Option<PlayableItem> {
         let now = self.now_playing()?;
         if now.is_episode {
@@ -863,9 +841,8 @@ impl App {
             });
         }
         let remote = self.remote_fresh()?;
-        // When the snapshot names this very computer as its device, the
-        // local engine is the truth, and it just said it has nothing: a
-        // poll from before a stop must not say otherwise.
+        // Ignore a remote snapshot for this device when the local engine has
+        // no track. The snapshot may predate a local stop.
         if self.local_device_id.is_some()
             && remote
                 .state
@@ -950,9 +927,7 @@ impl App {
         })
     }
 
-    /// The song the last session ended on, drawn paused at the position it
-    /// stopped at so the listener can see what a press of play will resume.
-    /// Only ever offered when no device is playing anything.
+    /// Last session's track, shown paused when no device is playing.
     fn resume_preview(&self) -> Option<NowPlaying> {
         let uri = self.resume_track.as_deref()?;
         let track = self.track_cache.get(util::uri_id(uri)?)?;
@@ -1110,7 +1085,7 @@ impl App {
                 Event::UpdateAvailable { version, url } => {
                     let notice = crate::updates::Release { version, url };
                     if self.update.as_ref() != Some(&notice) {
-                        self.toast(format!("Fastpotify {} is out", notice.version));
+                        self.toast(format!("Fastpotify {} is available", notice.version));
                     }
                     self.update = Some(notice);
                 }
@@ -1199,7 +1174,7 @@ impl App {
                 .shuffle_set_at
                 .is_none_or(|at| at.elapsed() > Duration::from_secs(5))
         {
-            // Another client toggled it; that is the listener too.
+            // Accept shuffle changes made by another client.
             self.shuffle_wanted = state.shuffle;
         }
         if state.playback != self.local.playback {
@@ -1213,7 +1188,7 @@ impl App {
             if let (Some(track), Some((intent, _))) = (&state.track, &self.intent_track)
                 && track.uri == *intent
             {
-                // The engine reports the very track that was asked for.
+                // The engine confirmed the requested track.
                 self.intent_track = None;
             }
         }
@@ -1248,7 +1223,7 @@ impl App {
                     self.unavailable_at.clear();
                     self.last_unavailable_reconnect = Some(now);
                     self.backend.send(Command::Reconnect);
-                    self.toast("Spotify's audio service faltered; reconnecting local playback");
+                    self.toast("Spotify audio disconnected. Reconnecting local playback");
                 }
             }
         }
@@ -1278,9 +1253,7 @@ impl App {
             if let Some(request) = self.queued_play.take() {
                 self.play_request(request, false);
             }
-            // Names asked about before the session existed never got an
-            // answer and showed as bare ids; ask again now that someone
-            // can answer.
+            // Retry names requested before the session connected.
             let unresolved: Vec<String> = self
                 .user_names
                 .iter()
@@ -1294,9 +1267,7 @@ impl App {
         }
     }
 
-    /// Fetch the remembered song's details so the player bar can show it
-    /// before anything plays. Asked for once, and only while nothing is
-    /// playing: a live song needs no preview.
+    /// Loads details for the remembered track before playback starts.
     fn request_resume_track(&mut self) {
         if self.now_playing_live().is_some() {
             return;
@@ -1317,17 +1288,12 @@ impl App {
         self.backend.api(ApiRequest::Track { id });
     }
 
-    /// True while the player bar is showing the remembered song and no
-    /// device is playing anything: the song is loaded and current, but not
-    /// playing, and the transport acts on it here rather than on an engine
-    /// that has nothing to skip.
+    /// Whether the player bar shows the remembered track without live playback.
     fn resume_only(&self) -> bool {
         self.resume_track.is_some() && self.now_playing_live().is_none()
     }
 
-    /// Load the rows of the context the last session was left in, so the
-    /// remembered song knows its neighbours before anything plays. The
-    /// playlist cache on disk usually answers this without a request.
+    /// Loads the remembered context so Previous and Next work before playback.
     fn ensure_resume_context_loaded(&mut self) {
         if !self.resume_only() {
             return;
@@ -1343,8 +1309,7 @@ impl App {
         }
     }
 
-    /// The page that shows a context, in the encoded form `Page::decode`
-    /// takes.
+    /// Encodes a context as a value accepted by `Page::decode`.
     fn context_page(context_uri: &str) -> String {
         if context_uri.ends_with(":collection") {
             return "liked".to_owned();
@@ -1355,9 +1320,8 @@ impl App {
         }
     }
 
-    /// Step the remembered song to its neighbour in the context, without
-    /// playing anything: the song stays loaded and paused, at its start.
-    /// `false` when there is no list to step through.
+    /// Moves the paused remembered track within its context without playing.
+    /// Returns `false` when the context is unavailable.
     fn step_resume(&mut self, forward: bool) -> bool {
         let Some(context) = self.resume_context.clone() else {
             return false;
@@ -1367,9 +1331,7 @@ impl App {
         };
         let current = self.resume_track.clone().unwrap_or_default();
         let next = if self.shuffle_wanted && forward {
-            // Shuffle is the listener's mode, and it outlives a close: a
-            // skip under it lands somewhere else in the context, as a skip
-            // during playback would.
+            // Preserve shuffle behavior before playback resumes.
             let choices: Vec<&String> = uris.iter().filter(|uri| **uri != current).collect();
             if choices.is_empty() {
                 return false;
@@ -1395,9 +1357,7 @@ impl App {
         true
     }
 
-    /// Take a song's details from the context's own rows, so a skip shows
-    /// the new song at once instead of blanking the bar until a request
-    /// for it comes back.
+    /// Caches track details from a loaded context for immediate display.
     fn cache_track_from_context(&mut self, context_uri: &str, uri: &str) {
         let Some(id) = util::uri_id(uri) else {
             return;
@@ -1442,17 +1402,14 @@ impl App {
         let Some(now) = self.now_playing() else {
             return;
         };
-        // The remembered song is not a song that started: taking it for one
-        // would rewind the very position it is there to show.
+        // Do not reset the saved position for a resume preview.
         if now.resuming {
             return;
         }
         if self.last_now_playing_uri.as_deref() == Some(now.uri.as_str()) {
             return;
         }
-        // The queue saved with the remembered song comes back when that song
-        // resumes; starting anything else instead lets it go, the way
-        // Spotify's own queue does not follow a fresh start.
+        // Restore the saved queue only when the remembered track resumes.
         if !self.resume_queue.is_empty() {
             let queued = std::mem::take(&mut self.resume_queue);
             self.session_dirty = true;
@@ -1467,14 +1424,12 @@ impl App {
                 }
             }
         }
-        // A hand-queued song that starts has been consumed.
+        // Remove a manually queued track once it starts.
         if self.manual_queue.first().map(String::as_str) == Some(now.uri.as_str()) {
             self.manual_queue.remove(0);
             self.session_dirty = true;
         }
-        // The queue view follows at once: the song that just started stops
-        // being next up without waiting for the Web API, whose answer lags
-        // this moment by a round trip or more.
+        // Move the started track out of Next up before the Web API catches up.
         if let Loadable::Loaded(queue) = &mut self.queue {
             let accounted = queue
                 .currently_playing
@@ -1640,7 +1595,7 @@ impl App {
 
         if self.last_eviction.elapsed() > Duration::from_secs(20) {
             self.last_eviction = now;
-            self.backend.art().evict_stale(ctx);
+            self.backend.art().evict(ctx);
         }
         self.sync_skin(ctx);
         if self.settings_dirty && self.last_settings_save.elapsed() > Duration::from_secs(2) {
@@ -1651,10 +1606,8 @@ impl App {
         }
     }
 
-    /// Keeps the Winamp window wearing the skin the settings name: starts
-    /// reading a newly chosen one, and puts it on once it is read. A skin
-    /// that cannot be read is announced and the setting goes back to the
-    /// one still on, so nothing is retried forever.
+    /// Loads and applies the skin selected in settings.
+    /// On failure, restores the active skin setting to avoid repeated retries.
     fn sync_skin(&mut self, ctx: &egui::Context) {
         if self.settings.winamp_window
             && !self.winamp.is_loading()
@@ -1673,9 +1626,7 @@ impl App {
             match fetched {
                 Ok(count) => {
                     self.toast(format!("Added {count} MilkDrop presets"));
-                    // The window lists presets when it starts; a running one
-                    // is bounced so the new arrivals play. It reopens on the
-                    // next frame, since the setting still says open.
+                    // Restart the child so it loads the new preset list.
                     #[cfg(feature = "milkdrop")]
                     if let Some(host) = self.milkdrop_host.as_mut()
                         && host.is_running()
@@ -1688,8 +1639,7 @@ impl App {
         }
     }
 
-    /// Keeps the MilkDrop child process in step with the settings, and takes
-    /// back where its window sits and whether it was closed from there.
+    /// Syncs MilkDrop settings and receives window state and commands.
     #[cfg(feature = "milkdrop")]
     fn sync_milkdrop(&mut self, ctx: &egui::Context) {
         let presets = self.dirs.milkdrop_dir();
@@ -1700,10 +1650,9 @@ impl App {
         let fps = self.settings.milkdrop_fps;
         let seconds = self.settings.milkdrop_seconds;
         let scale = self.settings.milkdrop_scale.max(1);
-        // The playing song, for the window to overlay when it changes.
+        // Track metadata shown when the song changes.
         let song = self.now_playing().filter(|now| !now.resuming).map(|now| {
-            // The title, the artist, the album: what the window shows in
-            // the middle of the picture when the song turns over.
+            // Title, artist, and album.
             vec![
                 now.title.clone(),
                 now.subtitle.clone(),
@@ -1746,17 +1695,14 @@ impl App {
         if let Some(hz) = poll.screen_hz {
             self.learn_screen_hz(hz);
         }
-        // Look in on the child now and then, so its close or move is noticed
-        // while the app is otherwise idle.
+        // Poll the child while the main window is otherwise idle.
         if self.settings.milkdrop_open {
             ctx.request_repaint_after(std::time::Duration::from_millis(300));
         }
     }
 
-    /// What the screen the MilkDrop window opened on refreshes at. The
-    /// first time one says, the frame rate takes its word for it: a 120
-    /// hertz screen is smooth from the start without anyone being asked.
-    /// After that the number is the listener's, and stays where it is.
+    /// Records the MilkDrop screen refresh rate and uses it as the initial FPS.
+    /// Later screen changes do not override a configured FPS.
     #[cfg(feature = "milkdrop")]
     fn learn_screen_hz(&mut self, hz: u32) {
         if hz == 0 || self.settings.milkdrop_screen_hz == hz {
@@ -1771,8 +1717,7 @@ impl App {
         self.mark_settings_dirty();
     }
 
-    /// What the MilkDrop window's playback keys asked for. They are
-    /// MilkDrop's own keys, and the player lives over here.
+    /// Applies playback commands received from the MilkDrop window.
     #[cfg(feature = "milkdrop")]
     fn milkdrop_command(&mut self, command: &str) {
         match command {
@@ -1787,8 +1732,7 @@ impl App {
         }
     }
 
-    /// Shows a folder of the config directory in the desktop's file
-    /// manager, making it first if need be.
+    /// Creates a config folder if needed and opens it in the file manager.
     fn open_folder(&mut self, folder: std::path::PathBuf) {
         let opened = std::fs::create_dir_all(&folder).and_then(|()| crate::opener::open(&folder));
         if let Err(error) = opened {
@@ -1796,19 +1740,14 @@ impl App {
         }
     }
 
-    /// A skin has been read. A dropped file becomes the choice; a chosen
-    /// name is already the choice, and if the choice moved on while this
-    /// one was read, the next tick reads that one.
+    /// Applies a loaded skin. Installed files become the selected skin.
     fn skin_loaded(&mut self, loaded: crate::winamp::Loaded) {
         match loaded.result {
             Ok(skin) => {
                 self.winamp
                     .wear(Some(loaded.name.clone()), std::sync::Arc::new(skin));
                 if loaded.installed {
-                    self.toast(format!(
-                        "Added the {} skin",
-                        crate::winamp::label(&loaded.name)
-                    ));
+                    self.toast(format!("Added {} skin", crate::winamp::label(&loaded.name)));
                     self.winamp.list_choices(&self.dirs.skins_dir());
                     self.settings.skin = Some(loaded.name);
                     self.settings_dirty = true;
@@ -1824,8 +1763,7 @@ impl App {
         }
     }
 
-    /// Hands the equalizer settings to the player's thread and marks them
-    /// for saving.
+    /// Sends equalizer settings to the player and marks them for saving.
     fn push_eq(&mut self) {
         if let Ok(mut shared) = self.winamp.eq.lock() {
             *shared = eq_settings(&self.settings);
@@ -2088,13 +2026,9 @@ impl App {
         )
     }
 
-    /// One line for the control channel's `devices` verb: the Spotify
-    /// Connect devices the app last saw, as JSON.
+    /// Last Spotify Connect device list as one JSON line.
     ///
-    /// JSON rather than the tab-separated shape `nowplaying` uses because
-    /// there are several of them and a device carries a name its owner
-    /// chose, which is exactly the kind of free text a hand-rolled
-    /// separator gets wrong.
+    /// JSON safely carries multiple records and free-text device names.
     fn control_devices_snapshot(&self) -> String {
         let devices: Vec<_> = self
             .devices
@@ -2325,9 +2259,8 @@ impl App {
         self.recents.error = None;
         self.recents_generation = self.recents_generation.wrapping_add(1);
         let generation = self.recents_generation;
-        // `CursorList::after` is simply "the cursor that continues this
-        // list"; for this endpoint Spotify pages backwards and calls it
-        // `before`.
+        // This endpoint paginates backwards, so its continuation cursor is
+        // named `before`.
         let before = self.recents.after.clone();
         self.backend.api(ApiRequest::RecentlyPlayed {
             who: RecentsFor::Panel,
@@ -2593,8 +2526,7 @@ impl App {
     /// How many leading rows of Next up are songs the user queued here,
     /// so the view can give them their own section.
     pub fn queued_rows_len(&self) -> usize {
-        // Before anything resumes, the remembered hand-queued songs say
-        // where the user's section of the restored queue ends.
+        // Before resume, use the saved manual queue to split restored rows.
         let manual = if self.manual_queue.is_empty() && self.resume_only() {
             &self.resume_queue
         } else {
@@ -2606,18 +2538,14 @@ impl App {
         }
     }
 
-    /// Whether Clear queue can truly clear: the queue has rows and this
-    /// computer's engine is the playing device, the only device whose
-    /// queue any client is allowed to drop.
+    /// Whether the active local queue has rows that can be cleared.
     pub fn can_clear_queue(&self) -> bool {
         self.local.is_active()
             && matches!(self.target(), Target::Local)
             && self.queued_rows_len() > 0
     }
 
-    /// The hand-queued rows leave Next up at once, and the engine drops
-    /// its queued tracks behind them. The context's own upcoming songs
-    /// stay: that is what Spotify's own Clear queue keeps too.
+    /// Clears manually queued tracks while keeping the context's upcoming rows.
     fn clear_queue(&mut self) {
         if !matches!(self.target(), Target::Local) {
             return;
@@ -2631,8 +2559,7 @@ impl App {
             *counts.entry(uri.clone()).or_insert(0) += 1;
         }
         if let Loadable::Loaded(queue) = &mut self.queue {
-            // Each record removes one row, front first: a song queued once
-            // that the context also carries keeps its context row.
+            // Remove one row per queued copy, starting at the front.
             queue.queue.retain(|item| match counts.get_mut(item.uri()) {
                 Some(left) if *left > 0 => {
                     *left -= 1;
@@ -2651,14 +2578,12 @@ impl App {
             self.queue_cleared = Some((cleared, Instant::now()));
         }
         self.backend.player(PlayerCommand::ClearQueue);
-        // The engine also drops queued tracks this app never saw added;
-        // the fetch behind this recheck sweeps their rows away.
+        // Refresh to remove queued tracks added by another client.
         self.queue_recheck_at = Some(Instant::now() + QUEUE_RECHECK);
         self.toast("Queue cleared");
     }
 
-    /// The playing song and every row after it, each song once, in the
-    /// order they play: what saving the queue writes down.
+    /// Current and upcoming track URIs, deduplicated in playback order.
     pub fn queue_playlist_uris(&self) -> Vec<String> {
         let mut seen = std::collections::HashSet::new();
         let mut uris = Vec::new();
@@ -2676,8 +2601,7 @@ impl App {
         uris
     }
 
-    /// What a saved queue is called: the station's own name when a song
-    /// radio plays, otherwise the queue and the day.
+    /// Name for a playlist created from the queue.
     pub fn queue_playlist_name(&self) -> String {
         if let Some(context) = self.playing_context_uri()
             && let Some(id) = context.strip_prefix("spotify:station:track:")
@@ -2689,7 +2613,7 @@ impl App {
         format!("Queue {today}")
     }
 
-    /// The queue, made permanent as a new playlist of the user's.
+    /// Saves the queue as a new playlist.
     fn save_queue_as_playlist(&mut self) {
         let uris = self.queue_playlist_uris();
         if uris.is_empty() {
@@ -2703,8 +2627,7 @@ impl App {
         });
     }
 
-    /// The head of Next up becomes the playing row at once; the claim is
-    /// held the way a clicked row's is, until a report confirms it.
+    /// Shows the head of Next up as playing before the engine confirms it.
     fn pop_queue_head(&mut self) {
         let Loadable::Loaded(queue) = &mut self.queue else {
             return;
@@ -2717,15 +2640,12 @@ impl App {
         queue.currently_playing = Some(item);
     }
 
-    /// Whether a fetched queue predates the user's latest change here.
-    /// Spotify's queue endpoint can lag a skip or an add by seconds, and a
-    /// lagging answer must not undo what the interface already shows.
+    /// Whether a fetched queue predates the latest local change.
     fn queue_fetch_is_stale(&self, fetched: &Queue) -> bool {
         if self.queue_stale_retries >= QUEUE_STALE_RETRIES {
             return false;
         }
-        // A row was just chosen or popped: the fetch has to name it as
-        // playing before it is believed.
+        // A recent play or pop must be reflected in the fetched current row.
         if let Some((uri, at)) = &self.intent_track
             && at.elapsed() < PLAYBACK_HOLD
             && fetched
@@ -2735,9 +2655,8 @@ impl App {
         {
             return true;
         }
-        // The local engine is the truth for this computer: an answer that
-        // names another song as playing is an old one. Songs advance on
-        // their own, so this holds with or without a recent click.
+        // For local playback, reject a fetched current row that differs from
+        // the engine's current track.
         if self.local.is_active()
             && let Some(track) = &self.local.track
             && fetched
@@ -2780,8 +2699,7 @@ impl App {
         });
     }
 
-    /// Asks Spotify whether these items are in the library, in batches.
-    /// Resolve adder ids that have no known name yet.
+    /// Resolves user IDs that do not have a cached display name.
     pub fn request_user_names(&mut self, ids: Vec<String>) {
         let unknown: Vec<String> = ids
             .into_iter()
@@ -2920,8 +2838,7 @@ impl App {
                                 .shuffle_set_at
                                 .is_none_or(|at| at.elapsed() > Duration::from_secs(5))
                         {
-                            // Toggled on another device; that is the
-                            // listener's setting too.
+                            // Accept shuffle changes from another device.
                             self.shuffle_wanted = current;
                         }
                         if let Some(context) = self
@@ -2930,9 +2847,7 @@ impl App {
                             .and_then(|remote| remote.state.context.as_ref())
                             .map(|context| context.uri.clone())
                         {
-                            // Mid-takeover the cluster still names the old
-                            // context; noting that would dance the sidebar
-                            // back and forth.
+                            // Ignore the old context while a takeover settles.
                             let stale = self.assumed_context.as_ref().is_some_and(|assumed| {
                                 assumed.at.elapsed() < ASSUMED_CONTEXT_HOLD
                                     && assumed.uri != context
@@ -2974,18 +2889,14 @@ impl App {
             }
             ApiResponse::Queue { seq, result } => {
                 if seq != self.queue_seq {
-                    // Overtaken: a newer request is out. Answers must not
-                    // land out of order, or an old snapshot could erase a
-                    // row the newer answer had already confirmed.
+                    // A newer request supersedes this response.
                     return;
                 }
                 if let Ok(fetched) = &result
                     && self.queue_fetch_is_stale(fetched)
                 {
-                    // A snapshot from before the user's last change here:
-                    // showing it would undo what they just did. Keep the
-                    // optimistic queue and ask again shortly; if Spotify
-                    // keeps telling the old story, it eventually wins.
+                    // Keep the optimistic queue and retry after a stale
+                    // response. Accept Spotify's state after the retry limit.
                     self.queue_stale_retries += 1;
                     self.queue_recheck_at = Some(Instant::now() + QUEUE_RECHECK);
                     return;
@@ -3166,8 +3077,7 @@ impl App {
                     if next_offset.is_some() {
                         self.load_more(Page::Home);
                     } else {
-                        // The list is whole; ask the session how the
-                        // listener arranged it into folders.
+                        // Load folder order after all playlists arrive.
                         self.backend.send(Command::Rootlist);
                     }
                     if let Some(playlists) = self.library.playlists.get() {
@@ -3732,7 +3642,7 @@ impl App {
             },
             ApiResponse::QueueAdded { label: _, result } => match result {
                 Ok(()) => {
-                    // The toast came at the click; here the view catches up.
+                    // Refresh the queue after the optimistic update.
                     self.refresh_queue(true);
                 }
                 Err(error) => self.toast_error(format!("Couldn't add to queue: {error}")),
@@ -3814,25 +3724,17 @@ impl App {
         }
     }
 
-    /// Puts the two histories together for the Recent tab.
-    ///
-    /// Spotify is never told about a play made here, so what it knows and
-    /// what this app knows are two halves of the same list rather than
-    /// two versions of it. See [`crate::history`].
+    /// Merges local and Spotify history for the Recent tab.
     fn rebuild_recents(&mut self) {
         self.recents_view = crate::history::merged(self.plays.plays(), &self.recents.items);
     }
 
     /// Adds a page of play history to the Recents tab.
     ///
-    /// A song played twice is two rows here, each with its own time: this
-    /// is a history, and collapsing repeats would lose the very thing it
-    /// is for. What is dropped is the same play arriving twice, which
-    /// paging can do when something is played while the list is open, and
-    /// a play is the pair of a song and the moment it started.
+    /// Repeated plays remain separate. Only identical track-and-time entries
+    /// are deduplicated across page boundaries.
     ///
-    /// Spotify pages this list backwards, so the cursor that continues it
-    /// is `before`, and a page shorter than the one asked for is the end.
+    /// Spotify paginates backwards with `before`; a short page ends the list.
     fn absorb_recents(
         &mut self,
         page: crate::api::models::CursorPage<crate::api::models::PlayHistory>,
@@ -3862,18 +3764,14 @@ impl App {
                 self.recents.after = None;
             }
         }
-        // Only the songs just added need asking about; the ones already
-        // here were asked about when they arrived.
+        // Request saved state only for newly added rows.
         if !uris.is_empty() {
             self.request_contains(uris);
         }
         self.rebuild_recents();
     }
 
-    /// A random playable track of a context the app has rows for: the
-    /// start of a shuffle play. `None` when no rows are at hand.
-    /// The songs a context holds, in the order they are shown, from the
-    /// rows already loaded. `None` when those rows are not here yet.
+    /// Loaded track URIs for a context, in display order.
     fn context_track_uris(&self, context_uri: &str) -> Option<Vec<String>> {
         let uris: Vec<String> = if let Some(id) = context_uri.strip_prefix("spotify:playlist:") {
             self.playlist_pages
@@ -3910,11 +3808,8 @@ impl App {
         Some(uris[rand::random_range(0..uris.len())].clone())
     }
 
-    /// How many songs Spotify last said a context holds, from the library
-    /// alone: enough to start a shuffle play at a random position when the
-    /// rows are not loaded, which is every play begun from the sidebar, a
-    /// card, or a context menu. `None` for anything unsaved, whose length
-    /// nobody here knows.
+    /// Last known context length from the library.
+    /// Used to choose a random shuffle offset before rows are loaded.
     fn context_len(&self, context_uri: &str) -> Option<u32> {
         if context_uri.ends_with(":collection") {
             return self.library.liked.total;
@@ -3974,10 +3869,8 @@ impl App {
     /// in one ordered exchange: two independent requests race, and shuffle
     /// sometimes lost.
     fn play_request(&mut self, request: PlayRequest, shuffle_first: bool) {
-        // Shuffle is a mode the listener sets, not a property of one
-        // context: once on, every play shuffles until it is turned off,
-        // whichever playlist it starts. A chosen row still starts the
-        // play; without one, a random song does.
+        // Shuffle applies across contexts until disabled. A selected row still
+        // starts first; otherwise choose a random starting track.
         let mut request = request;
         if shuffle_first {
             self.shuffle_wanted = true;
@@ -4022,8 +3915,7 @@ impl App {
         self.set_play_pending(keys);
         if let Some(context) = request.context_uri.clone() {
             self.note_recent_context(&context);
-            // Light the page and the sidebar up at once; Spotify's own
-            // state takes a poll or two to say the same thing.
+            // Show the context as playing before Spotify confirms it.
             self.assumed_context = Some(AssumedContext {
                 uri: context,
                 shuffle: shuffle.then_some(true),
@@ -4032,9 +3924,7 @@ impl App {
         }
         match self.target() {
             Target::Local if !self.local.connected => {
-                // The engine's session dropped (a sleep, a network change)
-                // and is reconnecting on its own; hold the request and play
-                // the moment it is back. The spinner keeps spinning.
+                // Hold the request while the local engine reconnects.
                 self.queued_play = Some(request);
             }
             Target::Local => {
@@ -4075,7 +3965,9 @@ impl App {
                 if matches!(
                     self.local_playback,
                     LocalPlayback::Connecting | LocalPlayback::Authorizing
-                ) {
+                ) || (self.settings.playback_authorized
+                    && matches!(self.auth, AuthStatus::Starting | AuthStatus::Connecting))
+                {
                     self.queued_play = Some(request);
                 } else {
                     self.clear_play_pending();
@@ -4384,20 +4276,16 @@ impl App {
         self.backend.api(ApiRequest::Transfer { device_id, play });
     }
 
-    /// Play next: the row appears at once, after the songs already
-    /// queued and before the playing context's own, and the backend makes
-    /// it true behind it.
+    /// Adds a row to Next up immediately, before the context's upcoming rows.
     fn add_to_queue(&mut self, uri: String, label: String) {
         self.queue_one(uri, label, true);
     }
 
-    /// Puts one song at the end of what was queued by hand.
+    /// Adds one song after existing manual queue entries.
     ///
-    /// `announce` is off when several are queued together, so a run of
-    /// twelve songs says so once instead of twelve times.
+    /// `announce` is false when a batch should produce one toast.
     fn queue_one(&mut self, uri: String, label: String, announce: bool) {
-        // A double-click is one wish; a deliberate second ask is a second
-        // row, the way Spotify queues the same song twice.
+        // Coalesce duplicate events from one click, but allow later duplicates.
         self.expire_pending_queue_adds();
         if self
             .pending_queue_adds
@@ -4422,9 +4310,8 @@ impl App {
         if announce {
             self.toast(format!("{label} will play next"));
         }
-        // This computer's playing engine queues directly: no round trip
-        // through the Web API, no device for it to fail to find. Anything
-        // else, and any album, goes the long way.
+        // Queue tracks and episodes directly on the active local engine.
+        // Other targets and item types use the Web API.
         let track_like = uri.starts_with("spotify:track:") || uri.starts_with("spotify:episode:");
         if track_like && self.local.is_active() && matches!(self.target(), Target::Local) {
             self.backend.player(PlayerCommand::AddToQueue(uri));
@@ -4442,8 +4329,7 @@ impl App {
         });
     }
 
-    /// Where a newly queued row goes: after the leading rows that are
-    /// hand-queued songs, before the playing context's own.
+    /// Index after manual queue rows and before context rows.
     fn end_of_queued_rows(rows: &[PlayableItem], manual: &[String]) -> usize {
         let mut counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
         for uri in manual {
@@ -4462,8 +4348,7 @@ impl App {
         at
     }
 
-    /// The queued row as it can be shown right now: the cached track, or
-    /// its name alone until the details arrive.
+    /// Queue row built from cached details or a temporary label.
     fn optimistic_queue_item(&self, uri: &str, label: &str) -> PlayableItem {
         let cached = util::uri_id(uri)
             .and_then(|id| self.track_cache.get(id))
@@ -4480,9 +4365,7 @@ impl App {
             .retain(|(_, at)| at.elapsed() < Duration::from_secs(30));
     }
 
-    /// A fetched queue that has not caught up yet gets the pending adds
-    /// put back on top, so a slow answer cannot erase them; ones it now
-    /// carries stop being pending.
+    /// Restores pending additions missing from a stale fetched queue.
     fn reconcile_pending_queue(&mut self) {
         self.expire_pending_queue_adds();
         if self.pending_queue_adds.is_empty() {
@@ -4496,10 +4379,7 @@ impl App {
             .iter()
             .map(|item| item.uri().to_string())
             .collect();
-        // An add the fetch carries has landed; one that is playing has been
-        // consumed. Without the second check, skipping into a just-queued
-        // song would put its row back on top for as long as the add stayed
-        // pending.
+        // A fetched or currently playing addition is no longer pending.
         let current = self.current_track_uri();
         self.pending_queue_adds
             .retain(|(uri, _)| !fetched.contains(uri) && current.as_deref() != Some(uri.as_str()));
@@ -4581,12 +4461,9 @@ impl App {
                 self.play_request(request, false);
             }
             Action::PlayTrackRadio(uri) => {
-                // The song's station, loaded as an ordinary context: the
-                // station uri resolves to a 50-song context (see
-                // examples/station_probe.rs), while asking the engine for
-                // autoplay of a bare track dies inside the load and left
-                // silence and an emptied queue. The Web API cannot start
-                // a station on another device, so it plays here.
+                // Load the station URI as a 50-track local context. Autoplay
+                // from a bare track fails inside librespot and clears the queue.
+                // The Web API cannot start a station on another device.
                 let id = util::uri_id(&uri).unwrap_or_default();
                 let station = format!("spotify:station:track:{id}");
                 self.local_list = None;
@@ -4597,8 +4474,7 @@ impl App {
                     ..LoadSpec::default()
                 }));
                 self.optimistic_playing = Some((true, Instant::now()));
-                // The station is the queue, so show it: fifty songs
-                // appearing there is the whole visible result.
+                // Show the station queue immediately.
                 self.assumed_context = Some(AssumedContext {
                     uri: station,
                     shuffle: None,
@@ -4657,10 +4533,8 @@ impl App {
                 self.step_resume(true);
             }
             Action::Next => {
-                // Next is a pop: the head of Next up becomes the playing
-                // row the moment the button is pressed, and Spotify's
-                // answers catch up behind it. No pop when the press can
-                // only earn the "pick something first" toast.
+                // Move the queue head to the playing row immediately. Do not
+                // pop when there is no active playback target.
                 let target = self.target();
                 if !matches!(target, Target::Remote(None)) || self.remote_fresh().is_some() {
                     self.pop_queue_head();
@@ -4670,9 +4544,8 @@ impl App {
                     Target::Remote(device_id) => self.remote(RemoteAction::Next, device_id),
                 }
             }
-            // Previous restarts the song when it is far enough in and steps
-            // back otherwise, which is what librespot's own prev does; the
-            // remembered song answers it the same way, from a standstill.
+            // Previous restarts after three seconds and otherwise steps back,
+            // matching librespot.
             Action::Previous if self.resume_only() => {
                 if self.resume_position_ms > RESTART_BEFORE_PREVIOUS {
                     self.resume_position_ms = 0;
@@ -5025,14 +4898,12 @@ impl App {
                     self.settings.playback_authorized = true;
                     self.settings_dirty = true;
                     self.backend.send(Command::AuthorizePlayback);
-                    self.toast("Opening Spotify to enable playback here");
+                    self.toast("Opening your browser to set up local playback");
                 }
             }
             Action::OpenUrl(url) => {
-                // The door the sign-in uses, off the interface thread. egui's
-                // own link opening runs through a chain of features and a
-                // guessing launcher, and a click that does nothing is worse
-                // than no link.
+                // Open links off the UI thread with the platform-specific
+                // launcher used elsewhere in the app.
                 std::thread::spawn(move || {
                     if let Err(error) = crate::opener::open(&url) {
                         log::warn!("unable to open {url}: {error}");
@@ -5174,7 +5045,7 @@ impl App {
                         && self.winamp.presets.downloading().is_none()
                     {
                         self.winamp.presets.download_missing(folder, ctx.clone());
-                        self.toast("Fetching MilkDrop's preset packs in the background");
+                        self.toast("Downloading MilkDrop preset packs");
                     }
                 }
             }
@@ -5203,7 +5074,7 @@ impl App {
                     self.winamp
                         .presets
                         .download(pack, self.dirs.milkdrop_dir(), ctx.clone());
-                    self.toast(format!("Fetching {} presets", pack.name));
+                    self.toast(format!("Downloading {} presets", pack.name));
                 }
             }
             Action::Quit => {
@@ -5232,8 +5103,7 @@ impl App {
         });
     }
 
-    /// Playlists the signed-in user can add to.
-    /// The rows picked out on `page`, if any are.
+    /// Selected row indices for `page`.
     pub fn picked_rows(&self, page: &Page) -> Option<&std::collections::BTreeSet<usize>> {
         self.selection
             .as_ref()
@@ -5242,10 +5112,7 @@ impl App {
             .filter(|rows| !rows.is_empty())
     }
 
-    /// Lets the picked rows go unless `page` still looks the way it did
-    /// when they were picked. A row number means one song in one list;
-    /// sort it, filter it, or let another page of songs arrive, and the
-    /// same number is a different song.
+    /// Clears selection when the page's rows or order change.
     pub fn keep_picked_rows_for(&mut self, page: &Page, view: &str) {
         let stale = self
             .selection
@@ -5256,11 +5123,9 @@ impl App {
         }
     }
 
-    /// Acts on a click on a row body: picks it out on its own, adds it to
-    /// what is already picked, or takes in everything back to the anchor.
+    /// Applies a single, toggle, or range row selection.
     ///
-    /// `len` is how many rows the table has, so a range cannot reach past
-    /// its end when rows have gone since the anchor was set.
+    /// `len` bounds ranges if rows changed after the anchor was set.
     pub fn pick_row(&mut self, page: &Page, view: &str, row: usize, pick: RowPick, len: usize) {
         let mut selection = match self.selection.take() {
             Some((owner, seen, selection)) if owner == *page && seen == view => selection,
@@ -5268,9 +5133,7 @@ impl App {
         };
         match pick {
             RowPick::Only => {
-                // Clicking a row already picked out on its own lets it go,
-                // so there is a way back to nothing without hunting for
-                // empty space.
+                // Clicking the sole selected row clears the selection.
                 let only_this = selection.rows.len() == 1 && selection.rows.contains(&row);
                 selection.rows.clear();
                 if only_this {
@@ -5287,8 +5150,7 @@ impl App {
                 selection.anchor = Some(row);
             }
             RowPick::Range => {
-                // With nothing to measure from, a shift-click is a plain
-                // one, which is what a list with no selection yet does.
+                // Without an anchor, shift-click selects only this row.
                 let anchor = selection.anchor.unwrap_or(row);
                 let (from, to) = if anchor <= row {
                     (anchor, row)
@@ -5307,8 +5169,7 @@ impl App {
         }
     }
 
-    /// Lets every row go. The rows underneath moved, or the listener
-    /// pressed Escape, or they went somewhere else.
+    /// Clears the current row selection.
     pub fn clear_picked_rows(&mut self) {
         self.selection = None;
     }
@@ -5332,10 +5193,7 @@ impl App {
 }
 
 impl App {
-    /// Everything that must keep happening whether or not a window exists:
-    /// backend events, MPRIS, the tray, polling, and pending actions. The
-    /// headless loop in `main` drives this with a windowless context while
-    /// the app lives in the tray.
+    /// Runs background work with or without a main window.
     pub fn background_frame(&mut self, ctx: &egui::Context) {
         self.handle_control_commands();
         self.handle_events();
@@ -5343,12 +5201,8 @@ impl App {
         self.handle_tray();
         self.tick(ctx);
         self.note_listening();
-        // MilkDrop is a window of its own, in a child process; the app opens,
-        // updates, and hears back from it here. This is the frame that runs
-        // whether or not the main window exists, which is the point: the
-        // MilkDrop window outlives it, and used to be left with a song title
-        // that stopped changing and keys that went nowhere. Before the
-        // actions, because its keys arrive as actions.
+        // MilkDrop runs in a child process and can outlive the main window.
+        // Poll it before applying actions because its keys produce actions.
         #[cfg(feature = "milkdrop")]
         self.sync_milkdrop(ctx);
         self.apply_actions(ctx);
@@ -5356,21 +5210,15 @@ impl App {
         self.sync_window_title(ctx);
     }
 
-    /// Watches the playing song and writes it down once it has really
-    /// been listened to.
+    /// Records a track after enough active listening time.
     ///
-    /// The clock only runs while the song is actually playing, so a song
-    /// left paused never creeps up on the threshold, and it starts from
-    /// nothing when the song changes. Seeking forward buys nothing
-    /// either: what counts is time spent listening, not where the needle
-    /// sits. A song is written down once, when it crosses.
+    /// Paused time and seeking do not count. Each track is recorded once.
     fn note_listening(&mut self) {
         let Some(now) = self.now_playing() else {
             self.listening = None;
             return;
         };
-        // A remembered song shown paused from the last session has not
-        // been played by anyone yet.
+        // A resume preview is not a new play.
         if now.resuming {
             self.listening = None;
             return;
@@ -5388,8 +5236,7 @@ impl App {
             }
         };
         match (now.playing, listening.playing_since) {
-            // Paused: bank the stretch that just ended and stop the clock,
-            // or the time spent paused would count as listening.
+            // Add the completed interval when playback pauses.
             (false, Some(since)) => {
                 listening.listened += since.elapsed();
                 listening.playing_since = None;
@@ -5415,8 +5262,7 @@ impl App {
         self.rebuild_recents();
     }
 
-    /// The title bar carries the playing song, the way Spotify's does, so
-    /// an ungrouped taskbar button says what is on (#94).
+    /// Keeps the current track in the window and taskbar title (#94).
     fn sync_window_title(&mut self, ctx: &egui::Context) {
         let title = match self.now_playing().filter(|now| now.playing) {
             Some(now) if now.subtitle.is_empty() => format!("{} - Fastpotify", now.title),
@@ -5434,8 +5280,7 @@ impl App {
         let ctx = &ctx;
         self.apply_theme(ctx);
         self.lock_scroll_axis(ctx);
-        // The mini player has no sign-in screen; someone who needs one gets
-        // the big window.
+        // Switch to the main window when sign-in is required.
         let needs_sign_in = !(self.is_connected() && self.user.is_some())
             && !matches!(self.auth, AuthStatus::Connecting | AuthStatus::Starting)
             && !(self.is_connected() && self.user.is_none());
@@ -5477,19 +5322,15 @@ impl App {
             && !self.switch_intent
             && self.hides_to_tray()
         {
-            // The window genuinely closes; the process stays in the tray and
-            // the outer loop recreates a window on demand. No compositor
-            // tricks: this works the same on every desktop.
+            // Close the window and keep the process running in the tray.
             self.hide_intent = true;
         }
     }
 
-    /// Keeps a scroll gesture on one axis.
+    /// Locks each scroll gesture to one axis.
     ///
-    /// A trackpad reports a little of the other axis during a one-axis
-    /// gesture, so a page whose rows scroll sideways drifted diagonally. The
-    /// axis is chosen from the first movement of a gesture and held until it
-    /// pauses, the way the platforms' own scrolling behaves.
+    /// Trackpads report small cross-axis deltas. Choose from the first movement
+    /// and hold that axis until the gesture ends.
     fn lock_scroll_axis(&mut self, ctx: &egui::Context) {
         let (raw, from_trackpad, ended) = ctx.input(|input| {
             let mut sum = egui::Vec2::ZERO;
@@ -5511,17 +5352,14 @@ impl App {
         if raw != egui::Vec2::ZERO {
             self.scroll_from_trackpad = from_trackpad;
         }
-        // Linux compositors hand touchpad deltas through unscaled and they
-        // land well short of what other players scroll; wheels arrive as
-        // lines and are scaled already. macOS feels right as delivered.
+        // Linux touchpad point deltas need scaling. Wheel deltas are already
+        // scaled, and macOS point deltas need no adjustment.
         let trackpad_here = cfg!(target_os = "linux") && self.scroll_from_trackpad;
         if trackpad_here {
             ctx.input_mut(|input| input.smooth_scroll_delta *= TRACKPAD_SCALE);
         }
-        // macOS glides after the fingers lift; Linux hands over raw deltas
-        // that stop dead. While the fingers move, remember where the gesture
-        // has been; the frame it ends, carry its speed of the last tenth of
-        // a second on, decaying, the way native scroll views here feel.
+        // Add decaying momentum to Linux touchpad scrolling. Track the final
+        // 100 ms of movement to estimate release velocity.
         if trackpad_here && raw != egui::Vec2::ZERO {
             self.glide = None;
             self.scroll_accum += raw * TRACKPAD_SCALE;
@@ -5532,7 +5370,7 @@ impl App {
             // check below needs a frame to run in.
             ctx.request_repaint_after(Duration::from_millis(60));
         } else if raw != egui::Vec2::ZERO || ctx.input(|input| input.pointer.any_down()) {
-            // A wheel takes over, or a press catches the page.
+            // Wheel input or a press stops touchpad momentum.
             self.glide = None;
             self.scroll_history.clear();
             self.scroll_last_event = None;
@@ -5769,10 +5607,7 @@ fn local_load(request: &PlayRequest, shuffle: bool) -> LoadSpec {
     }
 }
 
-/// The song to seed autoplay with when local playback stops at the end of
-/// a plain list: the list's last one, provided the stop is the list's end
-/// rather than the listener's, the session still stands, and autoplay is
-/// on.
+/// Returns the final track as the autoplay seed when a plain list ends.
 fn autoplay_seed(
     list: Option<&[String]>,
     autoplay: bool,
@@ -5794,8 +5629,7 @@ fn autoplay_seed(
     near_end.then(|| track.uri.clone())
 }
 
-/// Spotify balks at gigantic track lists, so a play that starts deep in
-/// one keeps the five hundred songs from its start onward.
+/// Caps large track lists at 500 items starting from the selected row.
 fn cap_uris(uris: Vec<String>, index: u32) -> (Vec<String>, u32) {
     const MAX: usize = 500;
     if uris.len() <= MAX {
@@ -5899,8 +5733,7 @@ mod tests {
         assert_eq!(app.resume_position_ms, 90_000);
     }
 
-    /// The point of the whole thing: play, pressed on a cold start, picks
-    /// the song up where it was left rather than at its beginning.
+    /// Play resumes the remembered track at its saved position.
     #[test]
     fn pressing_play_on_a_cold_start_does_not_restart_the_song() {
         let mut app = headless_app();
@@ -5924,9 +5757,24 @@ mod tests {
         );
     }
 
-    /// A restored song is loaded and current, not playing. The transport
-    /// must act on it from that standstill: skipping moves through the
-    /// playlist it was left in without ever starting the restored song.
+    /// A media key can arrive before startup has reported that the saved
+    /// local player is connecting. Its intent must survive that race.
+    #[test]
+    fn pressing_play_while_startup_connects_is_held_for_the_player() {
+        let mut app = headless_app();
+        app.local_ready = false;
+        app.local_playback = LocalPlayback::Unavailable;
+        app.auth = AuthStatus::Starting;
+        app.settings.playback_authorized = true;
+        app.resume_track = Some("spotify:track:abc".into());
+
+        app.toggle_play();
+
+        assert!(app.queued_play.is_some());
+        assert!(!app.show_devices, "startup is not a missing-device error");
+    }
+
+    /// Previous and Next move a restored track without starting playback.
     #[test]
     fn the_transport_works_on_a_restored_song_without_playing_it() {
         use crate::api::models::{PlayableItem, PlaylistItem, Track};
@@ -5969,8 +5817,7 @@ mod tests {
             app.queued_play.is_none() && app.local_list.is_none(),
             "skipping must not start the restored song"
         );
-        // Its details come from the rows already loaded, so the bar fills
-        // in at once rather than blanking.
+        // Use loaded row details for immediate display.
         let now = app.now_playing().expect("the new song is shown");
         assert!(now.resuming && !now.playing);
         assert_eq!(now.uri, "spotify:track:three");
@@ -5992,8 +5839,7 @@ mod tests {
         app.apply(Action::Previous, &ctx);
         assert_eq!(app.resume_track.as_deref(), Some("spotify:track:three"));
 
-        // And play still starts whatever the skipping settled on, in the
-        // playlist it belongs to.
+        // Play starts the selected track in its playlist.
         app.apply(Action::TogglePlay, &ctx);
         let request = app.queued_play.as_ref().expect("play starts it");
         assert_eq!(
@@ -6004,8 +5850,7 @@ mod tests {
         assert_eq!(request.offset_uri.as_deref(), Some("spotify:track:three"));
     }
 
-    /// Shuffle is the listener's mode and outlives a close: a skip from the
-    /// standstill lands elsewhere in the context, and shuffle stays on.
+    /// A restored session keeps shuffle enabled when skipping.
     #[test]
     fn skipping_a_restored_song_keeps_shuffle_on() {
         use crate::api::models::{PlayableItem, PlaylistItem, Track};
@@ -6041,9 +5886,7 @@ mod tests {
         );
     }
 
-    /// The queue saved at close is owed to the resumed song alone:
-    /// resuming it queues the songs again, starting anything else lets
-    /// them go.
+    /// The saved queue is restored only with its remembered track.
     #[test]
     fn the_saved_queue_follows_the_resumed_song_only() {
         let mut app = headless_app();
@@ -6062,9 +5905,7 @@ mod tests {
         assert!(app.session_dirty);
     }
 
-    /// A chosen row in a plain list loads the list straight; librespot
-    /// shuffling first loses the chosen row and replays what was on.
-    /// Shuffle is put back by a command after the load.
+    /// A selected list row loads without shuffle, then enables shuffle.
     #[test]
     fn a_chosen_row_in_a_list_never_loads_shuffled() {
         let request = PlayRequest::tracks(vec!["spotify:track:a".into(), "spotify:track:b".into()])
@@ -6110,8 +5951,7 @@ mod tests {
         )
     }
 
-    /// Next is a pop: the head of Next up becomes the playing row the
-    /// moment the button is pressed, without waiting for the Web API.
+    /// Next moves the queue head to the playing row immediately.
     #[test]
     fn next_pops_the_queue_head_into_now_playing() {
         let ctx = egui::Context::default();
@@ -6133,9 +5973,7 @@ mod tests {
         );
     }
 
-    /// A song that starts consumes its queue row at once, however it came
-    /// on: pressed here, skipped from another device, or reached on its
-    /// own when the song before it ended.
+    /// A track is removed from Next up as soon as it starts.
     #[test]
     fn a_song_starting_consumes_its_queue_row() {
         let mut app = headless_app();
@@ -6151,9 +5989,7 @@ mod tests {
         assert_eq!(next, vec!["spotify:track:c"]);
     }
 
-    /// A queue answer from before the user's skip must not undo what the
-    /// interface already shows; only an answer Spotify keeps giving is
-    /// finally believed.
+    /// A stale queue response does not undo an optimistic skip.
     #[test]
     fn a_stale_queue_answer_does_not_undo_a_skip() {
         let ctx = egui::Context::default();
@@ -6189,7 +6025,7 @@ mod tests {
             "the stale answer is asked again rather than believed"
         );
 
-        // Spotify telling the same story every time eventually wins.
+        // Accept Spotify's state after the retry limit.
         for _ in 0..QUEUE_STALE_RETRIES {
             app.handle_api(ApiResponse::Queue {
                 seq: app.queue_seq,
@@ -6200,8 +6036,7 @@ mod tests {
         assert_eq!(current.as_deref(), Some("spotify:track:a"));
     }
 
-    /// A hand-queued song that has started playing must not be put back on
-    /// top of Next up by the pending add that created its row.
+    /// A pending addition is not restored after its track starts.
     #[test]
     fn a_played_pending_add_is_not_put_back() {
         let mut app = headless_app();
@@ -6221,8 +6056,7 @@ mod tests {
         );
     }
 
-    /// A chosen row of Next up plays at once: the rows above it go with
-    /// it and the rows after it stay put, like pressing Next down to it.
+    /// Playing a queue row consumes it and every row before it.
     #[test]
     fn a_chosen_queue_row_plays_at_once_and_takes_the_rows_above() {
         let ctx = egui::Context::default();
@@ -6292,9 +6126,7 @@ mod tests {
         );
     }
 
-    /// Clear queue takes the hand-queued rows out at once and keeps the
-    /// context's upcoming songs; a song queued once that the context also
-    /// carries keeps its context row.
+    /// Clear queue removes manual rows and preserves matching context rows.
     #[test]
     fn clear_queue_takes_the_hand_queued_rows_and_keeps_the_context() {
         let ctx = egui::Context::default();
@@ -6329,8 +6161,7 @@ mod tests {
         );
     }
 
-    /// Rule: Play next goes in after the songs already queued and ahead
-    /// of the playing context's own rows.
+    /// Play next inserts after manual queue rows and before context rows.
     #[test]
     fn play_next_queues_after_the_songs_already_queued() {
         let ctx = egui::Context::default();
@@ -6371,8 +6202,7 @@ mod tests {
         );
     }
 
-    /// Rule: asking again queues it again; only a double-click's second
-    /// click is the same ask.
+    /// Separate requests may queue duplicates; duplicate click events do not.
     #[test]
     fn asking_play_next_twice_queues_two_rows() {
         let ctx = egui::Context::default();
@@ -6395,7 +6225,7 @@ mod tests {
             vec!["spotify:track:b", "spotify:track:ctx1"],
             "the double-click's second click is not a second wish"
         );
-        // Deliberately asked again, later.
+        // Simulate a later request.
         for (_, at) in &mut app.pending_queue_adds {
             *at = Instant::now() - QUEUE_ADD_DEBOUNCE;
         }
@@ -6408,8 +6238,7 @@ mod tests {
         );
     }
 
-    /// Rule: an answer overtaken by a newer request is dropped unread,
-    /// whatever it says.
+    /// A response superseded by a newer request is ignored.
     #[test]
     fn an_overtaken_queue_answer_is_dropped_unread() {
         let mut app = headless_app();
@@ -6505,9 +6334,7 @@ mod tests {
             .unwrap_or_default()
     }
 
-    /// Rule: a plain click picks one row and drops the rest; clicking the
-    /// one already picked on its own lets it go, so there is a way back
-    /// to nothing without hunting for empty space.
+    /// A plain click selects one row; clicking it again clears selection.
     #[test]
     fn a_plain_click_picks_one_row_and_a_second_lets_it_go() {
         let mut app = test_app("pick-one");
@@ -6520,7 +6347,7 @@ mod tests {
         assert!(picked(&app, &page).is_empty(), "clicking it again lets go");
     }
 
-    /// Rule: ctrl-click adds and removes one row at a time.
+    /// Ctrl-click toggles one row.
     #[test]
     fn ctrl_click_adds_and_removes_one_row() {
         let mut app = test_app("pick-toggle");
@@ -6537,8 +6364,7 @@ mod tests {
         );
     }
 
-    /// Rule: shift-click takes everything back to the last row picked on
-    /// its own, in either direction, and never past the end of the list.
+    /// Shift-click selects from the anchor without exceeding the list.
     #[test]
     fn shift_click_takes_the_run_back_to_the_anchor() {
         let mut app = test_app("pick-range");
@@ -6554,7 +6380,7 @@ mod tests {
         assert_eq!(picked(&app, &page), vec![2, 3]);
     }
 
-    /// Rule: with nothing picked yet, a shift-click is a plain one.
+    /// Shift-click without an anchor selects one row.
     #[test]
     fn shift_click_with_no_anchor_picks_one_row() {
         let mut app = test_app("pick-no-anchor");
@@ -6563,9 +6389,7 @@ mod tests {
         assert_eq!(picked(&app, &page), vec![6]);
     }
 
-    /// Rule: rows belong to the list they were picked in. Sorting it,
-    /// filtering it, or another page of songs arriving lets them go,
-    /// because row four is a different song afterwards.
+    /// Selection clears when sorting, filtering, or paging changes the rows.
     #[test]
     fn the_rows_let_go_when_the_list_moves_underneath() {
         let mut app = test_app("pick-stale");
@@ -6577,8 +6401,7 @@ mod tests {
         assert!(picked(&app, &page).is_empty(), "a re-sort lets them go");
     }
 
-    /// Rule: one table at a time. Picking rows somewhere else replaces
-    /// what was picked, and the old page has nothing picked.
+    /// Selecting rows in another table replaces the current selection.
     #[test]
     fn picking_rows_on_another_page_replaces_the_first() {
         let mut app = test_app("pick-other-page");
@@ -6651,8 +6474,7 @@ mod tests {
         assert_eq!(app.recents.items.len(), 3, "both plays of a are kept");
     }
 
-    /// Rule: the same play arriving twice is dropped. Paging can hand back
-    /// a row already held when something plays while the list is open.
+    /// Duplicate play records across page boundaries are removed.
     #[test]
     fn recents_drop_a_play_that_arrives_twice() {
         let mut app = test_app("recents-dedup");
@@ -6688,8 +6510,7 @@ mod tests {
         );
     }
 
-    /// Rule: a page shorter than the one asked for is the end of the
-    /// history, cursor or no cursor.
+    /// A short page ends history pagination, even with a cursor.
     #[test]
     fn a_short_page_ends_the_recents_list() {
         let mut app = test_app("recents-short");
@@ -6710,7 +6531,7 @@ mod tests {
         );
     }
 
-    /// Rule: a full page with a cursor keeps the list going.
+    /// A full page with a cursor allows another history request.
     #[test]
     fn a_full_page_leaves_the_recents_list_open() {
         let mut app = test_app("recents-full");
@@ -6728,9 +6549,7 @@ mod tests {
         assert_eq!(app.recents.after.as_deref(), Some("cursor-1"));
     }
 
-    /// Rule: closing the app keeps the queue. The rows come back on the
-    /// next start, split where the user's own songs end, and stay until
-    /// something actually plays.
+    /// Closing and reopening restores queue rows and their manual split.
     #[test]
     fn the_queue_comes_back_after_a_restart() {
         let root = std::env::temp_dir().join(format!(
@@ -6830,8 +6649,7 @@ mod tests {
         assert!(app.queue_playlist_name().starts_with("Queue "));
     }
 
-    /// Song radio opens the queue: fifty songs appearing there is the
-    /// whole visible result of the click.
+    /// Song radio opens the queue panel.
     #[test]
     fn song_radio_opens_the_queue() {
         let ctx = egui::Context::default();
@@ -6845,8 +6663,7 @@ mod tests {
         );
     }
 
-    /// The MilkDrop window's playback keys reach the player, and they are
-    /// the app's own keys, so one pair of hands knows both.
+    /// MilkDrop playback keys produce the same actions as the main window.
     #[cfg(feature = "milkdrop")]
     #[test]
     fn the_milkdrop_window_drives_playback() {
@@ -6882,15 +6699,14 @@ mod tests {
         app.milkdrop_command("volume-down");
         assert!(matches!(app.actions.first(), Some(Action::VolumeBy(-5))));
 
-        // A word this window never sends asks for nothing at all.
+        // Ignore unknown commands.
         app.actions.clear();
         app.milkdrop_command("teleport");
         assert!(app.actions.is_empty());
     }
 
-    /// The window says what its screen refreshes at, and the frame rate
-    /// takes that for its own the first time it hears it. After that the
-    /// number belongs to the listener and stays where they put it.
+    /// The first reported screen rate sets the default FPS, but later reports
+    /// do not override a configured value.
     #[cfg(feature = "milkdrop")]
     #[test]
     fn the_frame_rate_matches_the_screen_the_first_time_it_is_known() {
@@ -6902,7 +6718,7 @@ mod tests {
         assert_eq!(app.settings.milkdrop_screen_hz, 144);
         assert_eq!(app.settings.milkdrop_fps, 144, "smooth without being asked");
 
-        // A number the listener chose is not overruled by another screen.
+        // Keep the configured FPS when the screen changes.
         app.settings.milkdrop_fps = 30;
         app.learn_screen_hz(60);
         assert_eq!(
@@ -6933,11 +6749,8 @@ mod tests {
         app
     }
 
-    /// A shuffle play must not start at track one, wherever it is begun
-    /// from: on the rows the app holds it picks one of them, and with no
-    /// rows at hand the Web API is sent a position drawn from the length
-    /// the library knows. Local playback is given neither, because
-    /// librespot draws its own starting track.
+    /// Shuffle picks a random loaded track or Web API offset. Local librespot
+    /// playback chooses its own starting track.
     #[test]
     fn a_shuffled_play_does_not_start_at_track_one() {
         use crate::api::models::{
@@ -7239,9 +7052,7 @@ mod tests {
         assert!(queue.lock().expect("the queue").is_empty());
     }
 
-    /// The verbs a Stream Deck key needs and a media key never asked for:
-    /// a state said outright rather than toggled, an absolute position, a
-    /// URI, and moving the sound to another device.
+    /// Control clients can set state, seek, play a URI, and transfer playback.
     #[test]
     fn a_key_can_ask_for_a_state_rather_than_a_toggle() {
         // #given
@@ -7286,10 +7097,7 @@ mod tests {
         assert!(queue.lock().expect("the queue").is_empty());
     }
 
-    /// The snapshot a client polls keeps its first nine fields where they
-    /// were, so a script written against the older shape still reads them,
-    /// and says "unknown" rather than guessing at a saved flag nobody has
-    /// told it yet.
+    /// New snapshot fields are appended so older clients keep working.
     #[test]
     fn the_snapshot_appends_what_a_key_needs_without_moving_what_was_there() {
         // #given
@@ -7332,7 +7140,7 @@ mod tests {
                 "track",
                 // The three a Stream Deck key needs, appended.
                 "https://i.scdn.co/image/abc",
-                // Not signed in, so nobody has said whether this is saved.
+                // Saved state is unknown before sign-in.
                 "unknown",
                 // Local playback is this computer, which Spotify has not
                 // named because it is not a remote device.
@@ -7347,8 +7155,7 @@ mod tests {
         );
     }
 
-    /// The device slot is written when Spotify answers rather than every
-    /// frame, so the thing to check is that an answer still reaches it.
+    /// Spotify device responses update the control snapshot.
     #[test]
     fn a_device_list_reaches_the_slot_when_spotify_answers() {
         // #given
@@ -7441,7 +7248,7 @@ mod tests {
         assert!(
             app.toasts
                 .iter()
-                .any(|toast| toast.message == "Added the Dropped skin")
+                .any(|toast| toast.message == "Added Dropped skin")
         );
 
         app.settings.skin = Some("Gone.wsz".into());

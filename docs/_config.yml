@@ -60,14 +60,13 @@ jekyll_vitepress:
   llms:
     title: Fastpotify
     description: >-
-      Documentation for Fastpotify, a fast native Spotify client written in
-      Rust with egui and librespot: one lightweight app for your whole
-      library, local playback, and Spotify Connect on Linux, macOS, and
-      Windows.
+      Documentation for Fastpotify, a native Spotify client for Linux, macOS,
+      and Windows. It covers local playback, library access, and Spotify
+      Connect.
     full: true
     details: >-
-      The canonical documentation covers installation, signing in, everyday
-      use, settings, and how the client connects to Spotify. Source is on
+      Covers installation, sign-in, everyday use, settings, and Spotify
+      connections. Source is on
       [GitHub](https://github.com/crmne/fastpotify).
   branding:
     site_title: Fastpotify

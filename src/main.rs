@@ -245,7 +245,7 @@ fn run_control(control: Control) -> i32 {
             0
         }
         Err(error) => {
-            eprintln!("Fastpotify is not running, or predates remote control: {error}");
+            eprintln!("Fastpotify is not running or does not support remote control: {error}");
             1
         }
     }

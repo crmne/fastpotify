@@ -4,7 +4,7 @@ What user problem does this solve, and why does it belong in Fastpotify?
 
 ## What changed
 
-Describe the smallest coherent change. Link the issue, if there is one.
+Describe the change. Link the issue, if there is one.
 
 ## Verification
 

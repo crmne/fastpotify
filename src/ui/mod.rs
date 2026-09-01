@@ -164,9 +164,8 @@ fn central(app: &mut App, ui: &mut egui::Ui) {
         });
 }
 
-/// Makes `rect` behave like the titlebar that is no longer there: dragging it
-/// moves the window. Register it before the widgets that sit on top of it, so
-/// they keep the clicks that are theirs.
+/// Makes `rect` drag the borderless window. Register it before child widgets so
+/// they keep their clicks.
 pub fn titlebar_drag(ui: &mut egui::Ui, rect: egui::Rect) {
     if theme::titlebar_inset(ui.ctx()) == 0.0 {
         return;
@@ -176,12 +175,9 @@ pub fn titlebar_drag(ui: &mut egui::Ui, rect: egui::Rect) {
         ui.id().with("titlebar-drag"),
         egui::Sense::click_and_drag(),
     );
-    // AppKit begins the move from the mouse-down event that is still live, so
-    // the command has to go out on the press itself. Waiting for egui's drag
-    // threshold leaves the event stale by the time it arrives, and the window
-    // stays put ("Window move completed without beginning"). There is no
-    // double-click-to-zoom to go with it: the press hands the rest of the
-    // gesture to the native drag loop, so a second click never comes back.
+    // AppKit must start the move from the live mouse-down event. Waiting for
+    // egui's drag threshold makes the event stale. Native dragging consumes the
+    // gesture, so double-click zoom is unavailable here.
     if response.is_pointer_button_down_on() && ui.input(|input| input.pointer.primary_pressed()) {
         ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
     }

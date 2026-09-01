@@ -1,13 +1,9 @@
-//! The MilkDrop child process: a window of its own, with its own OpenGL
-//! context and its own winit event loop.
+//! MilkDrop child process with its own window, OpenGL context, and event loop.
 //!
-//! winit allows one event loop per process and eframe owns the app's, so
-//! MilkDrop runs as a separate process: the app spawns this same binary with
-//! `--milkdrop-child` (see `super::host`). It reads the sound from the
-//! shared-memory ring the app fills, takes its settings and a close request
-//! on stdin as JSON lines, and reports where it sits and when it closes on
-//! stdout. Everything projectM makes belongs to this process, so it cannot
-//! touch the app's windows.
+//! The app starts this binary with `--milkdrop-child` because winit permits one
+//! event loop per process. The child reads audio from shared memory, receives
+//! JSON-line commands on stdin, and reports window state on stdout. projectM
+//! resources stay isolated from the app's windows.
 
 use std::io::{BufRead, Write};
 use std::num::NonZeroU32;
@@ -196,17 +192,16 @@ struct Child {
     drawn: Vec<Instant>,
     /// Whether the keys are what is on show, so the same key hides them.
     showing_keys: bool,
-    /// What the corner is asked to keep showing.
+    /// Song-title display mode.
     song_shown: SongShown,
     preset_on: bool,
     fps_on: bool,
-    /// What each corner says now, and when that was written, so one is
-    /// redrawn only when it would say something else.
+    /// Cached corner text and its last render time.
     corner_lines: [Vec<String>; 3],
     corner_written: [Option<Instant>; 3],
     modifiers: winit::keyboard::ModifiersState,
     fps: u32,
-    /// What the screen the window sits on refreshes at, when it says.
+    /// Current screen refresh rate, when reported.
     screen_hz: Option<f32>,
     scale: u32,
     seconds: u32,
@@ -247,20 +242,14 @@ impl Child {
         }
     }
 
-    /// When the next frame is due: one interval after the last one was
-    /// due, not one interval after this one finished drawing. Counting
-    /// from the end of the drawing adds its cost to every wait, which is
-    /// what turned a limit of 60 into 50 frames a second.
+    /// Schedules from the previous deadline so render time does not reduce FPS.
     fn schedule_next_frame(&mut self) {
         self.schedule_next_frame_at(Instant::now());
     }
 
     /// The same, told what the time is.
     ///
-    /// The clock comes in rather than being read here so that a test can
-    /// walk it forward by hand. Watching this by sleeping is a test that
-    /// passes on a quiet machine and fails on a busy one, because
-    /// `sleep` promises a floor and not a ceiling.
+    /// Accepts `now` so tests can advance time without sleeping.
     fn schedule_next_frame_at(&mut self, now: Instant) {
         let Some(interval) = self.frame_interval() else {
             self.next_frame = now;
@@ -388,12 +377,16 @@ impl Child {
         let Some(live) = &self.live else {
             return;
         };
-        let size = live.window.inner_size();
-        let size = [size.width as f32, size.height as f32];
+        let scale = live.window.scale_factor();
+        let size = live.window.inner_size().to_logical::<f32>(scale);
+        let size = [size.width, size.height];
         let pos = live
             .window
             .outer_position()
-            .map(|pos| [pos.x as f32, pos.y as f32])
+            .map(|pos| {
+                let pos = pos.to_logical::<f32>(scale);
+                [pos.x, pos.y]
+            })
             .unwrap_or([0.0, 0.0]);
         if self.reported != Some((pos, size)) {
             self.reported = Some((pos, size));
@@ -547,9 +540,8 @@ impl Child {
                     self.close(event_loop);
                 }
             }
-            // Presets are what this window is for, so they have the
-            // plain keys; playback keeps the app's own bindings, so the
-            // hands that know one know the other.
+            // Plain keys control presets; modified keys keep the app's playback
+            // bindings.
             Key::Named(NamedKey::ArrowRight) if plain => self.presets.next(false),
             Key::Named(NamedKey::ArrowLeft) if plain => self.presets.previous(),
             Key::Character("n") | Key::Character("N") if plain => self.presets.next(false),
@@ -699,7 +691,7 @@ impl Child {
         self.show_note(note.into());
     }
 
-    /// Keeps something in its corner, or stops keeping it there.
+    /// Toggles a persistent corner status.
     fn toggle_status(&mut self, what: Status) {
         match what {
             Status::Song => return,
@@ -714,7 +706,7 @@ impl Child {
         }
     }
 
-    /// What a corner says now, or nothing when it is switched off.
+    /// Current lines for a corner status, or none when disabled.
     fn corner_lines(&self, what: Status) -> Vec<String> {
         match what {
             Status::Fps if self.fps_on => {
@@ -1003,11 +995,17 @@ fn build(event_loop: &ActiveEventLoop, args: &Args, seconds: u32) -> Result<Live
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_RING: AtomicU64 = AtomicU64::new(0);
 
     /// A child with no window, for the parts that need none.
     fn headless_child() -> Child {
-        let dir =
-            std::env::temp_dir().join(format!("fastpotify-milkdrop-child-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "fastpotify-milkdrop-child-{}-{}",
+            std::process::id(),
+            NEXT_RING.fetch_add(1, Ordering::Relaxed)
+        ));
         std::fs::create_dir_all(&dir).expect("a place for the test's ring");
         let shm = dir.join("ring");
         let ring = Ring::create(&shm).expect("a ring to read");
@@ -1041,9 +1039,7 @@ mod tests {
         assert!(child.frame_interval().is_none(), "zero is uncapped");
     }
 
-    /// The frame limit is a rhythm, not a wait between frames: each one
-    /// is due an interval after the last was due, so the drawing's own
-    /// cost does not stretch every interval and drop the rate.
+    /// Frame deadlines do not drift with rendering time.
     #[test]
     fn the_frame_limit_does_not_drift_with_the_drawing() {
         let mut child = headless_child();
@@ -1052,10 +1048,7 @@ mod tests {
         let start = Instant::now();
         child.next_frame = start;
 
-        // Ten frames, each taking a third of an interval to draw. The
-        // clock is walked by hand: sleeping for a third of an interval
-        // and expecting to be woken after a third of an interval is a
-        // test that fails on a machine with something else to do.
+        // Simulate ten frames that each use one third of the interval.
         for frame in 1..=10 {
             child.schedule_next_frame_at(start + interval * (frame - 1) / 3);
             assert_eq!(
@@ -1077,8 +1070,7 @@ mod tests {
         );
     }
 
-    /// Each corner carries its own thing, and says nothing at all when
-    /// it is switched off.
+    /// Each corner status renders independently and clears when disabled.
     #[test]
     fn each_corner_carries_what_was_switched_on() {
         let mut child = headless_child();
@@ -1153,8 +1145,7 @@ mod tests {
         }
     }
 
-    /// The count is frames over the time they took, and it says nothing
-    /// at all until there are two of them to measure between.
+    /// FPS uses elapsed time and requires at least two frames.
     #[test]
     fn frames_a_second_are_counted_over_the_time_they_took() {
         assert_eq!(frames_per_second(&[]), 0.0);

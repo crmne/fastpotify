@@ -66,7 +66,7 @@ fn build(sender: Sender<TrayCommand>, wake: Wake) -> Result<Item, Box<dyn std::e
     let menu = Menu::new();
     let play_pause = MenuItem::with_id(PLAY_PAUSE, play_pause_label(false), true, None);
     menu.append_items(&[
-        &MenuItem::with_id(SHOW, "Show / hide Fastpotify", true, None),
+        &MenuItem::with_id(SHOW, "Show or hide Fastpotify", true, None),
         &PredefinedMenuItem::separator(),
         &play_pause,
         &MenuItem::with_id(NEXT, "Next", true, None),

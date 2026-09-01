@@ -13,7 +13,7 @@ pub enum ThemeChoice {
     System,
 }
 
-/// What the mini player's display shows of the sound.
+/// Mini-player visualizer mode.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum VisMode {
@@ -24,7 +24,7 @@ pub enum VisMode {
 }
 
 impl VisMode {
-    /// The next mode round, the order a click on the display goes through.
+    /// Next mode in the display's click cycle.
     pub fn next(self) -> Self {
         match self {
             Self::Bars => Self::Scope,
@@ -59,8 +59,8 @@ pub struct Settings {
     /// librespot backend name; `None` picks the platform default.
     pub audio_backend: Option<String>,
     pub audio_device: Option<String>,
-    /// How much sound the output is asked to hold, in milliseconds. Too
-    /// little and a busy machine clicks; too much and pause answers late.
+    /// Windows output buffer in milliseconds. Smaller values may click under
+    /// load; larger values delay playback controls.
     /// See [`crate::sink::DEFAULT_BUFFER_MS`].
     #[serde(default = "default_buffer_ms")]
     pub audio_buffer_ms: u32,
@@ -103,8 +103,7 @@ pub struct Settings {
     pub zoom: f32,
     /// The Winamp window is open.
     pub winamp_window: bool,
-    /// The skin the Winamp window wears: a file or folder name in the skins
-    /// folder. `None` is the built-in skin.
+    /// Skin file or folder name. `None` selects the built-in skin.
     pub skin: Option<String>,
     /// Screen pixels per skin pixel; `None` picks double size for the
     /// display.
@@ -141,10 +140,8 @@ pub struct Settings {
     pub milkdrop_seconds: u32,
     /// How many frames a second the MilkDrop window draws; 0 is uncapped.
     pub milkdrop_fps: u32,
-    /// What the screen the MilkDrop window opened on refreshes at, as it
-    /// last said. Not a setting anyone sets: it names the rate worth
-    /// matching, and the first time it is learnt the frame rate above
-    /// follows it, so a 144 hertz screen is smooth without being asked.
+    /// Last reported MilkDrop screen refresh rate. The first value sets the
+    /// default frame rate; this field is not directly configurable.
     pub milkdrop_screen_hz: u32,
     /// The picture's inner resolution: 1 full, 2 half, 4 quarter.
     pub milkdrop_scale: u32,
@@ -377,21 +374,17 @@ pub struct SessionState {
     pub last_context: Option<String>,
     pub last_track: Option<String>,
     pub last_position_ms: u32,
-    /// The songs the listener queued by hand, to queue again when the
-    /// remembered song resumes. Only hand-added songs belong here: the
-    /// whole queue also carries the context's own upcoming songs, and
-    /// saving those made duplicates. (The old `last_queue` field held
-    /// exactly that bad data, so this one has a new name and old sessions
-    /// restore nothing.)
+    /// Manually queued songs to restore with the remembered track.
+    ///
+    /// Context rows are excluded to prevent duplicates. This replaced the old
+    /// `last_queue` field, so sessions using that field restore no added rows.
     pub last_added_queue: Vec<String>,
-    /// The queue as it looked at close, to show again on the next start.
-    /// Display only: nothing is queued from this list. Hand-added songs
-    /// are queued again from `last_added_queue` when the remembered song
-    /// resumes, and the rest belongs to the context that keeps playing.
+    /// Queue rows displayed on the next start. Playback restores manual rows
+    /// from `last_added_queue`; it does not enqueue this list.
     pub last_queue_rows: Vec<crate::api::models::PlayableItem>,
     /// Sidebar folders rolled up, by their rootlist ids.
     pub collapsed_folders: Vec<String>,
-    /// Whether the listener had shuffle on, a mode that outlives contexts.
+    /// Shuffle mode saved across contexts and restarts.
     pub shuffle_on: bool,
     /// Each table's chosen sort, by encoded page, restored at start.
     pub sorts: Vec<(String, crate::model::TableSort)>,

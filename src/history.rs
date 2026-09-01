@@ -1,43 +1,22 @@
-//! What you actually listened to, kept here because Spotify does not keep
-//! it for us.
+//! Local play history.
 //!
-//! Spotify's own recently-played list is filled in by its official
-//! clients reporting what they played. librespot, which is what plays
-//! music here, reports nothing: it has no telemetry of any kind, and
-//! Spotify offers no way for a client like this one to say "I played
-//! that". So `/me/player/recently-played` knows every device you own
-//! except this one, and a Recently played tab built only on it shows a
-//! stranger's afternoon: whatever you last put on in the car.
-//!
-//! The two blind spots are exact opposites, though. Spotify knows the
-//! other devices and not this one; this file knows this one and not the
-//! others. Merged, the list is whole, which is why both are kept rather
-//! than one replacing the other, and why nothing in the interface has to
-//! apologise for it.
-//!
-//! A play is written down once the song has really been listened to
-//! rather than passed over, so that skimming twenty songs does not bury
-//! the one that was played.
+//! Spotify does not record playback from librespot clients. Fastpotify stores
+//! local plays and merges them with `/me/player/recently-played`, which covers
+//! other devices. A track counts only after enough listening time, so skips do
+//! not fill the history.
 
 use std::collections::HashMap;
 use std::path::Path;
 
 use crate::api::models::{Album, Image, PlayHistory, Track};
 
-/// How long a song must play before it counts, or half its length if it
-/// is shorter than a minute. This is the rule every scrobbler settles on:
-/// long enough that skipping through a playlist writes nothing down,
-/// short enough that a short song still counts.
+/// A play counts after 30 seconds, or halfway through a shorter track.
 const COUNTS_AFTER: std::time::Duration = std::time::Duration::from_secs(30);
 
-/// How many plays are kept. Enough to page back through a few weeks
-/// without the file becoming something anyone has to think about.
+/// Maximum number of stored local plays.
 const KEPT: usize = 500;
 
-/// Two plays of the same song this close together are the same play seen
-/// twice, not a song played twice. Only matters where the local history
-/// and Spotify's overlap, which they should not, but clocks differ and a
-/// duplicated row is worse than a missing one.
+/// Matching plays within this many seconds are treated as duplicates.
 const SAME_PLAY: i64 = 60;
 
 /// When a song has been listened to long enough to count.
@@ -52,14 +31,12 @@ pub fn counts_after(duration_ms: u32) -> std::time::Duration {
 #[derive(Default)]
 pub struct History {
     plays: Vec<PlayHistory>,
-    /// Set when the list has changed and the file has not caught up.
+    /// Set when the in-memory list differs from the file.
     dirty: bool,
 }
 
 impl History {
-    /// Reads the history, or starts an empty one. A file that cannot be
-    /// read is not worth a word to the listener: the history rebuilds
-    /// itself by being used.
+    /// Reads the history, or returns an empty history if the file is unreadable.
     pub fn load(path: &Path) -> Self {
         let plays = std::fs::read_to_string(path)
             .ok()
@@ -79,8 +56,7 @@ impl History {
         self.plays.is_empty()
     }
 
-    /// Writes the history down if it has changed since it was last
-    /// written.
+    /// Writes the history if it changed since the last save.
     pub fn save(&mut self, path: &Path) {
         if !self.dirty {
             return;
@@ -122,11 +98,7 @@ impl History {
     }
 }
 
-/// What the playing song looks like as something to write down.
-///
-/// The interface holds a song ready to draw rather than the record it
-/// came from, so this puts back the parts a history row shows: the name,
-/// who made it, the album it is from, and its cover.
+/// Converts the playing track into a history record.
 pub fn played_track(now: &crate::app::NowPlaying) -> Track {
     Track {
         id: now.id.clone(),
@@ -155,15 +127,10 @@ pub fn played_track(now: &crate::app::NowPlaying) -> Track {
     }
 }
 
-/// The two histories as one list, newest first.
+/// Merges local and Spotify history, newest first.
 ///
-/// `local` is what was played here and `remote` is what Spotify knows,
-/// which is every other device. They should not overlap at all, since
-/// Spotify never hears about a play made here, but a song played on two
-/// devices within a minute is written down once rather than twice.
-///
-/// A play with no time on it cannot be placed, so it sorts to the end
-/// rather than to the top, where an unknown time would look like now.
+/// Matching plays within the duplicate window are deduplicated. Entries
+/// without a timestamp sort to the end.
 pub fn merged(local: &[PlayHistory], remote: &[PlayHistory]) -> Vec<PlayHistory> {
     let mut seen: HashMap<String, Vec<i64>> = HashMap::new();
     let mut out: Vec<(Option<i64>, PlayHistory)> = Vec::new();
@@ -206,28 +173,22 @@ mod tests {
         }
     }
 
-    /// Rule: half a minute of listening counts, and half the song when
-    /// the song is shorter than a minute, so a short song is reachable.
+    /// A play counts after 30 seconds or halfway through a shorter track.
     #[test]
     fn a_song_counts_after_half_a_minute_or_half_of_it() {
         assert_eq!(counts_after(240_000).as_secs(), 30, "a four minute song");
         assert_eq!(counts_after(40_000).as_secs(), 20, "a forty second song");
-        // Nothing counts instantly, however short the song claims to be.
+        // Always require at least one second.
         assert!(counts_after(0) >= std::time::Duration::from_secs(1));
     }
 
-    /// Rule: a song already written down is never written down twice,
-    /// however long it keeps playing. This guards the shape of the
-    /// bookkeeping in `App::note_listening`, where an "already counted"
-    /// marker made of a very large span used to overflow and panic on
-    /// the next frame.
+    /// A counted play is not added again on later frames.
     #[test]
     fn counting_never_overflows_however_long_a_song_runs() {
         let threshold = counts_after(240_000);
         let mut listened = std::time::Duration::ZERO;
         let mut recorded = 0;
-        // An hour of frames, well past the threshold, on a song nobody
-        // stopped.
+        // Continue for an hour after crossing the threshold.
         for _ in 0..3_600 {
             listened += std::time::Duration::from_secs(1);
             if recorded == 0 && listened >= threshold {
@@ -237,7 +198,7 @@ mod tests {
         assert_eq!(recorded, 1, "written down once, and it did not panic");
     }
 
-    /// Rule: both histories, newest first, whichever they came from.
+    /// Both sources are sorted together, newest first.
     #[test]
     fn the_two_histories_interleave_by_time() {
         let local = vec![
@@ -257,8 +218,7 @@ mod tests {
         );
     }
 
-    /// Rule: the same song played twice really is two rows. A history
-    /// that collapses repeats is not a history.
+    /// Separate plays of the same track remain separate rows.
     #[test]
     fn the_same_song_played_twice_is_two_rows() {
         let local = vec![
@@ -268,9 +228,7 @@ mod tests {
         assert_eq!(merged(&local, &[]).len(), 2);
     }
 
-    /// Rule: the same play seen from both sides is one row. It should
-    /// never happen, since Spotify never hears about a play made here,
-    /// but clocks differ and a doubled row is worse than a missing one.
+    /// A play reported by both sources appears once.
     #[test]
     fn one_play_seen_twice_is_one_row() {
         let local = vec![play("spotify:track:a", "2026-09-01T15:00:00Z")];
@@ -280,8 +238,7 @@ mod tests {
         assert_eq!(merged(&local, &distant).len(), 2, "five minutes apart");
     }
 
-    /// Rule: a play with no time on it goes to the end. At the top an
-    /// unknown time would read as "just now", which it is not.
+    /// A play without a timestamp sorts to the end.
     #[test]
     fn a_play_with_no_time_sinks_to_the_end() {
         let mut timeless = play("spotify:track:timeless", "");
@@ -292,8 +249,7 @@ mod tests {
         assert_eq!(uris, vec!["spotify:track:a", "spotify:track:timeless"]);
     }
 
-    /// Rule: the newest play is first, and the list does not grow for
-    /// ever.
+    /// The newest play comes first and the list is capped.
     #[test]
     fn the_newest_play_is_first_and_the_list_is_capped() {
         let mut history = History::default();

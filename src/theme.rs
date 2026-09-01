@@ -1,10 +1,8 @@
-//! Fastpotify's visual language: palette, typography, icons, base widgets.
+//! Shared palette, typography, icons, and base widgets.
 //!
-//! Inter carries the interface with real weights (egui's `strong()` only
-//! brightens), IBM-free monospace is unnecessary here, and one Lucide icon
-//! vocabulary replaces Unicode lookalikes. Everything colour-related goes
-//! through a [`Palette`] so light and dark stay coherent and album-art tints
-//! can be blended in without hunting for hard-coded colours.
+//! Inter provides real font weights, and Lucide provides a consistent icon set.
+//! All colors use [`Palette`] so light, dark, and album-art-tinted themes stay
+//! consistent.
 
 use egui::{Color32, CornerRadius, Response, Sense, Stroke, Vec2};
 
@@ -308,18 +306,11 @@ fn install_fonts(ctx: &egui::Context) {
         fonts.families.insert(FontFamily::Name(name.into()), family);
     }
 
-    // Inter draws Latin, Greek, and Cyrillic and nothing else, and the faces
-    // egui bundles add no more, so a title in any other script arrives as a
-    // row of tofu boxes. Shipping the fonts that would cover them is not an
-    // option -- Noto CJK alone is ten times this binary -- but a desktop that
-    // displays a script already carries a face for it. Borrow those and append
-    // them to each family, after Inter so Latin text keeps its shape and after
-    // the emoji faces so emoji keep their colour.
+    // Add installed fallbacks for scripts Inter does not cover. Keep them after
+    // Inter and the emoji font to preserve Latin shapes and color emoji.
     for font in crate::system_fonts::fallbacks() {
-        // Lending epaint the cached bytes rather than handing it owned ones
-        // saves copying them into its own blob, paid again every time it
-        // rebuilds the glyph atlas -- which a twenty-megabyte CJK collection
-        // makes expensive and CJK text, filling the atlas fast, provokes.
+        // Reuse cached font bytes to avoid copying large collections whenever
+        // epaint rebuilds the glyph atlas.
         let mut data = FontData::from_static(&font.bytes);
         data.index = font.index;
         fonts.font_data.insert(font.name.clone(), Arc::new(data));
@@ -587,15 +578,10 @@ pub fn icon_button(
     }
 }
 
-/// A round, filled control such as the main play button.
-/// The horizontal nudge that visually centres a play triangle. A
-/// right-pointing triangle's mass sits left of its bounding box, so a
-/// geometrically centred glyph reads as pushed left and a full optical
-/// shift reads as pushed right. Lucide bakes about one viewBox unit
-/// (1/24) of right shift into the artwork; replacing it with a measured
-/// 3% of the icon size lands the glyph centred at every size used here.
-/// Every place that paints the glyph must use this, or the login-logo
-/// bug returns: hand-tuned nudges drifted apart per call site.
+/// Horizontal offset that optically centers play triangles.
+///
+/// Lucide includes a 1/24-width shift; a measured 3% shift centers the icon at
+/// Fastpotify's sizes. Use this everywhere instead of per-call adjustments.
 pub fn play_glyph_offset(icon: Icon, icon_size: f32) -> Vec2 {
     if matches!(icon, Icon::PlayFilled | Icon::Play) {
         Vec2::new(icon_size * (0.03 - 1.0 / 24.0), 0.0)

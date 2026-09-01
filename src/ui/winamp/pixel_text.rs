@@ -1,14 +1,7 @@
-//! Text the way Winamp's playlist drew it: the small system face, hinted
-//! to the pixel grid and filled with no smoothing, then scaled up pixel for
-//! pixel like the rest of the skin.
+//! Pixel-aligned, unsmoothed text for the Winamp playlist.
 //!
-//! egui rasterises text smoothly for the screen it is on, which is right
-//! everywhere else in the app and wrong here: a playlist of 1998 was Arial
-//! at eight points on a screen with no smoothing to offer. So each line is
-//! drawn once at the skin's own size, from skrifa's outlines under
-//! monochrome hinting and tiny-skia's fill with anti-aliasing off, both in
-//! the binary already for other reasons, and kept as a texture drawn
-//! nearest-sampled at the window's scale, so its pixels are the skin's.
+//! Each line is rasterized once at skin resolution with monochrome hinting and
+//! no anti-aliasing, then cached and nearest-neighbor scaled with the skin.
 
 use std::collections::HashMap;
 use std::sync::LazyLock;
@@ -36,11 +29,8 @@ pub struct Line {
     pub ink_height: u32,
 }
 
-/// The faces, in the order they are asked: Arial or what stands in for
-/// it on this desktop (else Inter), then the faces the app borrows from
-/// the system for the scripts those cannot draw. Windows did the same
-/// for Winamp under the name of font linking, so a Japanese title in the
-/// playlist is as period-accurate as a Latin one.
+/// Font fallback order: Arial or a system equivalent, Inter, emoji, then
+/// system script fallbacks. This mirrors Windows font linking.
 static FACES: LazyLock<Vec<(&'static [u8], u32)>> = LazyLock::new(|| {
     let mut faces: Vec<(&'static [u8], u32)> = match crate::system_fonts::pledit_face() {
         Some(face) => vec![(&face.bytes, face.index)],

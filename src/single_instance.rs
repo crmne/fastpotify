@@ -1,50 +1,31 @@
-//! One running instance at a time, and its remote-control channel.
+//! Single-instance guard and remote-control channel.
 //!
-//! Two copies of Fastpotify fight over things a user notices: two Spotify
-//! Connect devices with the same name, two MPRIS players for the media keys
-//! to disagree about, two tray icons. So a second launch does not start a
-//! second app; it asks the one already running to show itself and exits.
+//! A second instance would duplicate the Spotify Connect device, MPRIS player,
+//! and tray icon. A second launch raises the running instance and exits.
 //!
-//! Detection is a D-Bus well-known name, requested without queuing. The bus
-//! grants it to exactly one process and releases it the moment that process
-//! ends, crash included, so there is no stale lock file to clean up and no
-//! race between two launches at once. Surfacing the running instance is the
-//! MPRIS `Raise` method it already implements, which is also what a desktop's
-//! own "jump to the running player" gesture calls.
+//! Linux uses a non-queued D-Bus well-known name as the guard and MPRIS
+//! `Raise` to show the running instance. D-Bus releases the name when the
+//! process ends, including after a crash.
 //!
-//! This uses zbus's blocking API deliberately. Both of zbus's executors are
-//! compiled in here (the tray brings async-io, MPRIS brings tokio), so an
-//! async connection awaited from an arbitrary runtime is not guaranteed to be
-//! driven. The blocking API owns that problem, and a check that runs once
-//! before the window exists has no reason to be asynchronous anyway.
+//! This uses zbus's blocking API because the build includes both async-io and
+//! tokio executors. The blocking connection avoids depending on either runtime
+//! during the startup check.
 //!
-//! macOS and Windows have no session bus, so there the same two jobs are done
-//! by a listening socket bound to loopback: binding is exclusive, so whoever
-//! binds is the running instance, and a later launch connects to say "show
-//! yourself" before exiting. It is bound to 127.0.0.1 so no firewall has an
-//! opinion about it, it speaks only to itself, and the operating system
-//! releases the port when the process ends.
+//! macOS and Windows use an exclusive loopback socket for the guard and
+//! control channel. The operating system releases the port when the process
+//! ends.
 //!
-//! On those platforms the socket doubles as the remote-control channel:
-//! `fastpotify next` (or a Raycast script running it) connects, sends one
-//! `fastpotify:<verb>` line, and reads one reply line. Playback verbs are
-//! acknowledged with `fastpotify:ok` and land in the same action queue the
-//! tray and the media keys feed; the two read verbs, `nowplaying` and
-//! `devices`, are answered from snapshots the app keeps fresh, so the
-//! listener thread never touches app state.
-//! Linux needs none of this: MPRIS already gives `playerctl` the same verbs,
-//! so the D-Bus name stays a pure instance guard there.
+//! On macOS and Windows, clients send one `fastpotify:<verb>` line and receive
+//! one reply. Commands enter the same action queue as tray and media-key
+//! events. Read commands use snapshots, so the listener thread never accesses
+//! app state. Linux uses MPRIS for these controls.
 //!
-//! The same channel is what the Stream Deck plugin speaks. That is why the
-//! verbs cover more than a media key can ask for -- an explicit shuffle or
-//! repeat state rather than only a toggle, saving the playing track, playing
-//! a URI, listing devices and moving playback to one -- and why the
-//! now-playing snapshot carries the artwork URL and the saved flag a key
-//! needs to draw itself. A client polls; nothing is pushed.
+//! The Stream Deck plugin uses the same channel. It can set shuffle and repeat,
+//! save the current track, play a URI, list devices, and transfer playback.
+//! Clients poll the current snapshot; the app does not push updates.
 //!
-//! Anything on the machine can reach the port, so the two verbs that carry
-//! free text (`play-uri`, `transfer`) validate their argument here rather
-//! than handing the app an arbitrary string.
+//! Any local process can reach the port, so `play-uri` and `transfer` validate
+//! their free-text arguments here.
 
 /// The name held for the lifetime of the running instance.
 #[cfg(target_os = "linux")]
@@ -64,7 +45,7 @@ pub enum Outcome {
 /// What a control client asked the running instance to do.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ControlCommand {
-    /// Bring the window forward, creating it if the app lives in the tray.
+    /// Bring the window forward, creating it if needed.
     Show,
     PlayPause,
     Play,
@@ -80,9 +61,7 @@ pub enum ControlCommand {
     ToggleMute,
     ToggleShuffle,
     CycleRepeat,
-    /// Shuffle set outright. A key that draws the current state wants to say
-    /// which state it is asking for, or a missed update leaves the two
-    /// disagreeing until the next press.
+    /// Set shuffle explicitly, avoiding missed toggle updates.
     SetShuffle(bool),
     /// Repeat set outright, for the same reason.
     SetRepeat(crate::player::RepeatMode),
@@ -99,19 +78,16 @@ pub enum ControlCommand {
     RefreshDevices,
 }
 
-/// Holds whatever marks this process as the running instance. Dropping it
-/// gives that up.
+/// Marks this process as the running instance until dropped.
 pub struct Guard {
     #[cfg(target_os = "linux")]
     _connection: Option<mpris_server::zbus::blocking::Connection>,
     /// Filled by control clients, drained by the app every frame. On Linux
     /// the same requests arrive through MPRIS instead and this stays empty.
     commands: std::sync::Arc<std::sync::Mutex<Vec<ControlCommand>>>,
-    /// One line about the current track, kept fresh by the app so the
-    /// listener can answer `nowplaying` without touching app state.
+    /// Current-track snapshot for `nowplaying` requests.
     now_playing: std::sync::Arc<std::sync::Mutex<String>>,
-    /// The Spotify Connect devices the app last saw, as one line of JSON,
-    /// kept fresh the same way and for the same reason.
+    /// Last Spotify Connect device snapshot, as one line of JSON.
     devices: std::sync::Arc<std::sync::Mutex<String>>,
 }
 
@@ -132,13 +108,10 @@ impl Guard {
     }
 }
 
-/// What the app writes into the snapshot slot before anything plays, and
-/// what `nowplaying` reports when nothing does.
+/// Snapshot value reported when nothing is playing.
 pub const NOTHING_PLAYING: &str = "stopped";
 
-/// What the device slot holds before the app has looked, and what `devices`
-/// reports when Spotify lists none. A JSON array either way, so a client
-/// never has to special-case the empty answer.
+/// Device snapshot used before loading and when Spotify reports no devices.
 pub const NO_DEVICES: &str = "[]";
 
 /// Loopback port that marks a running instance on platforms without a bus.
@@ -167,8 +140,8 @@ pub enum Reply {
     /// shuffle, repeat, art_url, saved, device`.
     NowPlaying(String),
     /// The `devices` snapshot: a JSON array of objects with `id`, `name`,
-    /// `kind`, and `active`, or [`NO_DEVICES`]. Free text (a speaker someone
-    /// named) makes tab-separated fields a poor fit here.
+    /// `kind`, and `active`, or [`NO_DEVICES`]. JSON safely carries free-text
+    /// device names.
     Devices(String),
 }
 
@@ -187,9 +160,8 @@ fn send_to(port: u16, verb: &str) -> std::io::Result<Reply> {
     let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, port))?;
     stream.set_read_timeout(Some(Duration::from_secs(2)))?;
     stream.write_all(format!("{PREFIX}{verb}\n").as_bytes())?;
-    // The listener writes one line and closes, so read to end and keep the
-    // line. An instance predating the control channel ignores unknown verbs
-    // without replying; the read times out and that surfaces as an error.
+    // The listener writes one line and closes. Older instances do not reply to
+    // unknown verbs, so the read times out.
     let mut reply = String::new();
     stream.read_to_string(&mut reply)?;
     let line = reply.lines().next().unwrap_or("");
@@ -221,8 +193,7 @@ pub fn acquire(waker: &crate::backend::Waker) -> Outcome {
     let listener = match TcpListener::bind((Ipv4Addr::LOCALHOST, INSTANCE_PORT)) {
         Ok(listener) => listener,
         Err(_) => {
-            // Someone holds the port. Ask them to show themselves, and only
-            // stand down if they answer as Fastpotify.
+            // Raise the existing instance only if the port answers as Fastpotify.
             let answered = send("show").is_ok_and(|reply| matches!(reply, Reply::Ok));
             if answered {
                 return Outcome::Surfaced;
@@ -287,12 +258,9 @@ fn serve(
             Some(Request::Devices) => {
                 let snapshot = devices.lock().unwrap_or_else(|p| p.into_inner()).clone();
                 let _ = stream.write_all(format!("{DEVICES_REPLY}{snapshot}\n").as_bytes());
-                // The app only refreshes the list while its own picker is
-                // open, so a client asking is reason enough to look again.
-                // The answer above is whatever was known a moment ago; the
-                // next read has the fresh one.
-                // ponytail: one read behind on a cold list. Push updates
-                // only if a client ever needs it sooner than that.
+                // Return the current snapshot, then request a refresh for the
+                // next read. The app otherwise refreshes only while its picker
+                // is open.
                 queue(ControlCommand::RefreshDevices);
             }
             // Not our client; say nothing and hang up.
@@ -333,9 +301,8 @@ fn parse(line: &str) -> Option<Request> {
         ("shuffle-set", Some("on")) => ControlCommand::SetShuffle(true),
         ("shuffle-set", Some("off")) => ControlCommand::SetShuffle(false),
         ("repeat", None) => ControlCommand::CycleRepeat,
-        // Spelled out rather than through `RepeatMode::from_api`, which
-        // reads an unknown word as `off`. A verb nobody meant to send
-        // should be refused, not obeyed as something else.
+        // Match explicitly because `RepeatMode::from_api` maps unknown values
+        // to `off`; control clients should reject them.
         ("repeat-set", Some("off")) => ControlCommand::SetRepeat(crate::player::RepeatMode::Off),
         ("repeat-set", Some("context")) => {
             ControlCommand::SetRepeat(crate::player::RepeatMode::Context)
@@ -353,10 +320,8 @@ fn parse(line: &str) -> Option<Request> {
     Some(Request::Command(command))
 }
 
-/// A `spotify:` URI, as far as this side can tell. Anything on the machine
-/// can reach the port, so what goes on to become a Web API play request is
-/// checked here rather than taken on trust: the scheme, and only the
-/// characters Spotify's own URIs and their percent-escapes are made of.
+/// Validates the scheme, length, and characters of a Spotify URI received over
+/// the local control port.
 #[cfg(not(target_os = "linux"))]
 fn spotify_uri(text: &str) -> Option<String> {
     let shaped = text.starts_with("spotify:")
@@ -426,9 +391,8 @@ pub fn acquire(_waker: &crate::backend::Waker) -> Outcome {
         }
     };
 
-    // Holding the name is how this process says it is the one running.
-    // zbus reports a name another peer already owns as `NameTaken` rather
-    // than as a reply, so that error is the ordinary second-launch path.
+    // Holding the D-Bus name marks this process as the running instance.
+    // `NameTaken` is the normal second-launch result.
     match connection.request_name_with_flags(INSTANCE_NAME, RequestNameFlags::DoNotQueue.into()) {
         Ok(RequestNameReply::PrimaryOwner | RequestNameReply::AlreadyOwner) => {
             Outcome::Only(guard(Some(connection)))
@@ -576,9 +540,7 @@ mod tests {
         assert!(parse("").is_none());
     }
 
-    /// The two verbs that carry free text are the ones a hostile local
-    /// process would reach for, so neither hands the app a string it has
-    /// not looked at.
+    /// Free-text control arguments are validated before reaching the app.
     #[test]
     fn refuses_arguments_that_are_not_shaped_like_spotifys_own() {
         // #given / #when / #then
@@ -596,9 +558,7 @@ mod tests {
         assert!(command("fastpotify:seek-to -1").is_none());
     }
 
-    /// The whole channel over a real socket: what `fastpotify next` sends is
-    /// what the app finds in its queue, and the two reads come back from the
-    /// snapshots the app published.
+    /// Socket commands reach the queue and reads return published snapshots.
     #[test]
     fn a_client_reaches_the_command_queue_and_the_snapshot() {
         use std::net::{Ipv4Addr, TcpListener};

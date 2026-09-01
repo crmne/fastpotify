@@ -7,9 +7,9 @@ nav_order: 1
 {% assign v = site.fastpotify_version %}
 {% assign base = "https://github.com/crmne/fastpotify/releases/download/v" | append: v %}
 
-The current version is **v{{ v }}**. Every file below, with its SHA-256, is
-listed in [checksums.txt]({{ base }}/checksums.txt); all versions live on
-the [releases page](https://github.com/crmne/fastpotify/releases).
+The current version is **v{{ v }}**. SHA-256 checksums are in
+[checksums.txt]({{ base }}/checksums.txt). Older versions are on the
+[releases page](https://github.com/crmne/fastpotify/releases).
 
 ## macOS
 
@@ -31,19 +31,17 @@ still apply. To skip them, clear the quarantine flag instead:
 find /Applications/Fastpotify.app -exec xattr -d com.apple.quarantine {} \; 2>/dev/null
 ```
 
-Every file inside the bundle has to be cleared, not just the app itself:
-clear only the top level and macOS 26 leaves the app bouncing in the Dock
-for ever. `find` is what walks the bundle here because `xattr` on macOS 27
-no longer takes `-r` for that, and this form works on every version.
+The command must clear every file in the bundle. Clearing only the app can
+leave it bouncing in the Dock on macOS 26. This command also works on macOS
+27, where `xattr` no longer accepts `-r`.
 
-If the command is not to your taste or does not work, skip it. The
-first-open steps below need no terminal at all.
+If the command fails, use the steps below instead. They do not need a
+terminal.
 
 ### First open on macOS
 
-This build is not yet notarized with Apple, so macOS blocks it the first
-time. Recent macOS versions (Sequoia and later) no longer let you bypass
-this with a right-click, so you open it once through Privacy & Security:
+This build is not notarized, so macOS blocks the first launch. On Sequoia and
+later, allow it in Privacy & Security:
 
 1. Double-click **Fastpotify** in Applications. macOS says it cannot be
    opened because Apple cannot check it for malicious software. Click
@@ -53,8 +51,7 @@ this with a right-click, so you open it once through Privacy & Security:
    to protect your Mac"*, and click **Open Anyway**.
 4. Authenticate, then click **Open Anyway** once more.
 
-macOS remembers the choice, so later launches work with an ordinary
-double-click.
+Later launches work with a normal double-click.
 
 ## Windows
 
@@ -64,8 +61,7 @@ rights. Choose x86_64 for most PCs or aarch64 for Windows on ARM:
 - [fastpotify-v{{ v }}-x86_64-pc-windows-msvc-setup.exe]({{ base }}/fastpotify-v{{ v }}-x86_64-pc-windows-msvc-setup.exe)
 - [fastpotify-v{{ v }}-aarch64-pc-windows-msvc-setup.exe]({{ base }}/fastpotify-v{{ v }}-aarch64-pc-windows-msvc-setup.exe)
 
-If you would rather not install anything, the same program comes as a zip:
-unpack it and run `fastpotify.exe`.
+For a portable copy, download a zip, unpack it, and run `fastpotify.exe`.
 
 - [fastpotify-v{{ v }}-x86_64-pc-windows-msvc.zip]({{ base }}/fastpotify-v{{ v }}-x86_64-pc-windows-msvc.zip)
 - [fastpotify-v{{ v }}-aarch64-pc-windows-msvc.zip]({{ base }}/fastpotify-v{{ v }}-aarch64-pc-windows-msvc.zip)
@@ -96,13 +92,10 @@ any distribution with Flatpak and the Freedesktop 24.08 runtime:
 flatpak install --user ~/Downloads/fastpotify-vX.Y.Z-x86_64.flatpak
 ```
 
-A bundle does not update itself; a Flathub listing, which would, is in the
-works.
+A bundle does not update itself. Flathub support is planned.
 
-That bundle is the one built here, from the same binary as the tarball
-above. Fastpotify on other stores is packaged by other people and is not
-supported: if one of those will not start or will not play, the packager
-is the person who can fix it, so please raise it with them.
+The bundle uses the same binary as the release tarball. Other stores use
+third-party packages. Report package-specific problems to their packagers.
 
 ### Other distributions
 
@@ -111,7 +104,6 @@ is the person who can fix it, so please raise it with them.
 
 Unpack, put `fastpotify` on your PATH, and copy the desktop entry and icon
 from the bundled `packaging/` directory if you want it in your launcher.
-Runtime needs are the ordinary desktop libraries: ALSA, PulseAudio or
-PipeWire, and Wayland or X11.
+The binary needs ALSA, PulseAudio or PipeWire, and Wayland or X11.
 
 Or build from source: see [Getting Started](/getting-started/).

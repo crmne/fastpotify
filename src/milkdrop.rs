@@ -1,19 +1,12 @@
-//! MilkDrop, in a window of its own, through libprojectM.
+//! MilkDrop visualization through libprojectM.
 //!
-//! projectM is an open reimplementation of MilkDrop that reads MilkDrop's
-//! own `.milk` presets and draws them with OpenGL. Winamp ran its visualiser
-//! as a separate, fullscreenable window, and so does this — literally, in a
-//! child process: winit allows one event loop per process and eframe owns the
-//! app's, so MilkDrop is this same binary re-launched with `--milkdrop-child`
-//! (see `child` and `host`), with its own window, OpenGL context, and
-//! event loop. The sound reaches it through a shared-memory ring (`shm`);
-//! everything else it does on its own. A vis button on the big window and the
-//! mini player open it.
+//! projectM reads MilkDrop `.milk` presets and renders them with OpenGL.
+//! MilkDrop runs as this binary with `--milkdrop-child` because winit permits
+//! one event loop per process and eframe owns the main one. Audio reaches the
+//! child through a shared-memory ring.
 //!
-//! This module also holds the preset state the app itself needs: [`Presets`]
-//! lists the folder and fetches the packs projectM curates. Nothing is
-//! bundled: presets live in the `milkdrop` folder of the config directory,
-//! and until there are any projectM shows its own idle preset.
+//! [`Presets`] lists the config directory's `milkdrop` folder and downloads
+//! optional projectM preset packs. No presets are bundled.
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
@@ -37,14 +30,9 @@ pub mod shm;
 pub const DEFAULT_SECONDS: u32 = 10;
 /// How many frames a second the window draws by default.
 pub const DEFAULT_FPS: u32 = 60;
-/// The choices Settings offers for that; 0 is uncapped.
-/// The frame rates a number may be set to by hand. Anything in between
-/// is fine too; these are only where the slider starts and stops.
+/// Configurable frame-rate range. Zero is handled separately as uncapped.
 pub const FPS_RANGE: std::ops::RangeInclusive<u32> = 10..=360;
-/// The rates the frame rate stops at, in the order the dial passes
-/// them, with uncapped (`0`) last: the two everyone knows, the screen's
-/// own when it is neither of those, and whatever is set now, so a rate
-/// chosen by hand keeps a place of its own.
+/// Frame-rate slider stops: 30, 60, screen rate, current rate, and uncapped.
 pub fn fps_stops(screen: u32, current: u32) -> Vec<u32> {
     let mut rates = vec![30, 60];
     for extra in [screen, current] {
@@ -57,8 +45,7 @@ pub fn fps_stops(screen: u32, current: u32) -> Vec<u32> {
     rates
 }
 
-/// What a stop is called on the dial. `screen` is what the screen
-/// refreshes at, which is worth saying out loud when it is that.
+/// Label for a frame-rate stop, marking the screen's refresh rate.
 pub fn fps_label(rate: u32, screen: u32) -> String {
     match rate {
         0 => "Uncapped".to_string(),
@@ -71,8 +58,7 @@ pub fn fps_label(rate: u32, screen: u32) -> String {
 pub const DEFAULT_SIZE: [f32; 2] = [640.0, 480.0];
 /// The smallest the window may be dragged.
 pub const MIN_SIZE: [f32; 2] = [320.0, 240.0];
-/// How long one preset takes to fade into the next: MilkDrop's own blend
-/// time.
+/// MilkDrop's preset crossfade duration.
 pub const CROSSFADE_SECONDS: f64 = 2.7;
 /// How far behind the newest sample the picture runs: the same lag as the
 /// analyser, so the picture and the speaker agree.
@@ -115,13 +101,12 @@ pub enum Request {
 pub struct Presets {
     files: Vec<PathBuf>,
     listed: Option<Instant>,
-    /// Which presets have played, in order, and where in that history the
-    /// window is, so that previous and next walk it before picking anew.
+    /// Played presets and the current position for Previous and Next.
     history: Vec<PathBuf>,
     at: usize,
-    /// The preset stays until the listener moves on.
+    /// Whether automatic preset changes are disabled.
     pub locked: bool,
-    /// Presets come at random, or in the folder's own order, as R says.
+    /// Random order when true; folder order when false.
     random: bool,
     pending: Option<Request>,
     download: Option<(&'static str, mpsc::Receiver<Result<usize, String>>)>,
@@ -164,13 +149,12 @@ impl Presets {
         self.files.len()
     }
 
-    /// The preset playing, once one has been asked for.
+    /// Current preset, if one has been selected.
     pub fn current(&self) -> Option<&Path> {
         self.history.get(self.at).map(PathBuf::as_path)
     }
 
-    /// Moves on: forward through the history if the listener went back,
-    /// otherwise to a preset picked at random. A cut goes straight there.
+    /// Moves forward through history or selects the next preset.
     pub fn next(&mut self, hard: bool) {
         if self.at + 1 < self.history.len() {
             self.at += 1;
@@ -178,8 +162,7 @@ impl Presets {
             let Some(pick) = self.pick() else {
                 return;
             };
-            // The history holds the last hundred, which is as far back as
-            // anyone goes.
+            // Keep the most recent 100 presets.
             if self.history.len() >= 100 {
                 self.history.remove(0);
             }
@@ -198,8 +181,7 @@ impl Presets {
         self.request(true);
     }
 
-    /// Switches between presets at random and the folder's own order,
-    /// and says which is on now.
+    /// Toggles random and folder order, returning the new random state.
     pub fn toggle_order(&mut self) -> bool {
         self.random = !self.random;
         self.random
@@ -235,23 +217,19 @@ impl Presets {
         }
     }
 
-    /// Asks for the preset that is playing to be loaded straight away, with
-    /// no fade: for a fresh engine after a window reopens, so MilkDrop
-    /// picks up where it left off instead of falling back to the idle
-    /// preset.
+    /// Reloads the current preset without a fade after the engine restarts.
     pub fn reload_current(&mut self) {
         if self.current().is_some() {
             self.request(false);
         }
     }
 
-    /// Whether anything has been asked for and not yet done.
+    /// Takes the pending engine request.
     pub fn take_request(&mut self) -> Option<Request> {
         self.pending.take()
     }
 
-    /// Fetches a pack into the folder on another thread; `poll` says how
-    /// it went. One at a time.
+    /// Downloads one preset pack on a worker thread.
     pub fn download(&mut self, pack: &'static Pack, folder: PathBuf, ctx: egui::Context) {
         if self.download.is_some() {
             return;

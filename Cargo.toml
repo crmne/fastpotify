@@ -1,10 +1,10 @@
 [package]
 name = "fastpotify"
-version = "0.4.1"
+version = "0.5.0-rc2"
 edition = "2024"
 rust-version = "1.95"
 license = "MIT"
-description = "A fast, lightweight, native Spotify client built with Rust and egui"
+description = "A native Spotify client"
 repository = "https://github.com/crmne/fastpotify"
 keywords = ["spotify", "music", "egui", "librespot", "player"]
 categories = ["multimedia::audio"]

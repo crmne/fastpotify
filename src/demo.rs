@@ -301,8 +301,7 @@ pub fn populate(app: &mut App) {
                     // unit; the rest remain absolute dates.
                     added_at: Some(demo_added_at(index, demo_now)),
                     is_local: false,
-                    // A second pair of hands, so the page reads as made
-                    // together: the Added By column and the byline show.
+                    // Use multiple contributors so Added By and the byline render.
                     added_by: Some(crate::api::models::UserRef {
                         id: Some(if index % 3 == 1 { "kasia" } else { "sam" }.into()),
                     }),
@@ -533,9 +532,7 @@ pub fn populate(app: &mut App) {
             kind: "smartphone".into(),
         },
     ];
-    // A speaker announcing itself over ZeroConf that the account has not
-    // adopted yet, so the device picker shows the row that offers to hand it
-    // the account.
+    // Include an unsigned ZeroConf receiver in the device picker.
     app.receivers = vec![crate::zeroconf::Receiver {
         name: "House Spotify".into(),
         address: std::net::IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 1, 42)),
@@ -602,8 +599,7 @@ fn sample_lyrics() -> crate::lyrics::Lyrics {
 /// Applies `--demo-page` and `--demo-show`.
 #[cfg(feature = "demo")]
 pub fn apply_flags(app: &mut App, page: Option<&str>, show: Option<&str>) {
-    // Whatever the settings on this machine say, a shot is of the big
-    // window unless the mini player is asked for.
+    // Default screenshots to the main window regardless of saved settings.
     app.settings.winamp_window = false;
     if let Some(page) = page.and_then(Page::decode) {
         app.open(page);
@@ -647,8 +643,7 @@ pub fn apply_flags(app: &mut App, page: Option<&str>, show: Option<&str>) {
                 app.resume_position_ms = 19_566;
                 app.actions.push(Action::Next);
             }
-            // The built-in skin, whatever the settings say, so shots are
-            // the same everywhere and never show someone else's art.
+            // Use the built-in skin for deterministic screenshots.
             "winamp" => {
                 app.settings.winamp_window = true;
                 app.settings.skin = None;
@@ -899,9 +894,7 @@ mod tests {
         app.backend.shutdown();
     }
 
-    /// A toast lays its words out in a line. The anchored area it lives
-    /// in starts out narrow, and a label left to wrap at the area's width
-    /// broke on every word.
+    /// A toast is wide enough to avoid wrapping every word.
     #[test]
     fn a_toast_is_wide_enough_to_read() {
         let root =
@@ -1055,11 +1048,10 @@ mod tests {
         app.settings.milkdrop_fps = 60;
         app.open(Page::Settings);
 
-        // What the dial says, drawn on the real Settings page.
+        // Read labels from the real Settings page.
         let drawn = |app: &mut App, ctx: &egui::Context| -> Vec<String> {
             let input = egui::RawInput {
-                // Tall enough that the whole of Settings is drawn,
-                // MilkDrop's own section included.
+                // Draw the full Settings page, including MilkDrop.
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
                     egui::vec2(1280.0, 4000.0),
@@ -1150,7 +1142,7 @@ mod tests {
             )),
             ..Default::default()
         };
-        // Twice: the panel takes its width from the first frame.
+        // The panel applies its width after the first frame.
         for _ in 0..2 {
             placed.clear();
             let mut output = ctx.run_ui(input.clone(), |ui| app.frame_ui(ui));
@@ -1241,8 +1233,7 @@ mod tests {
         app.show_queue_panel = true;
         app.show_devices = true;
         frame(&ctx, &mut app);
-        // The drawer again with a hand-queued song, so the Playing next
-        // section lays out too.
+        // Draw the Playing next section with a manual queue row.
         if let Loadable::Loaded(queue) = &app.queue
             && let Some(first) = queue.queue.first()
         {
@@ -1430,9 +1421,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
-    /// A drop between two unpinned playlists creates the custom order too:
-    /// nothing was pinned, so the snapshot is simply the shelf as shown
-    /// with the moved row in its new place.
+    /// Reordering unpinned playlists creates a custom sidebar order.
     #[test]
     fn dropping_between_unpinned_playlists_creates_the_custom_order() {
         let root =

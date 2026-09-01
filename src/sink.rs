@@ -1,14 +1,9 @@
 //! Audio output for local playback.
 //!
-//! librespot ships a rodio sink, but it opens the output device with
-//! `.unwrap()` on the player thread, and the release profile aborts on any
-//! panic. A Windows PC with no default playback device (nothing in the jack,
-//! a Bluetooth headset that is off, a remote desktop session) therefore took
-//! the whole app down the moment playback was authorized, before the
-//! credential was even stored. This sink opens the device only when playback
-//! starts, reports a failure as a sink error (librespot answers by pausing),
-//! and tells the interface why, so the app stays up as a Connect remote and
-//! plays as soon as an output exists.
+//! librespot's rodio sink panics if no output device is available. Release
+//! builds abort on that panic. This sink opens the device when playback starts
+//! and reports failures through the UI. Fastpotify can then remain available
+//! as a Connect remote until an output appears.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -30,40 +25,30 @@ pub const NAME: &str = "rodio";
 /// Told about output failures, with a message fit for the interface.
 pub type ErrorHook = Arc<dyn Fn(String) + Send + Sync>;
 
-/// How many chunks may wait in rodio's queue before `write` blocks. Chunks
-/// run from a few hundred to a few thousand samples; this is about a fifth
-/// of a second, which is also how long a pause takes to be heard, since
-/// librespot lets the queue play out first.
+/// Maximum queued rodio chunks before `write` blocks, about 200 ms of audio.
 const QUEUE_LIMIT: usize = 12;
 
-/// How long `stop` lets the queue play out before pausing regardless.
+/// Maximum time `stop` waits for the queue to drain.
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// How often playback looks at which output the system calls its default.
 const DEFAULT_CHECK_INTERVAL: Duration = Duration::from_secs(2);
 
-/// How much sound the audio engine is asked to hold for the device, in
-/// milliseconds, when the listener has not said otherwise.
+/// Default Windows device buffer length in milliseconds.
 ///
-/// Every platform's default is a handful of milliseconds, which suits a
-/// synthesiser and not a music player: a busy machine misses a deadline
-/// now and then, and every miss is a click (#88). A tenth of a second
-/// rides those out, and costs a tenth of a second before a press of pause
-/// is heard, which nobody notices in music.
+/// Small platform defaults can click under load (#88). A 100 ms buffer avoids
+/// these underruns while keeping controls responsive.
 pub const DEFAULT_BUFFER_MS: u32 = 100;
 
-/// What the setting will take. The bottom is where clicks start on a
-/// machine with anything else to do; the top is where the controls start
-/// to feel like they are answering late.
+/// Allowed Windows device buffer range. Lower values can click; higher values
+/// delay playback controls.
 pub const BUFFER_MS_RANGE: std::ops::RangeInclusive<u32> = 20..=500;
 
 /// The buffer to ask the device for, in frames.
 ///
-/// A device that says what it can take is held to it, because CoreAudio
-/// refuses a stream whose buffer is outside its range rather than moving
-/// it. A device that says nothing is asked for the wanted size anyway,
-/// which is what Windows has always been given, and `open_stream` falls
-/// back to asking for nothing at all if that is refused.
+/// Clamp to the reported range because CoreAudio rejects unsupported sizes.
+/// If a device reports no range, request the configured size; `open_stream`
+/// can retry without a fixed size.
 fn engine_buffer(
     sample_rate: u32,
     ms: u32,
@@ -84,11 +69,10 @@ pub struct RodioSink {
     device: Option<String>,
     output: Option<Output>,
     on_error: ErrorHook,
-    /// The player's volume, applied here at the output so a change is heard
-    /// at once instead of after the queue drains.
+    /// Player volume, applied at output so changes affect queued audio.
     volume: Box<dyn VolumeGetter + Send>,
     applied_volume: f32,
-    /// Keeps asking which output the system calls its default.
+    /// Watches for changes to the default output.
     watch: Option<DefaultWatch>,
     /// How much sound to ask the device to hold, in milliseconds. Taken
     /// when the stream opens, so a change lands with the next restart.
@@ -106,6 +90,9 @@ struct Output {
     /// not Spotify's.
     sample_rate: u32,
     resampler: Option<Resampler>,
+    /// Whether this track has supplied audio since its last stop.
+    fed: bool,
+    last_write: Option<Instant>,
 }
 
 impl Output {
@@ -132,15 +119,12 @@ impl RodioSink {
         }
     }
 
-    /// Moves to the system's default output when that changes while the
-    /// listener has not picked a device: headphones plugged in, a Bluetooth
-    /// speaker connected, another device chosen in the sound settings. The
-    /// stream was opened on one device and would keep playing through it
-    /// otherwise. Windows and macOS are asked; on Linux PipeWire and
-    /// PulseAudio move the stream themselves, and ALSA's answer never
-    /// changes, so nothing is asked there. The asking happens on a thread
-    /// of its own, since the player's thread has music to deliver on time;
-    /// `at_once` asks right now, for the start of playback.
+    /// Follows the system default output when no device is selected.
+    ///
+    /// Windows and macOS need explicit polling. PipeWire and PulseAudio move
+    /// streams themselves, while ALSA's answer does not change. Polling runs
+    /// off the player thread. `at_once` requests a fresh value at playback
+    /// start.
     fn follow_default(&mut self, at_once: bool) {
         if cfg!(target_os = "linux") || self.device.is_some() {
             return;
@@ -200,7 +184,7 @@ impl Sink for RodioSink {
         self.follow_default(true);
         self.ensure_open()?;
         self.apply_volume();
-        if let Some(output) = &self.output {
+        if let Some(output) = &mut self.output {
             output.sink.play();
         }
         Ok(())
@@ -208,12 +192,14 @@ impl Sink for RodioSink {
 
     /// Never fails: librespot exits the process when a sink cannot stop.
     fn stop(&mut self) -> SinkResult<()> {
-        if let Some(output) = &self.output {
+        if let Some(output) = &mut self.output {
             let deadline = Instant::now() + DRAIN_TIMEOUT;
             while !output.sink.empty() && !output.failed() && Instant::now() < deadline {
                 thread::sleep(Duration::from_millis(10));
             }
             output.sink.pause();
+            output.fed = false;
+            output.last_write = None;
         }
         Ok(())
     }
@@ -235,11 +221,21 @@ impl Sink for RodioSink {
             Some(resampler) => resampler.process(&samples),
             None => samples,
         };
+        let now = Instant::now();
+        if output.fed && output.sink.empty() && !output.sink.is_paused() {
+            let late_ms = output
+                .last_write
+                .map(|last| now.duration_since(last).as_millis())
+                .unwrap_or(0);
+            log::warn!("audio queue ran dry; next packet arrived after {late_ms} ms");
+        }
         output.sink.append(rodio::buffer::SamplesBuffer::new(
             NUM_CHANNELS as rodio::ChannelCount,
             output.sample_rate as rodio::SampleRate,
             samples,
         ));
+        output.fed = true;
+        output.last_write = Some(now);
         // Let rodio drain a little; without this the whole track would be
         // decoded into memory at once.
         while output.sink.len() > QUEUE_LIMIT {
@@ -258,10 +254,8 @@ impl Sink for RodioSink {
 /// else at the device's own rate, which Windows insists on for a shared
 /// device, else at whatever rodio can find.
 ///
-/// The first two ask for the buffer the listener wants. The last does not
-/// ask at all: a driver that will not give the buffer refuses the stream
-/// rather than settling for what it can do, and music at the device's own
-/// idea of a buffer beats no music.
+/// The first two attempts request the configured buffer. The fallback lets
+/// the driver choose its buffer size.
 fn open_stream(
     device: &cpal::Device,
     on_error: impl FnMut(cpal::StreamError) + Send + Clone + 'static,
@@ -282,27 +276,25 @@ fn open_stream(
             builder
         })
     };
-    if let Ok(stream) = builder(SAMPLE_RATE, true)?.open_stream() {
+    // The fixed engine buffer addresses Windows shared-mode underruns (#88).
+    // CoreAudio, ALSA, PulseAudio, and PipeWire keep their proven
+    // driver-selected callback periods.
+    let fixed_buffer = cfg!(windows);
+    if let Ok(stream) = builder(SAMPLE_RATE, fixed_buffer)?.open_stream() {
         return Ok(stream);
     }
     if let Ok(config) = device.default_output_config()
-        && let Ok(stream) = builder(config.sample_rate().0, true)?.open_stream()
+        && let Ok(stream) = builder(config.sample_rate().0, fixed_buffer)?.open_stream()
     {
         return Ok(stream);
     }
     builder(SAMPLE_RATE, false)?.open_stream_or_fallback()
 }
 
-/// The player's thread decodes the music and hands it here with about a
-/// fifth of a second in hand. Under load a PC gives the foreground app
-/// the cores first, and a fifth of a second is soon gone; Windows lets a
-/// thread ask for precedence, so this one asks for a step above normal:
-/// ahead of an app's ordinary threads, behind the audio engine's own,
-/// and never so high that a stuck loop here could hold the machine. (#88)
+/// Raises the Windows decoder thread one step above normal to prevent queued
+/// audio from running out under load (#88).
 ///
-/// Only Windows has a knob an unprivileged thread can turn: on Linux a
-/// thread cannot raise itself without rtkit, and on macOS the equivalent
-/// is a QoS class, worth wiring up when a report calls for it.
+/// Linux requires rtkit; CoreAudio owns its real-time callback on macOS.
 #[cfg(windows)]
 fn take_precedence() {
     use windows_sys::Win32::System::Threading::{
@@ -318,11 +310,8 @@ fn take_precedence() {
 #[cfg(not(windows))]
 fn take_precedence() {}
 
-/// The name of the system's default output, as last asked. Asking
-/// Windows means making a device enumerator and reading a property store,
-/// which some driver stacks take their time over, so a thread of its own
-/// asks every couple of seconds and the player's thread only reads the
-/// answer. The thread ends when the sink that started it is gone.
+/// Last default-output name, polled on a worker thread because Windows device
+/// enumeration can block. The thread ends when the sink is dropped.
 struct DefaultWatch(Arc<Mutex<Option<String>>>);
 
 impl DefaultWatch {
@@ -345,7 +334,7 @@ impl DefaultWatch {
         Self(shared)
     }
 
-    /// The answer as last asked; `None` before the first answer.
+    /// Last polled name, or `None` before the first poll.
     fn name(&self) -> Option<String> {
         self.0
             .lock()
@@ -423,14 +412,15 @@ fn open_output(preferred: Option<&str>, buffer_ms: u32) -> Result<Output, OpenEr
         failed,
         sample_rate,
         resampler,
+        fed: false,
+        last_write: None,
     })
 }
 
 #[cfg(test)]
 mod tests {
 
-    /// Rule: the buffer asked for is what the listener chose, turned into
-    /// frames at whatever rate the device runs.
+    /// Converts the configured buffer duration to device frames.
     #[test]
     fn the_buffer_follows_the_setting_and_the_rate() {
         let unknown = cpal::SupportedBufferSize::Unknown;
@@ -450,9 +440,7 @@ mod tests {
         );
     }
 
-    /// Rule: a device that says what it can take is held to it. CoreAudio
-    /// refuses a stream whose buffer is outside its range rather than
-    /// moving it, so asking for the impossible loses the music.
+    /// Clamps the buffer to the device range required by CoreAudio.
     #[test]
     fn a_device_that_states_its_range_is_kept_inside_it() {
         let range = cpal::SupportedBufferSize::Range { min: 64, max: 2048 };
