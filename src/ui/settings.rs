@@ -374,6 +374,28 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         widgets::setting_row(
             ui,
             &palette,
+            "Output buffer",
+            "How much sound the speaker is given at a time. More rides out a busy machine without clicking; less answers the controls sooner.",
+            |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    let current = app.settings.audio_buffer_ms;
+                    for ms in [50u32, 100, 200] {
+                        let label = format!("{ms} ms");
+                        if theme::soft_button(ui, &palette, None, &label, current == ms).clicked()
+                            && current != ms
+                        {
+                            app.settings.audio_buffer_ms = ms;
+                            changed = true;
+                            playback_dirty = true;
+                        }
+                    }
+                });
+            },
+        );
+        widgets::setting_row(
+            ui,
+            &palette,
             "Audio cache",
             "Keep downloaded audio so replays don't stream again.",
             |ui| {

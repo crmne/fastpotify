@@ -51,6 +51,8 @@ pub struct EngineConfig {
     pub audio_cache_dir: Option<PathBuf>,
     pub audio_cache_limit: Option<u64>,
     /// Where the samples on their way out are copied for the visualiser.
+    /// How much sound the output is asked to hold, in milliseconds.
+    pub buffer_ms: u32,
     pub tap: Arc<AudioTap>,
     /// The equalizer's settings, shared with the window that sets them.
     pub eq: crate::eq::SharedEq,
@@ -566,6 +568,7 @@ fn sink_builder(
     normalisation: Arc<std::sync::atomic::AtomicU64>,
 ) -> SinkAndVolume {
     let device = config.audio_device.clone();
+    let buffer_ms = config.buffer_ms;
     let tap = Arc::clone(&config.tap);
     let eq = Arc::clone(&config.eq);
     let report: ErrorHook = Arc::new(move |message: String| {
@@ -608,7 +611,7 @@ fn sink_builder(
     let ceiling = mixer.get_soft_volume();
     (
         Box::new(move || {
-            let sink = Box::new(RodioSink::new(device, report, volume));
+            let sink = Box::new(RodioSink::new(device, report, volume, buffer_ms));
             Box::new(Tapped::new(sink, tap, ceiling, false, eq, normalisation)) as Box<dyn Sink>
         }),
         Box::new(NoOpVolume),
@@ -941,6 +944,7 @@ mod tests {
     #[test]
     fn device_id_is_stable_hex() {
         let config = EngineConfig {
+            buffer_ms: crate::sink::DEFAULT_BUFFER_MS,
             tap: AudioTap::new(),
             eq: crate::eq::shared(),
             device_name: "Fastpotify".into(),

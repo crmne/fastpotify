@@ -206,8 +206,18 @@ On macOS, `Cmd` replaces `Ctrl`.
 
 Settings (Ctrl+,) includes the Connect device name, audio quality up to
 320 kbps, volume normalisation, autoplay, gapless playback, the audio backend
-on Linux, the audio cache size, the equalizer, themes, album-art tinting,
+on Linux, the output buffer, the audio cache size, the equalizer, themes,
+album-art tinting,
 compact views of the sidebar and of track lists (Spotify's compact views:
 names only, one line a row, no covers),
 the mini player's skin and size, and close-to-tray behaviour. Applying playback settings restarts the local player. Other
 settings take effect immediately.
+
+### Output buffer
+
+**Output buffer** is how much sound Fastpotify hands the speaker at a time.
+The default of 100 ms suits every machine we know of. Raise it to 200 ms if
+you hear clicks or crackles while something else is busy on the computer,
+and lower it to 50 ms if you want pause and skip to answer a fraction sooner.
+It applies when you press **Apply and restart playback**, and a device that
+cannot manage the size you pick is given the nearest one it can.

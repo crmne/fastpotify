@@ -42,13 +42,42 @@ const DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 /// How often playback looks at which output the system calls its default.
 const DEFAULT_CHECK_INTERVAL: Duration = Duration::from_secs(2);
 
-/// How much sound the Windows audio engine holds for the device, in
-/// seconds. Its default is a period of ten milliseconds, which a busy
-/// PC misses now and then, and every miss is a click; a tenth of a
-/// second rides out the misses at the cost of a tenth of a second's
-/// delay, which a music player never notices. (#88)
-#[cfg(windows)]
-const ENGINE_BUFFER: u32 = 10;
+/// How much sound the audio engine is asked to hold for the device, in
+/// milliseconds, when the listener has not said otherwise.
+///
+/// Every platform's default is a handful of milliseconds, which suits a
+/// synthesiser and not a music player: a busy machine misses a deadline
+/// now and then, and every miss is a click (#88). A tenth of a second
+/// rides those out, and costs a tenth of a second before a press of pause
+/// is heard, which nobody notices in music.
+pub const DEFAULT_BUFFER_MS: u32 = 100;
+
+/// What the setting will take. The bottom is where clicks start on a
+/// machine with anything else to do; the top is where the controls start
+/// to feel like they are answering late.
+pub const BUFFER_MS_RANGE: std::ops::RangeInclusive<u32> = 20..=500;
+
+/// The buffer to ask the device for, in frames.
+///
+/// A device that says what it can take is held to it, because CoreAudio
+/// refuses a stream whose buffer is outside its range rather than moving
+/// it. A device that says nothing is asked for the wanted size anyway,
+/// which is what Windows has always been given, and `open_stream` falls
+/// back to asking for nothing at all if that is refused.
+fn engine_buffer(
+    sample_rate: u32,
+    ms: u32,
+    supported: cpal::SupportedBufferSize,
+) -> cpal::BufferSize {
+    let ms = ms.clamp(*BUFFER_MS_RANGE.start(), *BUFFER_MS_RANGE.end());
+    let frames = (u64::from(sample_rate) * u64::from(ms) / 1000).max(1) as u32;
+    match supported {
+        cpal::SupportedBufferSize::Range { min, max } if min <= max && max > 0 => {
+            cpal::BufferSize::Fixed(frames.clamp(min.max(1), max))
+        }
+        _ => cpal::BufferSize::Fixed(frames),
+    }
+}
 
 pub struct RodioSink {
     /// The output device name from Settings; `None` means the default.
@@ -61,6 +90,9 @@ pub struct RodioSink {
     applied_volume: f32,
     /// Keeps asking which output the system calls its default.
     watch: Option<DefaultWatch>,
+    /// How much sound to ask the device to hold, in milliseconds. Taken
+    /// when the stream opens, so a change lands with the next restart.
+    buffer_ms: u32,
 }
 
 struct Output {
@@ -87,6 +119,7 @@ impl RodioSink {
         device: Option<String>,
         on_error: ErrorHook,
         volume: Box<dyn VolumeGetter + Send>,
+        buffer_ms: u32,
     ) -> Self {
         Self {
             device,
@@ -95,6 +128,7 @@ impl RodioSink {
             volume,
             applied_volume: -1.0,
             watch: None,
+            buffer_ms,
         }
     }
 
@@ -144,7 +178,7 @@ impl RodioSink {
         if self.output.is_some() {
             return Ok(());
         }
-        match open_output(self.device.as_deref()) {
+        match open_output(self.device.as_deref(), self.buffer_ms) {
             Ok(output) => {
                 self.output = Some(output);
                 self.applied_volume = -1.0;
@@ -222,31 +256,41 @@ impl Sink for RodioSink {
 
 /// Opens the stream at Spotify's stereo 44.1 kHz, so nothing is converted,
 /// else at the device's own rate, which Windows insists on for a shared
-/// device, else at whatever rodio can find. The first two carry the
-/// engine buffer Windows needs; rodio's own fallback would not.
+/// device, else at whatever rodio can find.
+///
+/// The first two ask for the buffer the listener wants. The last does not
+/// ask at all: a driver that will not give the buffer refuses the stream
+/// rather than settling for what it can do, and music at the device's own
+/// idea of a buffer beats no music.
 fn open_stream(
     device: &cpal::Device,
     on_error: impl FnMut(cpal::StreamError) + Send + Clone + 'static,
+    buffer_ms: u32,
 ) -> Result<rodio::OutputStream, rodio::StreamError> {
-    let builder = |sample_rate: u32| -> Result<_, rodio::StreamError> {
+    let supported = device
+        .default_output_config()
+        .map(|config| *config.buffer_size())
+        .unwrap_or(cpal::SupportedBufferSize::Unknown);
+    let builder = |sample_rate: u32, buffer: bool| -> Result<_, rodio::StreamError> {
         let builder = rodio::OutputStreamBuilder::from_device(device.clone())?
             .with_channels(NUM_CHANNELS as rodio::ChannelCount)
             .with_sample_rate(sample_rate as rodio::SampleRate)
             .with_error_callback(on_error.clone());
-        #[cfg(windows)]
-        let builder =
-            builder.with_buffer_size(cpal::BufferSize::Fixed(sample_rate / ENGINE_BUFFER));
-        Ok(builder)
+        Ok(if buffer {
+            builder.with_buffer_size(engine_buffer(sample_rate, buffer_ms, supported))
+        } else {
+            builder
+        })
     };
-    if let Ok(stream) = builder(SAMPLE_RATE)?.open_stream() {
+    if let Ok(stream) = builder(SAMPLE_RATE, true)?.open_stream() {
         return Ok(stream);
     }
     if let Ok(config) = device.default_output_config()
-        && let Ok(stream) = builder(config.sample_rate().0)?.open_stream()
+        && let Ok(stream) = builder(config.sample_rate().0, true)?.open_stream()
     {
         return Ok(stream);
     }
-    builder(SAMPLE_RATE)?.open_stream_or_fallback()
+    builder(SAMPLE_RATE, false)?.open_stream_or_fallback()
 }
 
 /// The player's thread decodes the music and hands it here with about a
@@ -333,7 +377,7 @@ enum OpenError {
     Stream(#[from] rodio::StreamError),
 }
 
-fn open_output(preferred: Option<&str>) -> Result<Output, OpenError> {
+fn open_output(preferred: Option<&str>, buffer_ms: u32) -> Result<Output, OpenError> {
     let host = cpal::default_host();
     let device = match preferred.map(str::trim).filter(|name| !name.is_empty()) {
         Some(name) => {
@@ -362,7 +406,7 @@ fn open_output(preferred: Option<&str>) -> Result<Output, OpenError> {
         log::error!("audio stream error: {error}");
         flag.store(true, Ordering::Relaxed);
     };
-    let mut stream = open_stream(&device, on_error)?;
+    let mut stream = open_stream(&device, on_error, buffer_ms)?;
     stream.log_on_drop(false);
     let sample_rate = stream.config().sample_rate();
     let resampler = Resampler::new(SAMPLE_RATE, sample_rate, NUM_CHANNELS as usize);
@@ -384,6 +428,69 @@ fn open_output(preferred: Option<&str>) -> Result<Output, OpenError> {
 
 #[cfg(test)]
 mod tests {
+
+    /// Rule: the buffer asked for is what the listener chose, turned into
+    /// frames at whatever rate the device runs.
+    #[test]
+    fn the_buffer_follows_the_setting_and_the_rate() {
+        let unknown = cpal::SupportedBufferSize::Unknown;
+        assert_eq!(
+            engine_buffer(44_100, 100, unknown),
+            cpal::BufferSize::Fixed(4410),
+            "a tenth of a second at 44.1 kHz"
+        );
+        assert_eq!(
+            engine_buffer(48_000, 100, unknown),
+            cpal::BufferSize::Fixed(4800),
+            "the same tenth of a second at 48 kHz"
+        );
+        assert_eq!(
+            engine_buffer(44_100, 20, unknown),
+            cpal::BufferSize::Fixed(882)
+        );
+    }
+
+    /// Rule: a device that says what it can take is held to it. CoreAudio
+    /// refuses a stream whose buffer is outside its range rather than
+    /// moving it, so asking for the impossible loses the music.
+    #[test]
+    fn a_device_that_states_its_range_is_kept_inside_it() {
+        let range = cpal::SupportedBufferSize::Range { min: 64, max: 2048 };
+        assert_eq!(
+            engine_buffer(44_100, 100, range),
+            cpal::BufferSize::Fixed(2048),
+            "held down to what the device can take"
+        );
+        assert_eq!(
+            engine_buffer(44_100, 20, range),
+            cpal::BufferSize::Fixed(882),
+            "and left alone when it fits"
+        );
+        let tiny = cpal::SupportedBufferSize::Range {
+            min: 4096,
+            max: 8192,
+        };
+        assert_eq!(
+            engine_buffer(44_100, 20, tiny),
+            cpal::BufferSize::Fixed(4096),
+            "and brought up to a device that will not go smaller"
+        );
+    }
+
+    /// Rule: a settings file with a wild number in it still opens a
+    /// stream. The range is the range whoever wrote the file thought of.
+    #[test]
+    fn a_number_from_outside_the_range_is_brought_back_in() {
+        let unknown = cpal::SupportedBufferSize::Unknown;
+        assert_eq!(
+            engine_buffer(44_100, 0, unknown),
+            engine_buffer(44_100, *BUFFER_MS_RANGE.start(), unknown)
+        );
+        assert_eq!(
+            engine_buffer(44_100, 100_000, unknown),
+            engine_buffer(44_100, *BUFFER_MS_RANGE.end(), unknown)
+        );
+    }
     use super::*;
     use std::sync::Mutex;
 
@@ -398,6 +505,7 @@ mod tests {
             Some("no such device".into()),
             Arc::new(move |message| *store.lock().unwrap() = Some(message)),
             Box::new(librespot_playback::mixer::NoOpVolume),
+            DEFAULT_BUFFER_MS,
         );
         match sink.start() {
             Ok(()) => assert!(reported.lock().unwrap().is_none()),

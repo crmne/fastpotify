@@ -59,6 +59,11 @@ pub struct Settings {
     /// librespot backend name; `None` picks the platform default.
     pub audio_backend: Option<String>,
     pub audio_device: Option<String>,
+    /// How much sound the output is asked to hold, in milliseconds. Too
+    /// little and a busy machine clicks; too much and pause answers late.
+    /// See [`crate::sink::DEFAULT_BUFFER_MS`].
+    #[serde(default = "default_buffer_ms")]
+    pub audio_buffer_ms: u32,
     pub audio_cache: bool,
     pub audio_cache_mb: u64,
     pub theme: ThemeChoice,
@@ -159,6 +164,7 @@ impl Default for Settings {
             gapless: true,
             audio_backend: None,
             audio_device: None,
+            audio_buffer_ms: default_buffer_ms(),
             audio_cache: true,
             audio_cache_mb: 1024,
             theme: ThemeChoice::Dark,
@@ -205,6 +211,10 @@ impl Default for Settings {
             milkdrop_size: crate::milkdrop::DEFAULT_SIZE,
         }
     }
+}
+
+fn default_buffer_ms() -> u32 {
+    crate::sink::DEFAULT_BUFFER_MS
 }
 
 impl Settings {
