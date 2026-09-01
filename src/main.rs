@@ -18,6 +18,11 @@ struct Cli {
     #[arg(long)]
     device_name: Option<String>,
 
+    /// Print a summary of a Windows Media Player skin package (.wmz)
+    /// and exit.
+    #[arg(long, value_name = "PATH")]
+    inspect_wmp_skin: Option<std::path::PathBuf>,
+
     /// Log more from librespot and the Web API client.
     #[arg(short, long)]
     verbose: bool,
@@ -275,6 +280,11 @@ fn main() -> eframe::Result<()> {
     }
 
     let cli = Cli::parse();
+    // A skin inspection is a print-and-leave job: nothing of the app's
+    // state, log file, or single-instance guard is wanted.
+    if let Some(path) = &cli.inspect_wmp_skin {
+        std::process::exit(fastpotify::wmp::inspect::run(path));
+    }
     // A control launch is a client, not a second app: talk to the running
     // instance and exit before touching the log file it is writing to.
     if let Some(control) = cli.control {
