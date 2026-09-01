@@ -122,6 +122,11 @@ picture and a Follow button; the credits Spotify's Web API carries, which are
 the artists and the album's label; and the next song in the queue, with a way
 through to the rest of it.
 
+The panel stays quiet until the pointer is inside it, and then offers a link
+to copy, the same menu a song answers with anywhere else in Fastpotify, and a
+button to put the panel away. Whether the song is saved is worth knowing at a
+glance, so the heart stays whether or not anything is hovered.
+
 Spotify's own panel leads with a short looping video and counts an artist's
 monthly listeners. Neither is in the Web API, so this shows the artwork and,
 where Spotify answers with it, a follower count instead.

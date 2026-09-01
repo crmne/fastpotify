@@ -1064,6 +1064,14 @@ mod tests {
         app.show_devices = false;
         app.show_now_playing_panel = true;
         frame(&ctx, &mut app);
+        // And with the pointer inside it, which is when the panel offers the
+        // buttons it otherwise keeps out of the way.
+        frame_events(
+            &ctx,
+            &mut app,
+            vec![egui::Event::PointerMoved(egui::pos2(1100.0, 400.0))],
+        );
+        frame(&ctx, &mut app);
         // Again with nothing playing, which is a different panel entirely.
         let remote = app.remote.take();
         frame(&ctx, &mut app);

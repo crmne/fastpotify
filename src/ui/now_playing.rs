@@ -36,6 +36,13 @@ pub fn side_panel(app: &mut App, ui: &mut egui::Ui) {
                 .inner_margin(Margin::symmetric(12, 12)),
         );
     let response = panel.show(ui, |ui| {
+        // Spotify keeps this panel quiet until the pointer arrives, then
+        // offers what can be done with the song. The menu counts as being
+        // here: the pointer's trip into it leaves the panel, and a button
+        // that vanished underneath would take the menu with it.
+        let menu_id = ui.id().with("now-playing-menu");
+        let busy = egui::Popup::is_id_open(ui.ctx(), menu_id);
+        let offering = ui.rect_contains_pointer(ui.max_rect()) || busy;
         let now = app.now_playing();
         ui.horizontal(|ui| {
             ui.add_space(4.0);
@@ -71,10 +78,34 @@ pub fn side_panel(app: &mut App, ui: &mut egui::Ui) {
                 }
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if theme::icon_button(ui, Icon::X, 18.0, palette.secondary, palette.text, "Close")
+                if offering
+                    && theme::icon_button(
+                        ui,
+                        Icon::PanelRightClose,
+                        18.0,
+                        palette.secondary,
+                        palette.text,
+                        "Hide the playing song",
+                    )
                     .clicked()
                 {
                     app.actions.push(Action::ToggleNowPlayingPanel);
+                }
+                // The same menu a row in any list answers with, for the
+                // song this panel is about.
+                if offering && let Some(item) = app.now_playing_item() {
+                    let more = theme::icon_button(
+                        ui,
+                        Icon::Ellipsis,
+                        18.0,
+                        palette.secondary,
+                        palette.text,
+                        "More",
+                    );
+                    egui::Popup::menu(&more)
+                        .id(menu_id)
+                        .frame(widgets::menu_frame(&palette))
+                        .show(|ui| widgets::item_menu(ui, app, &item, None, None));
                 }
             });
         });
@@ -83,7 +114,7 @@ pub fn side_panel(app: &mut App, ui: &mut egui::Ui) {
             .id_salt("now-playing-panel-scroll")
             .auto_shrink([false, false])
             .show(ui, |ui| match now {
-                Some(now) => contents(app, ui, &now),
+                Some(now) => contents(app, ui, &now, offering),
                 None => {
                     ui.add_space(24.0);
                     widgets::empty_state(
@@ -103,7 +134,7 @@ pub fn side_panel(app: &mut App, ui: &mut egui::Ui) {
     }
 }
 
-fn contents(app: &mut App, ui: &mut egui::Ui, now: &NowPlaying) {
+fn contents(app: &mut App, ui: &mut egui::Ui, now: &NowPlaying, offering: bool) {
     let palette = app.palette;
     let width = ui.available_width();
 
@@ -125,9 +156,11 @@ fn contents(app: &mut App, ui: &mut egui::Ui, now: &NowPlaying) {
 
     // Title and artists, with the heart the player bar already has.
     ui.horizontal_top(|ui| {
-        let heart = if now.is_episode { 0.0 } else { 34.0 };
+        // Room for both the heart and the link, whether or not the link is
+        // showing: the title must not reflow when the pointer arrives.
+        let controls = if now.is_episode { 0.0 } else { 64.0 };
         ui.vertical(|ui| {
-            ui.set_max_width((width - heart).max(40.0));
+            ui.set_max_width((width - controls).max(40.0));
             if theme::link(ui, &now.title, theme::bold(22.0), palette.text).clicked() {
                 open_song(app, now);
             }
@@ -148,6 +181,8 @@ fn contents(app: &mut App, ui: &mut egui::Ui, now: &NowPlaying) {
         });
         if !now.is_episode {
             ui.with_layout(Layout::right_to_left(Align::TOP), |ui| {
+                // Whether the song is saved is worth knowing at a glance, so
+                // the heart stays; the link only answers a pointer.
                 let saved = app.is_saved(&now.uri).unwrap_or(false);
                 let (icon, color, tooltip) = if saved {
                     (Icon::HeartFilled, palette.accent, "Remove from Liked Songs")
@@ -156,6 +191,19 @@ fn contents(app: &mut App, ui: &mut egui::Ui, now: &NowPlaying) {
                 };
                 if theme::icon_button(ui, icon, 19.0, color, palette.text, tooltip).clicked() {
                     app.actions.push(Action::ToggleSaved(now.uri.clone()));
+                }
+                if offering
+                    && theme::icon_button(
+                        ui,
+                        Icon::Copy,
+                        17.0,
+                        palette.secondary,
+                        palette.text,
+                        "Copy link to song",
+                    )
+                    .clicked()
+                {
+                    app.actions.push(Action::CopyLink(now.uri.clone()));
                 }
             });
         }
