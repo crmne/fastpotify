@@ -27,6 +27,7 @@ use egui::{
 use crate::app::NowPlaying;
 use crate::skin::{Bitmap, Mask};
 use crate::wmp::ir::{self, Background, Binding, Element, Value, View};
+use crate::wmp::layout::{Attr, Layout};
 use crate::wmp::{Assets, SkinDocument};
 
 /// What a skin control asks of the player, once a click or a drag has
@@ -70,6 +71,9 @@ pub struct Render {
     /// The window's shape as the last frame painted it, for the move
     /// handle to hit-test against.
     pub mask: Option<Mask>,
+    /// The view's geometry as arithmetic settled it, built once per
+    /// skin and consulted while elements are placed.
+    pub layout: Option<Layout>,
 }
 
 /// A bitmap that would not decode, kept so the attempt is not repeated.
@@ -190,6 +194,7 @@ pub fn show(
         return Vec::new();
     }
     let mask = window_mask(render, document, view, size);
+    render.layout.get_or_insert_with(|| Layout::build(view));
     let mut actions = Vec::new();
     let mut next_id = 0usize;
     let mut skin = Skin {
@@ -228,7 +233,7 @@ pub fn show(
 /// The view's size in skin pixels, straight from the definition: what
 /// its attributes say, or failing that, what its background layers
 /// cover. Used where the window is sized, before any drawing state
-/// exists; the paint path uses the cached [`view_size`] instead.
+/// exists; the paint path uses the cached view size instead.
 pub fn skin_size(document: &SkinDocument) -> (u32, u32) {
     let Some(view) = document.main_view() else {
         return (0, 0);
@@ -738,11 +743,11 @@ struct Art<'a> {
 /// One element of the view, at its parent's position.
 fn paint_element(skin: &mut Skin, art: &mut Art, element: &Element, at: (i32, i32)) {
     let common = element.common();
-    if common.visible_bool() == Some(false) {
+    if !element_visible(skin, art.render, common) {
         return;
     }
-    let left = common.left_i32().unwrap_or(0) + at.0;
-    let top = common.top_i32().unwrap_or(0) + at.1;
+    let left = geometry(art.render, common, Attr::Left).unwrap_or(0) + at.0;
+    let top = geometry(art.render, common, Attr::Top).unwrap_or(0) + at.1;
     let alpha = common.alpha_blend.unwrap_or(255);
     match element {
         Element::Subview(subview) => {
@@ -767,7 +772,16 @@ fn paint_element(skin: &mut Skin, art: &mut Art, element: &Element, at: (i32, i3
         Element::Button(button) => paint_button(skin, art, button, (left, top), alpha),
         Element::ButtonGroup(group) => paint_group(skin, art, group, (left, top), alpha),
         Element::Slider(slider) => paint_slider(skin, art, slider, (left, top), alpha),
-        Element::Text(text) => paint_text(skin, text, (left, top), alpha),
+        Element::Text(text) => paint_text(
+            skin,
+            text,
+            (left, top),
+            (
+                geometry(art.render, &text.common, Attr::Width),
+                geometry(art.render, &text.common, Attr::Height),
+            ),
+            alpha,
+        ),
         Element::Other(_) => {}
     }
 }
@@ -900,6 +914,42 @@ fn paint_group(skin: &mut Skin, art: &mut Art, group: &ir::ButtonGroup, at: (i32
     }
 }
 
+/// Whether an element shows. A written `false` hides it, as before; an
+/// expression settles against the player's state and the view's own
+/// numbers. Everything else shows.
+fn element_visible(skin: &Skin, render: &mut Render, common: &ir::Common) -> bool {
+    match common.visible_bool() {
+        Some(visible) => visible,
+        None => {
+            let playstate = crate::wmp::layout::playstate(
+                skin.media.is_some_and(|now| now.playing),
+                skin.media.is_some_and(|now| now.resuming),
+            );
+            render
+                .layout
+                .as_mut()
+                .and_then(|layout| {
+                    layout.truth(&common.visible, common.id.as_deref(), Some(playstate))
+                })
+                .unwrap_or(true)
+        }
+    }
+}
+
+/// One geometry value, resolved through the layout's arithmetic.
+fn geometry(render: &mut Render, common: &ir::Common, attr: Attr) -> Option<i32> {
+    let value = match attr {
+        Attr::Left => &common.left,
+        Attr::Top => &common.top,
+        Attr::Width => &common.width,
+        Attr::Height => &common.height,
+    };
+    match render.layout.as_mut() {
+        Some(layout) => layout.number(value, common.id.as_deref(), attr),
+        None => value.as_ref().and_then(Value::as_i32),
+    }
+}
+
 /// The area of an element that carries art: what its attributes say, or
 /// failing that, the art's own size.
 fn element_area(
@@ -909,10 +959,8 @@ fn element_area(
     file: &str,
 ) -> (u32, u32) {
     let bitmap = render.bitmap(&document.assets, file);
-    let width = common.width_i32().map_or(bitmap.width, |w| w.max(0) as u32);
-    let height = common
-        .height_i32()
-        .map_or(bitmap.height, |h| h.max(0) as u32);
+    let width = geometry(render, common, Attr::Width).map_or(bitmap.width, |w| w.max(0) as u32);
+    let height = geometry(render, common, Attr::Height).map_or(bitmap.height, |h| h.max(0) as u32);
     (width, height)
 }
 
@@ -928,8 +976,12 @@ fn paint_background(
     let Some(file) = &background.image else {
         // A colour alone: the element's own size, or nothing to fill.
         if let Some(color) = background.color {
-            let width = common.width_i32().unwrap_or(0).max(0) as u32;
-            let height = common.height_i32().unwrap_or(0).max(0) as u32;
+            let width = geometry(art.render, common, Attr::Width)
+                .unwrap_or(0)
+                .max(0) as u32;
+            let height = geometry(art.render, common, Attr::Height)
+                .unwrap_or(0)
+                .max(0) as u32;
             if width > 0 && height > 0 {
                 skin.fill(at.0, at.1, width, height, color);
             }
@@ -1105,7 +1157,13 @@ fn paint_slider(skin: &mut Skin, art: &mut Art, slider: &ir::Slider, at: (i32, i
 /// A piece of text in its box, in a system font. A value bound to the
 /// player reads from what the player is doing; a scrolling value stands
 /// still for now.
-fn paint_text(skin: &mut Skin, text: &ir::Text, at: (i32, i32), alpha: u8) {
+fn paint_text(
+    skin: &mut Skin,
+    text: &ir::Text,
+    at: (i32, i32),
+    area: (Option<i32>, Option<i32>),
+    alpha: u8,
+) {
     let string = match text
         .value
         .as_ref()
@@ -1130,7 +1188,7 @@ fn paint_text(skin: &mut Skin, text: &ir::Text, at: (i32, i32), alpha: u8) {
         color = Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), alpha);
     }
     let font = FontId::proportional(size.max(1.0));
-    let painter = match (text.common.width_i32(), text.common.height_i32()) {
+    let painter = match area {
         (Some(width), Some(height)) => {
             let clip = skin
                 .rect(at.0, at.1, width.max(0) as u32, height.max(0) as u32)

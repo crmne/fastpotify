@@ -17,6 +17,7 @@
 pub mod assets;
 pub mod inspect;
 pub mod ir;
+pub mod layout;
 pub mod xml;
 
 use std::path::Path;
@@ -296,6 +297,11 @@ mod tests {
             );
             // The inspector walks every view; make sure none of it panics.
             let _ = inspect::dump(&document);
+            // The layout arithmetic settles every view's geometry
+            // without circling or panicking.
+            for view in &document.views {
+                let _ = crate::wmp::layout::Layout::build(view);
+            }
             seen += 1;
         }
         assert!(seen > 0, "no .wmz files in the samples folder");
