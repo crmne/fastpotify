@@ -115,7 +115,7 @@ that ask for a different kind of login are not connected this way yet.
 
 ## Now playing
 
-The panel button at the right of the player bar (or `N`) opens the playing
+Clicking the album art in the player bar (or `N`) opens the playing
 song beside the page: its artwork at full width, the title and artists, and
 the same heart the player bar carries. Under it are the artist, with their
 picture and a Follow button; the credits Spotify's Web API carries, which are
@@ -126,6 +126,8 @@ The panel stays quiet until the pointer is inside it, and then offers a link
 to copy, the same menu a song answers with anywhere else in Fastpotify, and a
 button to put the panel away. Whether the song is saved is worth knowing at a
 glance, so the heart stays whether or not anything is hovered.
+
+The song's album is still one click away, on the title beside the art.
 
 Spotify's own panel leads with a short looping video and counts an artist's
 monthly listeners. Neither is in the Web API, so this shows the artwork and,
