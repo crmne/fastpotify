@@ -4861,6 +4861,11 @@ impl App {
                     // No window exists; the outer loop creates one.
                     self.wants_show = true;
                 } else {
+                    // A minimized window has to be restored before it can be
+                    // focused: Focus alone leaves it in the Dock, and the
+                    // platform draws no frames while it is down there, so
+                    // nothing arrives to ask a second time.
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
                     ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                 }
             }
@@ -6715,6 +6720,39 @@ mod tests {
             "the new screen is noted"
         );
         assert_eq!(app.settings.milkdrop_fps, 30, "their number stands");
+    }
+
+    /// A window in the Dock is drawn no frames, so the one frame a Show
+    /// request buys has to be the frame that brings it back. Focus alone
+    /// leaves it down there, and nothing asks again.
+    #[test]
+    fn showing_a_minimized_window_restores_it_before_focusing_it() {
+        // #given a window exists, minimized rather than closed
+        let mut app = headless_app();
+        let ctx = egui::Context::default();
+        assert!(!app.window_hidden, "a window this app still owns");
+
+        // #when something asks for the window: the Dock, the tray, or
+        // `fastpotify show`
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            app.apply(Action::ShowWindow, ui.ctx());
+        });
+        output.textures_delta.clear();
+
+        // #then
+        let commands = &output
+            .viewport_output
+            .get(&egui::ViewportId::ROOT)
+            .expect("the root viewport")
+            .commands;
+        assert!(
+            commands.contains(&egui::ViewportCommand::Minimized(false)),
+            "asked to show, but never asked to come out of the Dock: {commands:?}"
+        );
+        assert!(
+            commands.contains(&egui::ViewportCommand::Focus),
+            "restored but left behind whatever is in front of it: {commands:?}"
+        );
     }
 
     fn headless_app() -> App {
