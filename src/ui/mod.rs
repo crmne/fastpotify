@@ -9,6 +9,7 @@ mod keys;
 pub mod library;
 pub mod login;
 mod lyrics;
+pub mod now_playing;
 pub mod player_bar;
 pub mod queue;
 pub mod search;
@@ -51,6 +52,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     }
     if app.show_lyrics_panel {
         lyrics::side_panel(app, ui);
+    }
+    if app.show_now_playing_panel {
+        now_playing::side_panel(app, ui);
     }
     central(app, ui);
     devices::popup(app, ctx);

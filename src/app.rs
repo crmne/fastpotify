@@ -108,6 +108,15 @@ pub enum Target {
     Remote(Option<String>),
 }
 
+/// The panels that share the strip down the right-hand side of the window.
+/// They occupy the same space, so only one is ever showing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SidePanel {
+    Queue,
+    Lyrics,
+    NowPlaying,
+}
+
 /// How the application is being started.
 #[derive(Clone, Copy, Debug)]
 pub struct AppOptions {
@@ -226,6 +235,7 @@ pub struct App {
     pub dialog: Option<Dialog>,
     pub show_queue_panel: bool,
     pub show_lyrics_panel: bool,
+    pub show_now_playing_panel: bool,
     /// The track the lyrics below are for.
     pub lyrics_uri: Option<String>,
     /// `Loaded(None)` when nobody has transcribed the track.
@@ -482,6 +492,7 @@ impl App {
             dialog: None,
             show_queue_panel: session.queue_open.unwrap_or(false),
             show_lyrics_panel: false,
+            show_now_playing_panel: false,
             lyrics_uri: None,
             lyrics: Loadable::NotLoaded,
             lyrics_following: true,
@@ -1455,6 +1466,7 @@ impl App {
         }
         if matches!(self.page(), Page::Queue)
             || self.show_queue_panel
+            || self.show_now_playing_panel
             || (self.settings.winamp_window && self.settings.playlist_open)
         {
             self.refresh_queue(true);
@@ -1462,6 +1474,58 @@ impl App {
         if self.show_lyrics_panel {
             self.request_lyrics();
         }
+        if self.show_now_playing_panel {
+            self.request_now_playing_details();
+        }
+    }
+
+    /// Fills the now-playing panel: the lead artist, for who made this, and
+    /// the album, for the label line under the credits.
+    ///
+    /// Both land in the caches the artist and album pages read, so opening
+    /// either afterwards costs nothing, and asking twice costs nothing
+    /// either -- `needs_load` is what decides.
+    pub fn request_now_playing_details(&mut self) {
+        if !self.is_connected() {
+            return;
+        }
+        let Some(now) = self.now_playing() else {
+            return;
+        };
+        if let Some(id) = now.artists.first().and_then(|artist| artist.id.clone()) {
+            let page = self.artist_pages.entry(id.clone()).or_default();
+            if page.artist.needs_load() {
+                page.artist = Loadable::Loading;
+                self.backend.api(ApiRequest::Artist { id });
+            }
+        }
+        // The heart and the Follow button both read the saved map the rest
+        // of the interface fills.
+        let mut wanted = vec![now.uri.clone()];
+        if let Some(uri) = now.artists.first().and_then(|artist| artist.uri.clone()) {
+            wanted.push(uri);
+        }
+        self.request_contains(wanted);
+        if let Some(id) = now.album_id.clone() {
+            let page = self.album_pages.entry(id.clone()).or_default();
+            if page.album.needs_load() {
+                page.album = Loadable::Loading;
+                self.backend.api(ApiRequest::Album { id });
+            }
+        }
+    }
+
+    /// Shows one of the panels that share the right-hand side, putting the
+    /// others away.
+    ///
+    /// Every path that opens one goes through here. Written out at each
+    /// call site instead, a panel added later is missed by the paths that
+    /// predate it: starting a song's station opened the queue over the
+    /// playing song and left the two of them splitting the strip.
+    fn open_side_panel(&mut self, panel: SidePanel) {
+        self.show_queue_panel = panel == SidePanel::Queue;
+        self.show_lyrics_panel = panel == SidePanel::Lyrics;
+        self.show_now_playing_panel = panel == SidePanel::NowPlaying;
     }
 
     /// Asks for the playing track's lyrics unless they are here or on the
@@ -1555,7 +1619,10 @@ impl App {
                 self.refresh_devices();
             }
             let playlist_open = self.settings.winamp_window && self.settings.playlist_open;
-            if (self.show_queue_panel || matches!(self.page(), Page::Queue) || playlist_open)
+            if (self.show_queue_panel
+                || self.show_now_playing_panel
+                || matches!(self.page(), Page::Queue)
+                || playlist_open)
                 && !self.queue.is_loading()
                 && self
                     .queue_fetched_at
@@ -4406,8 +4473,7 @@ impl App {
                     at: Instant::now(),
                 });
                 if !matches!(self.page(), Page::Queue) && !self.show_queue_panel {
-                    self.show_queue_panel = true;
-                    self.show_lyrics_panel = false;
+                    self.open_side_panel(SidePanel::Queue);
                 }
                 self.refresh_queue(true);
             }
@@ -4721,18 +4787,29 @@ impl App {
                 self.settings_dirty = true;
             }
             Action::ToggleQueuePanel => {
-                self.show_queue_panel = !self.show_queue_panel;
                 if self.show_queue_panel {
-                    self.show_lyrics_panel = false;
+                    self.show_queue_panel = false;
+                } else {
+                    self.open_side_panel(SidePanel::Queue);
                     self.refresh_queue(true);
                 }
             }
             Action::ToggleLyricsPanel => {
-                self.show_lyrics_panel = !self.show_lyrics_panel;
                 if self.show_lyrics_panel {
-                    self.show_queue_panel = false;
+                    self.show_lyrics_panel = false;
+                } else {
+                    self.open_side_panel(SidePanel::Lyrics);
                     self.lyrics_following = true;
                     self.request_lyrics();
+                }
+            }
+            Action::ToggleNowPlayingPanel => {
+                if self.show_now_playing_panel {
+                    self.show_now_playing_panel = false;
+                } else {
+                    self.open_side_panel(SidePanel::NowPlaying);
+                    self.request_now_playing_details();
+                    self.refresh_queue(true);
                 }
             }
             Action::ToggleDevicesPopup => {
@@ -6734,6 +6811,62 @@ mod tests {
         assert_eq!(
             app.control_devices_snapshot(),
             crate::single_instance::NO_DEVICES
+        );
+    }
+
+    /// One panel at a time. The three of them share the right-hand side, so
+    /// opening any one has to put the others away rather than stack.
+    #[test]
+    fn the_right_hand_side_holds_one_panel() {
+        // #given
+        let mut app = headless_app();
+        let ctx = egui::Context::default();
+
+        // #when the now-playing panel opens over the queue
+        app.actions.push(Action::ToggleQueuePanel);
+        app.apply_actions(&ctx);
+        app.actions.push(Action::ToggleNowPlayingPanel);
+        app.apply_actions(&ctx);
+
+        // #then
+        assert!(app.show_now_playing_panel);
+        assert!(!app.show_queue_panel);
+
+        // #when the lyrics take their turn
+        app.actions.push(Action::ToggleLyricsPanel);
+        app.apply_actions(&ctx);
+
+        // #then
+        assert!(app.show_lyrics_panel);
+        assert!(!app.show_now_playing_panel, "two panels at once");
+
+        // #when it is asked for again, it closes rather than reopening
+        app.actions.push(Action::ToggleNowPlayingPanel);
+        app.actions.push(Action::ToggleNowPlayingPanel);
+        app.apply_actions(&ctx);
+        assert!(!app.show_now_playing_panel);
+    }
+
+    /// A station shows the queue, and the queue has to arrive alone. The
+    /// rule lived at each call site once, and the station's copy predated
+    /// the playing-song panel: asking for a song's radio with that panel up
+    /// left the two of them splitting the strip between them.
+    #[test]
+    fn a_station_does_not_open_the_queue_over_another_panel() {
+        // #given the playing song is showing
+        let mut app = headless_app();
+        let ctx = egui::Context::default();
+        app.apply(Action::ToggleNowPlayingPanel, &ctx);
+        assert!(app.show_now_playing_panel);
+
+        // #when a song's station starts
+        app.apply(Action::PlayTrackRadio("spotify:track:xyz".into()), &ctx);
+
+        // #then the queue has the strip to itself
+        assert!(app.show_queue_panel);
+        assert!(
+            !app.show_now_playing_panel,
+            "two panels sharing one side of the window"
         );
     }
 

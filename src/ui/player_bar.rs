@@ -118,12 +118,10 @@ fn now_playing_block(app: &mut App, ui: &mut egui::Ui, region: Rect, now: Option
     );
     let offer_expand = art_available && !app.settings.art_expanded && app.settings.sidebar_visible;
     let over_expand = offer_expand && ui.rect_contains_pointer(expand_rect);
+    // The cover opens the playing song's panel, the way Spotify's does.
+    // The album is still a click away on the title beside it.
     if cover_response.clicked() && !over_expand {
-        if let Some(id) = &now.album_id {
-            app.actions.push(Action::Open(Page::Album(id.clone())));
-        } else if let Some(id) = &now.show_id {
-            app.actions.push(Action::Open(Page::Show(id.clone())));
-        }
+        app.actions.push(Action::ToggleNowPlayingPanel);
     }
     if offer_expand && (cover_response.hovered() || over_expand) {
         let expand = ui

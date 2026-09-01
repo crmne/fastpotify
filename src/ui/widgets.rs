@@ -163,6 +163,43 @@ pub fn menu_item_enabled(
     label: &str,
     enabled: bool,
 ) -> bool {
+    let response = menu_row(ui, palette, icon, label, enabled, false);
+    let clicked = enabled && response.clicked();
+    if clicked {
+        ui.close();
+    }
+    if enabled {
+        response.on_hover_cursor(egui::CursorIcon::PointingHand);
+    }
+    clicked
+}
+
+/// A menu row that opens a menu of its own, drawn like [`menu_item`] so a
+/// row with children lines up with the rows around it: egui's own submenu
+/// button is a plain label, and stood a name where its neighbours put an
+/// icon.
+pub fn menu_submenu<R>(
+    ui: &mut Ui,
+    palette: &Palette,
+    icon: Option<Icon>,
+    label: &str,
+    content: impl FnOnce(&mut Ui) -> R,
+) {
+    let response = menu_row(ui, palette, icon, label, true, true);
+    egui::containers::menu::SubMenu::default().show(ui, &response, content);
+    response.on_hover_cursor(egui::CursorIcon::PointingHand);
+}
+
+/// Paints one row of a menu: an optional icon, the label, and the arrow a
+/// row with a submenu carries.
+fn menu_row(
+    ui: &mut Ui,
+    palette: &Palette,
+    icon: Option<Icon>,
+    label: &str,
+    enabled: bool,
+    submenu: bool,
+) -> egui::Response {
     let width = ui.available_width();
     let (rect, response) = ui.allocate_exact_size(
         vec2(width, 28.0),
@@ -193,6 +230,20 @@ pub fn menu_item_enabled(
             .paint_at(ui, icon_rect);
             x += 26.0;
         }
+        // The arrow keeps its own room at the end so the label stops before
+        // it rather than running underneath.
+        let right = if submenu {
+            let arrow = Rect::from_center_size(
+                pos2(rect.right() - 16.0, rect.center().y),
+                Vec2::splat(14.0),
+            );
+            Icon::ChevronRight
+                .image(palette.secondary, 14.0)
+                .paint_at(ui, arrow);
+            arrow.left() - 6.0
+        } else {
+            rect.right() - 10.0
+        };
         // A playlist can be named a paragraph; the label ends at the menu's
         // edge instead of running past it.
         let galley = crate::bidi::layout(
@@ -200,25 +251,18 @@ pub fn menu_item_enabled(
             label,
             theme::regular(13.5),
             color,
-            (rect.right() - 10.0 - x).max(0.0),
+            (right - x).max(0.0),
             1,
             Some(crate::bidi::ELLIPSIS),
         );
         let text_rect = Rect::from_min_max(
             pos2(x, rect.center().y - galley.size().y / 2.0),
-            pos2(rect.right() - 10.0, rect.center().y + galley.size().y / 2.0),
+            pos2(right, rect.center().y + galley.size().y / 2.0),
         );
         ui.painter()
             .galley(crate::bidi::galley_pos(text_rect, &galley), galley, color);
     }
-    let clicked = enabled && response.clicked();
-    if clicked {
-        ui.close();
-    }
-    if enabled {
-        response.on_hover_cursor(egui::CursorIcon::PointingHand);
-    }
-    clicked
+    response
 }
 
 pub fn menu_separator(ui: &mut Ui, palette: &Palette) {
@@ -275,7 +319,7 @@ pub fn item_menu(
             app.actions.push(Action::ToggleSaved(uri.clone()));
         }
         let playlists = app.editable_playlists();
-        ui.menu_button("Add to playlist", |ui| {
+        menu_submenu(ui, &palette, Some(Icon::Plus), "Add to playlist", |ui| {
             ui.set_min_width(220.0);
             ui.set_max_width(300.0);
             if menu_item(ui, &palette, Some(Icon::Plus), "New playlist") {
@@ -351,7 +395,7 @@ pub fn item_menu(
                     )));
                 }
             } else if artists.len() > 1 {
-                ui.menu_button("Go to artist", |ui| {
+                menu_submenu(ui, &palette, Some(Icon::User), "Go to artist", |ui| {
                     ui.set_min_width(200.0);
                     for artist in &artists {
                         if menu_item(ui, &palette, Some(Icon::User), &artist.name) {

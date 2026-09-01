@@ -589,6 +589,7 @@ pub fn apply_flags(app: &mut App, page: Option<&str>, show: Option<&str>) {
     for surface in show.unwrap_or("").split(',').map(str::trim) {
         match surface {
             "queue" => app.show_queue_panel = true,
+            "now-playing" => app.show_now_playing_panel = true,
             "devices" => app.show_devices = true,
             "shortcuts" => app.dialog = Some(Dialog::Shortcuts),
             "premium" => app.dialog = Some(Dialog::PremiumNeeded),
@@ -1057,6 +1058,25 @@ mod tests {
         app.show_queue_panel = true;
         app.show_devices = true;
         frame(&ctx, &mut app);
+        // The now-playing panel, whose cards each depend on an answer that
+        // may not be here: the artist, the album's label, the queue.
+        app.show_queue_panel = false;
+        app.show_devices = false;
+        app.show_now_playing_panel = true;
+        frame(&ctx, &mut app);
+        // And with the pointer inside it, which is when the panel offers the
+        // buttons it otherwise keeps out of the way.
+        frame_events(
+            &ctx,
+            &mut app,
+            vec![egui::Event::PointerMoved(egui::pos2(1100.0, 400.0))],
+        );
+        frame(&ctx, &mut app);
+        // Again with nothing playing, which is a different panel entirely.
+        let remote = app.remote.take();
+        frame(&ctx, &mut app);
+        app.remote = remote;
+        app.show_now_playing_panel = false;
         // The drawer again with a hand-queued song, so the Playing next
         // section lays out too.
         if let Loadable::Loaded(queue) = &app.queue
