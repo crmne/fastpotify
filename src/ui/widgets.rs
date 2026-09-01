@@ -1610,6 +1610,19 @@ pub fn search_field(
     hint: &str,
     width: f32,
 ) -> egui::Response {
+    search_field_with_radius(ui, palette, id, text, hint, width, 17.0)
+}
+
+/// A search field whose silhouette can match the surface it lives in.
+pub fn search_field_with_radius(
+    ui: &mut Ui,
+    palette: &Palette,
+    id: egui::Id,
+    text: &mut String,
+    hint: &str,
+    width: f32,
+    radius: f32,
+) -> egui::Response {
     let height = 34.0;
     let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
     let has_focus = ui.memory(|memory| memory.has_focus(id));
@@ -1618,11 +1631,11 @@ pub fn search_field(
     } else {
         palette.surface
     };
-    ui.painter().rect_filled(rect, height / 2.0, fill);
+    ui.painter().rect_filled(rect, radius, fill);
     if has_focus {
         ui.painter().rect_stroke(
             rect,
-            height / 2.0,
+            radius,
             Stroke::new(1.5, palette.text.gamma_multiply(0.6)),
             egui::StrokeKind::Inside,
         );
