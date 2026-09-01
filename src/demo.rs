@@ -1589,6 +1589,13 @@ mod tests {
         (ctx, app, root)
     }
 
+    fn typeahead_settings() -> Settings {
+        Settings {
+            typeahead_jump: true,
+            ..Settings::default()
+        }
+    }
+
     fn press(ctx: &egui::Context, app: &mut App, key: egui::Key) {
         frame_events(
             ctx,
@@ -1611,7 +1618,11 @@ mod tests {
     /// the search points at, through the same plumbing a double-click uses.
     #[test]
     fn typeahead_letters_play_the_matched_row_on_enter() {
-        let (ctx, mut app, root) = playlist_app("typeahead-enter", Settings::default());
+        let settings = Settings {
+            typeahead_loose: false,
+            ..typeahead_settings()
+        };
+        let (ctx, mut app, root) = playlist_app("typeahead-enter", settings);
         // "rr": the first letter lands on the first Rosewood (trk0), the
         // second cycles to the next one (trk20), as the same letter does in
         // a file explorer.
@@ -1629,7 +1640,7 @@ mod tests {
     /// way typing works: "ro" narrows from "r" instead of starting over.
     #[test]
     fn typeahead_accumulates_across_frames() {
-        let (ctx, mut app, root) = playlist_app("typeahead-frames", Settings::default());
+        let (ctx, mut app, root) = playlist_app("typeahead-frames", typeahead_settings());
         type_text(&ctx, &mut app, "r");
         frame(&ctx, &mut app);
         type_text(&ctx, &mut app, "o");
@@ -1647,7 +1658,7 @@ mod tests {
     /// "day", space, "b" still lands on "Day by Day".
     #[test]
     fn space_joins_an_active_search() {
-        let (ctx, mut app, root) = playlist_app("typeahead-space", Settings::default());
+        let (ctx, mut app, root) = playlist_app("typeahead-space", typeahead_settings());
         type_text(&ctx, &mut app, "day");
         frame(&ctx, &mut app);
         // A real space arrives as a key and as text in the same frame.
@@ -1681,6 +1692,7 @@ mod tests {
     #[test]
     fn loose_typeahead_matches_letters_anywhere() {
         let settings = Settings {
+            typeahead_jump: true,
             typeahead_loose: true,
             ..Settings::default()
         };
@@ -1702,7 +1714,7 @@ mod tests {
     /// shortcuts; everywhere else they still are.
     #[test]
     fn while_a_song_list_is_open_the_plain_letters_belong_to_typeahead() {
-        let (ctx, mut app, root) = playlist_app("typeahead-gate", Settings::default());
+        let (ctx, mut app, root) = playlist_app("typeahead-gate", typeahead_settings());
         press(&ctx, &mut app, egui::Key::L);
         assert!(
             !app.show_lyrics_panel,
@@ -1736,7 +1748,7 @@ mod tests {
     /// order, so Space joins the new query rather than toggling playback.
     #[test]
     fn first_frame_space_joins_the_query_without_toggling_playback() {
-        let (ctx, mut app, root) = playlist_app("typeahead-first-space", Settings::default());
+        let (ctx, mut app, root) = playlist_app("typeahead-first-space", typeahead_settings());
         let playing = app.believed_playing();
         frame_events(
             &ctx,
@@ -1765,7 +1777,7 @@ mod tests {
     /// window page is a playlist, so its ordinary shortcuts keep working.
     #[test]
     fn winamp_keeps_plain_letter_shortcuts_from_a_playlist_page() {
-        let (ctx, mut app, root) = playlist_app("typeahead-winamp", Settings::default());
+        let (ctx, mut app, root) = playlist_app("typeahead-winamp", typeahead_settings());
         app.settings.winamp_window = true;
         frame(&ctx, &mut app);
         press(&ctx, &mut app, egui::Key::L);
@@ -1778,7 +1790,7 @@ mod tests {
     /// ordinary letter shortcuts while its Retry control is showing.
     #[test]
     fn a_failed_playlist_keeps_plain_letter_shortcuts() {
-        let (ctx, mut app, root) = playlist_app("typeahead-failed", Settings::default());
+        let (ctx, mut app, root) = playlist_app("typeahead-failed", typeahead_settings());
         app.playlist_pages.get_mut("pl1").unwrap().playlist = Loadable::Failed("offline".into());
         press(&ctx, &mut app, egui::Key::L);
         assert!(app.show_lyrics_panel);
@@ -1790,7 +1802,7 @@ mod tests {
     /// must not start playing.
     #[test]
     fn device_picker_blocks_typeahead_playback() {
-        let (ctx, mut app, root) = playlist_app("typeahead-devices", Settings::default());
+        let (ctx, mut app, root) = playlist_app("typeahead-devices", typeahead_settings());
         type_text(&ctx, &mut app, "r");
         app.show_devices = true;
         press(&ctx, &mut app, egui::Key::Enter);
@@ -1804,7 +1816,7 @@ mod tests {
     /// listener left and later revisited.
     #[test]
     fn navigating_away_clears_the_page_typeahead() {
-        let (ctx, mut app, root) = playlist_app("typeahead-navigation", Settings::default());
+        let (ctx, mut app, root) = playlist_app("typeahead-navigation", typeahead_settings());
         type_text(&ctx, &mut app, "r");
         app.open(Page::Home);
         frame(&ctx, &mut app);
@@ -1821,7 +1833,7 @@ mod tests {
     /// rows arrive, then resolves normally.
     #[test]
     fn typeahead_waits_for_an_initially_empty_loading_table() {
-        let (ctx, mut app, root) = playlist_app("typeahead-loading", Settings::default());
+        let (ctx, mut app, root) = playlist_app("typeahead-loading", typeahead_settings());
         let items = {
             let page = app.playlist_pages.get_mut("pl1").unwrap();
             page.items.loading = true;
@@ -1848,7 +1860,7 @@ mod tests {
     /// being requested again every frame by an unmatched query.
     #[test]
     fn typeahead_does_not_retry_a_failed_page_automatically() {
-        let (ctx, mut app, root) = playlist_app("typeahead-error", Settings::default());
+        let (ctx, mut app, root) = playlist_app("typeahead-error", typeahead_settings());
         app.table_sorts.insert(
             Page::Playlist("pl1".into()),
             TableSort {
@@ -1872,7 +1884,7 @@ mod tests {
     /// double-clicking a row.
     #[test]
     fn typeahead_enter_does_not_play_an_unavailable_track() {
-        let (ctx, mut app, root) = playlist_app("typeahead-unavailable", Settings::default());
+        let (ctx, mut app, root) = playlist_app("typeahead-unavailable", typeahead_settings());
         let page = app.playlist_pages.get_mut("pl1").unwrap();
         let item = &mut page.items.items[0];
         let playable = item.item.as_mut().or(item.track.as_mut()).unwrap();

@@ -55,8 +55,8 @@ main fields are:
 | `accent_from_art` | `true` | Tint pages with album art |
 | `sidebar_compact` | `false` | Names only in the library sidebar, no covers |
 | `tracklist_compact` | `false` | One-line track rows without covers |
-| `typeahead_jump` | `true` | Plain typing jumps to matching songs in track lists |
-| `typeahead_loose` | `false` | Also match typed letters elsewhere in a title, in order |
+| `typeahead_jump` | `false` | Plain typing jumps to matching songs in track lists |
+| `typeahead_loose` | `true` | Also match typed letters elsewhere in a title, in order |
 | `winamp_window` | `false` | The window is the Winamp mini player |
 | `skin` | none | File or folder name in the skins folder; blank uses the built-in skin |
 | `skin_scale` | by display | Screen pixels per skin pixel, 1 to 4 |

@@ -281,8 +281,8 @@ mod tests {
     fn older_settings_keep_the_sidebar_visible() {
         let settings: Settings = serde_json::from_str("{}").unwrap();
         assert!(settings.sidebar_visible);
-        assert!(settings.typeahead_jump);
-        assert!(!settings.typeahead_loose);
+        assert!(!settings.typeahead_jump);
+        assert!(settings.typeahead_loose);
     }
 
     #[test]
@@ -375,14 +375,14 @@ mod tests {
     #[test]
     fn typeahead_choices_round_trip() {
         let settings = Settings {
-            typeahead_jump: false,
-            typeahead_loose: true,
+            typeahead_jump: true,
+            typeahead_loose: false,
             ..Settings::default()
         };
         let json = serde_json::to_string(&settings).unwrap();
         let restored: Settings = serde_json::from_str(&json).unwrap();
-        assert!(!restored.typeahead_jump);
-        assert!(restored.typeahead_loose);
+        assert!(restored.typeahead_jump);
+        assert!(!restored.typeahead_loose);
     }
 }
 

@@ -503,7 +503,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             ui,
             &palette,
             "Type-ahead in song lists",
-            "Typing letters jumps to the matching song in playlists and albums.",
+            "Typing letters jumps to matching songs; plain-letter shortcuts are unavailable on those pages.",
             |ui| {
                 if widgets::switch(ui, &palette, &mut app.settings.typeahead_jump).changed() {
                     changed = true;
