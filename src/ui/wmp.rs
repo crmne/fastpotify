@@ -57,11 +57,11 @@ pub struct Render {
     /// Decoded bitmaps by lower-case file name. One that would not
     /// decode is kept empty, so it is not read again every frame.
     bitmaps: HashMap<String, Bitmap>,
-    /// Keyed copies, by file and the colour cut out of it.
-    keyed: HashMap<(String, Option<ir::Color>), Bitmap>,
-    /// Uploaded textures, by file and the colour keyed out of it. These
+    /// Keyed copies, by file and the colours cut out of it.
+    keyed: HashMap<(String, [Option<ir::Color>; 2]), Bitmap>,
+    /// Uploaded textures, by file and the colours keyed out of it. These
     /// belong to a window's context and go with it.
-    textures: HashMap<(String, Option<ir::Color>), TextureHandle>,
+    textures: HashMap<(String, [Option<ir::Color>; 2]), TextureHandle>,
     /// A mapping bitmap's region for one button colour, by file and
     /// colour: the pixels that are that button's to click.
     regions: HashMap<(String, ir::Color), Mask>,
@@ -107,15 +107,14 @@ impl Render {
         assets: &Assets,
         file: &str,
         key: Option<ir::Color>,
+        clip: Option<ir::Color>,
     ) -> Option<Bitmap> {
         let name = file.to_ascii_lowercase();
-        let entry = (name.clone(), key);
+        let entry = (name.clone(), [key, clip]);
         if !self.keyed.contains_key(&entry) {
             let raw = self.bitmap(assets, file);
-            let keyed = match key {
-                Some(key) => raw.keyed(key),
-                None => raw,
-            };
+            let keys: Vec<[u8; 3]> = [key, clip].into_iter().flatten().collect();
+            let keyed = raw.keyed_all(&keys);
             self.keyed.insert(entry.clone(), keyed);
         }
         let bitmap = &self.keyed[&entry];
@@ -129,13 +128,14 @@ impl Render {
         assets: &Assets,
         file: &str,
         key: Option<ir::Color>,
+        clip: Option<ir::Color>,
     ) -> Option<TextureId> {
         let name = file.to_ascii_lowercase();
-        let entry = (name.clone(), key);
+        let entry = (name.clone(), [key, clip]);
         if let Some(handle) = self.textures.get(&entry) {
             return Some(handle.id());
         }
-        let bitmap = self.keyed_bitmap(assets, file, key)?;
+        let bitmap = self.keyed_bitmap(assets, file, key, clip)?;
         let image = ColorImage::from_rgba_unmultiplied(
             [bitmap.width as usize, bitmap.height as usize],
             &bitmap.rgba,
@@ -193,8 +193,8 @@ pub fn show(
     if size.0 == 0 || size.1 == 0 {
         return Vec::new();
     }
-    let mask = window_mask(render, document, view, size);
     render.layout.get_or_insert_with(|| Layout::build(view));
+    let mask = window_mask(render, document, view, size);
     let mut actions = Vec::new();
     let mut next_id = 0usize;
     let mut skin = Skin {
@@ -207,6 +207,9 @@ pub fn show(
         next_id: &mut next_id,
         took_pointer: false,
     };
+    // The view's own background: the colour behind everything, then the
+    // frame's art. Skins put their window's face here, and only the
+    // subviews paint their own.
     if let Some(color) = view.background.color {
         skin.fill(0, 0, size.0, size.1, color);
     }
@@ -222,6 +225,16 @@ pub fn show(
         render,
         ctx: &ctx,
     };
+    if view.background.image.is_some() {
+        paint_background(
+            &skin,
+            &mut art,
+            &view.background,
+            &ir::Common::default(),
+            (0, 0),
+            255,
+        );
+    }
     for (_, element) in ordered {
         paint_element(&mut skin, &mut art, element, (0, 0));
     }
@@ -243,10 +256,10 @@ pub fn skin_size(document: &SkinDocument) -> (u32, u32) {
     }
     let mut widest = 0u32;
     let mut tallest = 0u32;
-    for (x, y, file, _) in background_layers(view) {
-        if let Some(bitmap) = document.assets.bitmap(&file) {
-            widest = widest.max(x.max(0) as u32 + bitmap.width);
-            tallest = tallest.max(y.max(0) as u32 + bitmap.height);
+    for layer in background_layers(view) {
+        if let Some(bitmap) = document.assets.bitmap(&layer.file) {
+            widest = widest.max(layer.at.0.max(0) as u32 + bitmap.width);
+            tallest = tallest.max(layer.at.1.max(0) as u32 + bitmap.height);
         }
     }
     (widest, tallest)
@@ -444,17 +457,34 @@ fn view_size(render: &mut Render, document: &SkinDocument, view: &View) -> (u32,
     }
     let mut widest = 0u32;
     let mut tallest = 0u32;
-    for (x, y, file, _) in background_layers(view) {
-        let bitmap = render.bitmap(&document.assets, &file);
-        widest = widest.max(x.max(0) as u32 + bitmap.width);
-        tallest = tallest.max(y.max(0) as u32 + bitmap.height);
+    for layer in background_layers(view) {
+        let bitmap = render.bitmap(&document.assets, &layer.file);
+        widest = widest.max(layer.at.0.max(0) as u32 + bitmap.width);
+        tallest = tallest.max(layer.at.1.max(0) as u32 + bitmap.height);
     }
     (widest, tallest)
 }
 
+/// One background layer: where it sits, its file, the colour keyed
+/// out of it, and the colour clipped out of it.
+struct Layer {
+    at: (i32, i32),
+    file: String,
+    key: Option<ir::Color>,
+    clip: Option<ir::Color>,
+}
+
+impl Layer {
+    fn keyed_bitmap(&self, render: &mut Render, assets: &Assets) -> Option<Bitmap> {
+        render.keyed_bitmap(assets, &self.file, self.key, self.clip)
+    }
+}
+
 /// The window's shape: every background layer's non-keyed pixels,
-/// positioned where the layer sits. Hidden layers shape nothing. When
-/// the shape covers the whole view, there is no mask to be had.
+/// positioned where the layer sits, plus every visible subview's own
+/// opaque fill — a pane the frame leaves a hole for belongs to the
+/// window where its fill stands. Hidden layers shape nothing. When the
+/// shape covers the whole view, there is no mask to be had.
 fn window_mask(
     render: &mut Render,
     document: &SkinDocument,
@@ -463,16 +493,17 @@ fn window_mask(
 ) -> Option<Mask> {
     let mut inside = vec![false; (width * height) as usize];
     let mut any = false;
-    for (x, y, file, key) in background_layers(view) {
-        let bitmap = render.keyed_bitmap(&document.assets, &file, key);
+    for layer in background_layers(view) {
+        let at = layer.at;
+        let bitmap = layer.keyed_bitmap(render, &document.assets);
         let Some(bitmap) = bitmap else { continue };
         for dy in 0..bitmap.height {
-            let y = y + dy as i32;
+            let y = at.1 + dy as i32;
             if y < 0 || y >= height as i32 {
                 continue;
             }
             for dx in 0..bitmap.width {
-                let x = x + dx as i32;
+                let x = at.0 + dx as i32;
                 if x < 0 || x >= width as i32 {
                     continue;
                 }
@@ -483,15 +514,70 @@ fn window_mask(
             }
         }
     }
+    for pane in opaque_panes(render, view) {
+        let (x, y, pane_width, pane_height) = pane;
+        for dy in 0..pane_height as i32 {
+            let y = y + dy;
+            if y < 0 || y >= height as i32 {
+                continue;
+            }
+            for dx in 0..pane_width as i32 {
+                let x = x + dx;
+                if x < 0 || x >= width as i32 {
+                    continue;
+                }
+                inside[y as usize * width as usize + x as usize] = true;
+                any = true;
+            }
+        }
+    }
     any.then(|| Mask::from_pixels(width, height, |x, y| inside[(y * width + x) as usize]))
+}
+
+/// Where a subview paints a colour of its own: those rectangles are
+/// part of the window even where the frame's art leaves a hole.
+fn opaque_panes(render: &mut Render, view: &View) -> Vec<(i32, i32, u32, u32)> {
+    let mut panes = Vec::new();
+    fn collect(
+        render: &mut Render,
+        elements: &[Element],
+        at: (i32, i32),
+        panes: &mut Vec<(i32, i32, u32, u32)>,
+    ) {
+        for element in elements {
+            let common = element.common();
+            if common.visible_bool() == Some(false) {
+                continue;
+            }
+            let left = geometry(render, common, Attr::Left).unwrap_or(0) + at.0;
+            let top = geometry(render, common, Attr::Top).unwrap_or(0) + at.1;
+            if let Element::Subview(subview) = element {
+                if subview.background.color.is_some() {
+                    let pane_width = geometry(render, common, Attr::Width).unwrap_or(0);
+                    let pane_height = geometry(render, common, Attr::Height).unwrap_or(0);
+                    if pane_width > 0 && pane_height > 0 {
+                        panes.push((left, top, pane_width as u32, pane_height as u32));
+                    }
+                }
+                collect(render, &subview.children, (left, top), panes);
+            }
+        }
+    }
+    collect(render, &view.children, (0, 0), &mut panes);
+    panes
 }
 
 /// The skin's background layers: the view's own, then every visible
 /// subview's, each with its position and the colour it keys out.
-fn background_layers(view: &View) -> Vec<(i32, i32, String, Option<ir::Color>)> {
+fn background_layers(view: &View) -> Vec<Layer> {
     let mut layers = Vec::new();
     if let Some(file) = &view.background.image {
-        layers.push((0, 0, file.clone(), view.background.transparency_color));
+        layers.push(Layer {
+            at: (0, 0),
+            file: file.clone(),
+            key: view.background.transparency_color,
+            clip: None,
+        });
     }
     for child in &view.children {
         collect_layers(child, (0, 0), &mut layers);
@@ -499,11 +585,7 @@ fn background_layers(view: &View) -> Vec<(i32, i32, String, Option<ir::Color>)> 
     layers
 }
 
-fn collect_layers(
-    element: &Element,
-    at: (i32, i32),
-    layers: &mut Vec<(i32, i32, String, Option<ir::Color>)>,
-) {
+fn collect_layers(element: &Element, at: (i32, i32), layers: &mut Vec<Layer>) {
     let common = element.common();
     if common.visible_bool() == Some(false) {
         return;
@@ -512,12 +594,12 @@ fn collect_layers(
     let top = common.top_i32().unwrap_or(0) + at.1;
     if let Element::Subview(subview) = element {
         if let Some(file) = &subview.background.image {
-            layers.push((
-                left,
-                top,
-                file.clone(),
-                subview.background.transparency_color,
-            ));
+            layers.push(Layer {
+                at: (left, top),
+                file: file.clone(),
+                key: subview.background.transparency_color,
+                clip: common.clipping_color,
+            });
         }
         for child in &subview.children {
             collect_layers(child, (left, top), layers);
@@ -773,11 +855,14 @@ fn paint_element(skin: &mut Skin, art: &mut Art, element: &Element, at: (i32, i3
             paint_picture(
                 skin,
                 art,
-                file,
-                image.transparency_color,
-                (left, top, area.0, area.1),
-                image.tiled,
-                alpha,
+                Picture {
+                    file,
+                    key: image.transparency_color,
+                    clip: common.clipping_color,
+                    at: (left, top, area.0, area.1),
+                    tiled: image.tiled,
+                    alpha,
+                },
             );
         }
         Element::Button(button) => paint_button(skin, art, button, (left, top), alpha),
@@ -819,11 +904,14 @@ fn paint_button(skin: &mut Skin, art: &mut Art, button: &ir::Button, at: (i32, i
     paint_picture(
         skin,
         art,
-        state,
-        button.transparency_color,
-        (at.0, at.1, 0, 0),
-        button.tiled,
-        alpha,
+        Picture {
+            file: state,
+            key: button.transparency_color,
+            clip: button.common.clipping_color,
+            at: (at.0, at.1, 0, 0),
+            tiled: button.tiled,
+            alpha,
+        },
     );
     if response.clicked()
         && let Some(action) = button_action(&button.action)
@@ -872,11 +960,14 @@ fn paint_group(skin: &mut Skin, art: &mut Art, group: &ir::ButtonGroup, at: (i32
     paint_picture(
         skin,
         art,
-        file,
-        group.transparency_color,
-        (at.0, at.1, area.0, area.1),
-        false,
-        alpha,
+        Picture {
+            file,
+            key: group.transparency_color,
+            clip: group.common.clipping_color,
+            at: (at.0, at.1, area.0, area.1),
+            tiled: false,
+            alpha,
+        },
     );
     let pressed = response.is_pointer_button_down_on();
     let state_image = if pressed {
@@ -898,6 +989,7 @@ fn paint_group(skin: &mut Skin, art: &mut Art, group: &ir::ButtonGroup, at: (i32
                 &art.document.assets,
                 state,
                 group.transparency_color,
+                None,
             )
         {
             let region = Region { mask: &region, at };
@@ -1006,25 +1098,41 @@ fn paint_background(
     paint_picture(
         skin,
         art,
-        file,
-        background.transparency_color,
-        (at.0, at.1, area.0, area.1),
-        background.tiled,
-        alpha,
+        Picture {
+            file,
+            key: background.transparency_color,
+            clip: common.clipping_color,
+            at: (at.0, at.1, area.0, area.1),
+            tiled: background.tiled,
+            alpha,
+        },
     );
 }
 
-/// A picture at a position: one draw, or a grid of them when tiled.
-fn paint_picture(
-    skin: &Skin,
-    art: &mut Art,
-    file: &str,
+/// A picture at a position: what it is, where it goes, how it is cut.
+struct Picture<'a> {
+    file: &'a str,
     key: Option<ir::Color>,
+    clip: Option<ir::Color>,
     at: (i32, i32, u32, u32),
     tiled: bool,
     alpha: u8,
-) {
-    let Some(texture) = art.render.texture(art.ctx, &art.document.assets, file, key) else {
+}
+
+/// A picture at a position: one draw, or a grid of them when tiled.
+fn paint_picture(skin: &Skin, art: &mut Art, picture: Picture<'_>) {
+    let Picture {
+        file,
+        key,
+        clip,
+        at,
+        tiled,
+        alpha,
+    } = picture;
+    let Some(texture) = art
+        .render
+        .texture(art.ctx, &art.document.assets, file, key, clip)
+    else {
         return;
     };
     let bitmap = art.render.bitmap(&art.document.assets, file);
@@ -1055,6 +1163,7 @@ fn paint_slider(skin: &mut Skin, art: &mut Art, slider: &ir::Slider, at: (i32, i
             &art.document.assets,
             file,
             slider.transparency_color,
+            None,
         )
     });
     if let (Some((file, area)), Some(texture)) = (&track, texture) {
@@ -1078,6 +1187,7 @@ fn paint_slider(skin: &mut Skin, art: &mut Art, slider: &ir::Slider, at: (i32, i
         &art.document.assets,
         thumb,
         slider.transparency_color,
+        None,
     ) else {
         return;
     };
@@ -1645,12 +1755,12 @@ mod tests {
         let mask = window_mask(&mut render, &document, view, (10, 8)).unwrap();
         assert!(
             render
-                .keyed_bitmap(&document.assets, "BASE.BMP", Some([255, 0, 255]))
+                .keyed_bitmap(&document.assets, "BASE.BMP", Some([255, 0, 255]), None)
                 .is_some()
         );
         assert!(
             render
-                .keyed_bitmap(&document.assets, "missing.bmp", None)
+                .keyed_bitmap(&document.assets, "missing.bmp", None, None)
                 .is_none()
         );
         // The keyed copy is shared with the mask's; the raw one is not

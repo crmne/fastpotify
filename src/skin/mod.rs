@@ -71,9 +71,21 @@ impl Bitmap {
     /// colour key hides parts of its art. Pixels the file made
     /// transparent itself stay as they are.
     pub fn keyed(&self, key: [u8; 3]) -> Self {
+        self.keyed_all(&[key])
+    }
+
+    /// The same, for every colour the caller names.
+    pub fn keyed_all(&self, keys: &[[u8; 3]]) -> Self {
+        if keys.is_empty() {
+            return Self {
+                width: self.width,
+                height: self.height,
+                rgba: self.rgba.clone(),
+            };
+        }
         let mut rgba = self.rgba.clone();
         for pixel in rgba.as_chunks_mut::<4>().0 {
-            if pixel[..3] == key {
+            if keys.iter().any(|key| pixel[..3] == *key) {
                 pixel[3] = 0;
             }
         }
