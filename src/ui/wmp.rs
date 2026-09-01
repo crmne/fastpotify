@@ -342,7 +342,11 @@ pub fn show_window(app: &mut crate::app::App, ui: &mut Ui) {
             // close ends the run (a window without chrome has no close
             // button of its own), and the media-center verb is the
             // toggle that brings the big window back.
-            SkinAction::Minimize => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
+            SkinAction::Minimize => {
+                // A field write, not a call: the skin is still borrowed.
+                app.restore_watch = crate::app::RestoreWatch::Sent;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+            }
             SkinAction::Close => app.quit_requested = true,
             SkinAction::ReturnToMediaCenter => app.actions.push(Action::ToggleWmpWindow),
             other => {

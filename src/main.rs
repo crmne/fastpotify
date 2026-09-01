@@ -672,6 +672,9 @@ impl Shell {
 impl eframe::App for Shell {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         if let Some(app) = self.app.as_mut() {
+            // The watch runs in logic, which goes on while the pass is
+            // skipped for a window egui still believes minimized.
+            app.watch_window_restore(ctx);
             #[cfg(target_os = "macos")]
             for command in fastpotify::mac_menu::drain_commands() {
                 use fastpotify::mac_menu::MenuCommand;

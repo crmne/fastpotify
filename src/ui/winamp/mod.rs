@@ -497,6 +497,7 @@ fn shade_bar(
         )
         .clicked()
     {
+        app.arm_restore_watch();
         ctx.send_viewport_cmd(ViewportCommand::Minimized(true));
     }
     if view
@@ -663,6 +664,7 @@ fn title_bar(app: &mut App, view: &mut View, ctx: &egui::Context, focused: bool)
         )
         .clicked()
     {
+        app.arm_restore_watch();
         ctx.send_viewport_cmd(ViewportCommand::Minimized(true));
     }
     if view

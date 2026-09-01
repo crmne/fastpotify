@@ -349,6 +349,24 @@ pub struct App {
     pub winamp: crate::winamp::WinampState,
     /// The WMP skin the skin window wears, read like the Winamp skin.
     pub wmp: crate::wmp::WmpState,
+    /// Watching a window we minimized come back, because the interface
+    /// freezes until egui is told it did. A field a painter may write
+    /// while a skin is borrowed.
+    pub(crate) restore_watch: RestoreWatch,
+}
+
+/// A window we told to minimize: egui is told on macOS only from our
+/// own command, never again from the window itself, so a window
+/// restored by hand still reads as minimized and no pass runs. The
+/// watch says the window is back once it has a place again.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum RestoreWatch {
+    #[default]
+    None,
+    /// The command went out; the window has not been seen gone yet.
+    Sent,
+    /// The window has been seen without a place; waiting for it back.
+    Gone,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -547,6 +565,7 @@ impl App {
             last_update_check: None,
             winamp: crate::winamp::WinampState::new(session.winamp_pos, tap, eq),
             wmp: crate::wmp::WmpState::default(),
+            restore_watch: RestoreWatch::None,
         };
         app.local.volume = app.settings.volume;
         app
@@ -4348,6 +4367,30 @@ impl App {
     }
 
     // ---- actions -----------------------------------------------------------------
+
+    /// Arms the watch when a window is minimized by a command, and says
+    /// the window is back when it has a place again. egui-winit learns
+    /// "minimized" on macOS only from our command, so a window restored
+    /// by hand still reads as minimized and the interface freezes until
+    /// it is corrected. winit answers the command with the truth of the
+    /// window, and one already shown is left alone.
+    pub fn watch_window_restore(&mut self, ctx: &egui::Context) {
+        let positioned = ctx.input(|input| input.viewport().inner_rect.is_some());
+        match self.restore_watch {
+            RestoreWatch::Sent if !positioned => self.restore_watch = RestoreWatch::Gone,
+            RestoreWatch::Gone if positioned => {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                ctx.request_repaint();
+                self.restore_watch = RestoreWatch::None;
+            }
+            _ => {}
+        }
+    }
+
+    /// The window was minimized by a command; watch for it coming back.
+    pub fn arm_restore_watch(&mut self) {
+        self.restore_watch = RestoreWatch::Sent;
+    }
 
     fn apply_actions(&mut self, ctx: &egui::Context) {
         let mut actions = std::mem::take(&mut self.actions);
