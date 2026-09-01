@@ -1542,6 +1542,7 @@ mod tests {
             theme,
             views,
             scripts: Vec::new(),
+            script: crate::wmp::script::Script::default(),
             assets: Assets::from_files([
                 ("base.bmp", toothy_png(10, 8)),
                 ("plain.png", toothy_png(4, 4)),
