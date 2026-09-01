@@ -66,17 +66,9 @@ pub fn side_panel(app: &mut App, ui: &mut egui::Ui) {
                     .or_else(|| now.show_id.clone().map(Page::Show)),
                 None => None,
             };
-            ui.set_max_width((ui.available_width() - 28.0).max(40.0));
-            match open {
-                Some(page) => {
-                    if theme::link(ui, &heading, theme::bold(18.0), palette.text).clicked() {
-                        app.actions.push(Action::Open(page));
-                    }
-                }
-                None => {
-                    theme::text(ui, &heading, theme::bold(18.0), palette.text);
-                }
-            }
+            // The buttons take their room first and the heading truncates
+            // into what is left, so a long album name cannot push them off
+            // the edge and no gap is reserved when they are not showing.
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if offering
                     && theme::icon_button(
@@ -107,6 +99,16 @@ pub fn side_panel(app: &mut App, ui: &mut egui::Ui) {
                         .frame(widgets::menu_frame(&palette))
                         .show(|ui| widgets::item_menu(ui, app, &item, None, None));
                 }
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| match open {
+                    Some(page) => {
+                        if theme::link(ui, &heading, theme::bold(18.0), palette.text).clicked() {
+                            app.actions.push(Action::Open(page));
+                        }
+                    }
+                    None => {
+                        theme::text(ui, &heading, theme::bold(18.0), palette.text);
+                    }
+                });
             });
         });
         ui.add_space(8.0);
@@ -195,7 +197,7 @@ fn contents(app: &mut App, ui: &mut egui::Ui, now: &NowPlaying, offering: bool) 
                 if offering
                     && theme::icon_button(
                         ui,
-                        Icon::Copy,
+                        Icon::Share,
                         17.0,
                         palette.secondary,
                         palette.text,
