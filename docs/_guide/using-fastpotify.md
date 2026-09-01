@@ -113,6 +113,19 @@ This uses the credential stored for playing on this computer, so enable
 playback here first (see [Getting Started](/getting-started/)). Receivers
 that ask for a different kind of login are not connected this way yet.
 
+## Now playing
+
+The panel button at the right of the player bar (or `N`) opens the playing
+song beside the page: its artwork at full width, the title and artists, and
+the same heart the player bar carries. Under it are the artist, with their
+picture and a Follow button; the credits Spotify's Web API carries, which are
+the artists and the album's label; and the next song in the queue, with a way
+through to the rest of it.
+
+Spotify's own panel leads with a short looping video and counts an artist's
+monthly listeners. Neither is in the Web API, so this shows the artwork and,
+where Spotify answers with it, a follower count instead.
+
 ## Lyrics
 
 The microphone button in the player bar (or `L`) opens lyrics for the playing
@@ -156,6 +169,7 @@ Connect devices and conflicting media-key handlers.
 | `M` | Mute |
 | `S` / `R` | Shuffle / cycle repeat |
 | `Q` | Queue panel |
+| `N` | Now playing panel |
 | `Ctrl+F` or `/` | Search |
 | `Ctrl+B` | Show or hide the sidebar |
 | `Alt+←` / `Alt+→`, or the mouse's back and forward buttons | Back or forward |

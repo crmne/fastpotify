@@ -47,6 +47,9 @@ application rather than a shell plugin.
   edited: add from any row's menu or by dragging a song onto the playlist in
   the sidebar, remove from the playlist page.
 - **Queue** as a side panel or a page; add anything to it from a row menu.
+- **Now playing** as a side panel: the artwork large, the song and its
+  artists, the heart, the artist behind it, the credits the Web API
+  carries, and what plays next.
 - **Picks up where you left off.** A cold start shows the song the last
   session ended on, paused at the position it stopped at; play carries on
   from there instead of restarting it. Next, previous, and the progress bar
@@ -192,6 +195,7 @@ those things, and [CONTRIBUTING.md](CONTRIBUTING.md) prohibits them.
 | `M` | Mute |
 | `S` / `R` | Shuffle / cycle repeat |
 | `Q` | Queue panel |
+| `N` | Now playing panel |
 | `Ctrl+F` or `/` | Search |
 | `Ctrl+B` | Show or hide the sidebar |
 | `Alt+←` / `Alt+→` | Back or forward |

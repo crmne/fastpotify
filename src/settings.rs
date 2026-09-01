@@ -74,6 +74,7 @@ pub struct Settings {
     pub sidebar_compact: bool,
     pub sidebar_width: f32,
     pub lyrics_width: f32,
+    pub now_playing_width: f32,
     pub queue_width: f32,
     /// Use compact single-line rows without cover art in track lists.
     pub tracklist_compact: bool,
@@ -169,6 +170,7 @@ impl Default for Settings {
             sidebar_compact: false,
             sidebar_width: 250.0,
             lyrics_width: 360.0,
+            now_playing_width: 360.0,
             queue_width: 360.0,
             tracklist_compact: false,
             search_history: Vec::new(),

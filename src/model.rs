@@ -617,6 +617,7 @@ pub enum Action {
     ToggleSidebar,
     ToggleQueuePanel,
     ToggleLyricsPanel,
+    ToggleNowPlayingPanel,
     ToggleDevicesPopup,
     SettingsChanged,
     RestartEngine,
