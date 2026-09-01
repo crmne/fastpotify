@@ -87,10 +87,6 @@ jobs:
         uses: ilammy/msvc-dev-cmd@v1
       - uses: Swatinem/rust-cache@v2
         with:
-          # Match the quality job's post-projectm-sys cache generation. Without
-          # this, test jobs can replay the old build script's hard-coded
-          # projectM-4d linker output instead of running the pinned fork.
-          prefix-key: v2
           save-if: ${{ github.ref == 'refs/heads/main' }}
       # The demo feature carries the headless render test that lays out every
       # page, panel, and dialog without a display.
