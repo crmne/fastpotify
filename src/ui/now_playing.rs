@@ -10,7 +10,7 @@
 //! monthly listeners, and carries no biography: neither is in the Web API.
 //! Credits name the artists and the label, which are.
 
-use egui::{Align, Frame, Layout, Margin, Sense, Vec2};
+use egui::{Align, Frame, Layout, Margin, Sense, UiBuilder, Vec2};
 
 use crate::api::models::{PlayableItem, pick_image};
 use crate::app::{App, NowPlaying};
@@ -22,6 +22,42 @@ use super::widgets;
 
 /// The gap between the panel's cards.
 const CARD_GAP: f32 = 14.0;
+/// How long a control takes to arrive once the pointer is inside, or to
+/// leave once it is gone.
+const REVEAL_SECONDS: f32 = 0.13;
+/// How far a control slides on its way in. Enough to read as movement,
+/// short enough that it is in place by the time the eye arrives.
+const REVEAL_SLIDE: f32 = 9.0;
+
+/// A control the panel keeps to itself until the pointer arrives.
+///
+/// It fades, and slides the last few pixels in from the edge it sits
+/// against, rather than appearing between one frame and the next. `slide`
+/// is where it comes from, in pixels to the right of where it lands.
+///
+/// Nothing is drawn, and no room is taken, once it is fully away.
+fn revealed<R>(
+    ui: &mut egui::Ui,
+    id: &str,
+    shown: bool,
+    slide: f32,
+    size: f32,
+    add: impl FnOnce(&mut egui::Ui) -> R,
+) -> Option<R> {
+    let arrived = ui
+        .ctx()
+        .animate_bool_with_time(ui.id().with(id), shown, REVEAL_SECONDS);
+    if arrived <= 0.0 {
+        return None;
+    }
+    // The room it takes is the room it will land in, so its neighbours
+    // stay put while it travels.
+    let (rect, _) = ui.allocate_exact_size(Vec2::splat(size + 12.0), Sense::hover());
+    let travelling = rect.translate(egui::vec2(slide * (1.0 - arrived), 0.0));
+    let mut child = ui.new_child(UiBuilder::new().max_rect(travelling));
+    child.set_opacity(arrived);
+    Some(add(&mut child))
+}
 
 pub fn side_panel(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
@@ -70,8 +106,12 @@ pub fn side_panel(app: &mut App, ui: &mut egui::Ui) {
             // into what is left, so a long album name cannot push them off
             // the edge and no gap is reserved when they are not showing.
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if offering
-                    && theme::icon_button(
+                // Spotify slides its hide button in from the side it lives
+                // on. That side is the right here, so it comes from the
+                // right; the menu beside it only fades, having no edge of
+                // its own to come from.
+                let hide = revealed(ui, "hide", offering, REVEAL_SLIDE, 18.0, |ui| {
+                    theme::icon_button(
                         ui,
                         Icon::PanelRightClose,
                         18.0,
@@ -80,24 +120,29 @@ pub fn side_panel(app: &mut App, ui: &mut egui::Ui) {
                         "Hide the playing song",
                     )
                     .clicked()
-                {
+                });
+                if hide == Some(true) {
                     app.actions.push(Action::ToggleNowPlayingPanel);
                 }
                 // The same menu a row in any list answers with, for the
                 // song this panel is about.
-                if offering && let Some(item) = app.now_playing_item() {
-                    let more = theme::icon_button(
-                        ui,
-                        Icon::Ellipsis,
-                        18.0,
-                        palette.secondary,
-                        palette.text,
-                        "More",
-                    );
-                    egui::Popup::menu(&more)
-                        .id(menu_id)
-                        .frame(widgets::menu_frame(&palette))
-                        .show(|ui| widgets::item_menu(ui, app, &item, None, None));
+                if let Some(item) = app.now_playing_item() {
+                    let more = revealed(ui, "more", offering, 0.0, 18.0, |ui| {
+                        theme::icon_button(
+                            ui,
+                            Icon::Ellipsis,
+                            18.0,
+                            palette.secondary,
+                            palette.text,
+                            "More",
+                        )
+                    });
+                    if let Some(more) = more {
+                        egui::Popup::menu(&more)
+                            .id(menu_id)
+                            .frame(widgets::menu_frame(&palette))
+                            .show(|ui| widgets::item_menu(ui, app, &item, None, None));
+                    }
                 }
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| match open {
                     Some(page) => {
@@ -194,8 +239,8 @@ fn contents(app: &mut App, ui: &mut egui::Ui, now: &NowPlaying, offering: bool) 
                 if theme::icon_button(ui, icon, 19.0, color, palette.text, tooltip).clicked() {
                     app.actions.push(Action::ToggleSaved(now.uri.clone()));
                 }
-                if offering
-                    && theme::icon_button(
+                let share = revealed(ui, "share", offering, REVEAL_SLIDE, 17.0, |ui| {
+                    theme::icon_button(
                         ui,
                         Icon::Share,
                         17.0,
@@ -204,7 +249,8 @@ fn contents(app: &mut App, ui: &mut egui::Ui, now: &NowPlaying, offering: bool) 
                         "Copy link to song",
                     )
                     .clicked()
-                {
+                });
+                if share == Some(true) {
                     app.actions.push(Action::CopyLink(now.uri.clone()));
                 }
             });
