@@ -1,6 +1,7 @@
 //! The application: state, event handling, and the actions views ask for.
 
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use egui::Color32;
@@ -133,6 +134,10 @@ pub struct App {
     last_settings_save: Instant,
     pub backend: Backend,
     media_controls: Option<MediaService>,
+    /// The artwork the media controls were last given, and the URL it came
+    /// from. Finding the file touches the disk and the controls are synced
+    /// every frame, so the answer is kept until the artwork changes.
+    media_art: Option<(String, PathBuf)>,
     tray: Option<TrayService>,
     pub window_hidden: bool,
     /// The window should close but the process should stay in the tray.
@@ -416,6 +421,7 @@ impl App {
             last_settings_save: Instant::now(),
             backend,
             media_controls,
+            media_art: None,
             tray,
             window_hidden: false,
             hide_intent: false,
@@ -1921,7 +1927,27 @@ impl App {
         }
     }
 
+    /// The downloaded file for `url`, once the art cache has it.
+    ///
+    /// The media controls are handed a file rather than the URL, so the disk
+    /// is asked until the download lands and the answer remembered after
+    /// that; see `media_native::file_url` for why a URL will not do.
+    fn media_art_file(&mut self, url: &str) -> Option<PathBuf> {
+        if let Some((known, file)) = &self.media_art
+            && known == url
+        {
+            return Some(file.clone());
+        }
+        let file = self.backend.art().cached_file(url)?;
+        self.media_art = Some((url.to_owned(), file.clone()));
+        Some(file)
+    }
+
     fn sync_media_controls(&mut self) {
+        let art_file = self
+            .now_playing()
+            .and_then(|now| now.art_url)
+            .and_then(|url| self.media_art_file(&url));
         let state = match self.now_playing() {
             Some(now) => MediaState {
                 playback: if now.playing {
@@ -1941,6 +1967,7 @@ impl App {
                         .collect(),
                     album: now.album_name.clone(),
                     art_url: now.art_url.clone(),
+                    art_file,
                     duration_ms: now.duration_ms,
                 }),
                 position_ms: now.position_ms,
@@ -4813,6 +4840,10 @@ impl App {
             Action::ClearArtCache => match self.backend.art().clear_disk_cache() {
                 Ok(bytes) => {
                     ctx.forget_all_images();
+                    // The media controls hold a path into what was just
+                    // deleted; forget it, or the next sync hands the system
+                    // a file that is no longer there.
+                    self.media_art = None;
                     self.toast(format!(
                         "Cleared {:.1} MB of artwork",
                         bytes as f64 / 1_048_576.0
@@ -6735,6 +6766,39 @@ mod tests {
             app.control_devices_snapshot(),
             crate::single_instance::NO_DEVICES
         );
+    }
+
+    /// The media controls are handed a downloaded file, never a URL: macOS
+    /// loads cover art itself and dereferences a failed load without
+    /// checking it, so a URL that does not answer aborts the process. The
+    /// sync runs every frame, so the answer is remembered -- which means
+    /// emptying the cache has to forget it, or the path outlives the file.
+    #[test]
+    fn the_media_controls_only_hear_about_artwork_that_exists() {
+        // #given
+        let mut app = headless_app();
+        let ctx = egui::Context::default();
+        let url = "https://i.scdn.co/image/abc";
+        let file = app.dirs.cache.join("art").join("0badc0de");
+        std::fs::create_dir_all(file.parent().expect("a parent")).expect("the art cache");
+        std::fs::write(&file, b"jpeg-ish").expect("a cached file");
+
+        // #then nothing has been downloaded for this song yet
+        assert_eq!(app.media_art_file(url), None);
+
+        // #when the cache holds it, that file is what the controls are told
+        app.media_art = Some((url.to_owned(), file.clone()));
+        assert_eq!(app.media_art_file(url), Some(file.clone()));
+
+        // #then another song is not covered by what is remembered
+        assert_eq!(app.media_art_file("https://i.scdn.co/image/def"), None);
+
+        // #when the artwork cache is emptied, the remembered path goes too
+        app.actions.push(Action::ClearArtCache);
+        app.apply_actions(&ctx);
+        assert_eq!(app.media_art, None, "a path into a deleted cache");
+
+        let _ = std::fs::remove_file(&file);
     }
 
     /// The device slot is written when Spotify answers rather than every
