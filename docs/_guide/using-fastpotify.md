@@ -78,8 +78,9 @@ chips to show one type. The empty search page lists recent searches.
 
 The speaker icon in the player bar lists every Spotify Connect device on
 your account. Click one and the music moves there mid-song; the same
-controls keep working. "Playing on …" in the top bar reminds you when sound
-is coming out of something across the room.
+controls keep working. When sound is coming out of something across the
+room, the top bar shows "Playing on …" at spacious widths and a highlighted
+speaker button when space is tighter.
 
 The queue lives behind the list icon, as a side panel or a full page.
 *Play next* in a row's context menu queues a song. Songs you queued sit

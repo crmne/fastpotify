@@ -134,7 +134,7 @@ fn status_chip(
         36.0,
     );
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-    let shown_fill = if response.hovered() {
+    let shown_fill = if response.hovered() || response.has_focus() {
         if accent {
             palette
                 .accent
@@ -145,24 +145,34 @@ fn status_chip(
     } else {
         fill
     };
-    ui.painter()
-        .rect_filled(rect, CornerRadius::same(10), shown_fill);
-    let icon_rect = egui::Rect::from_center_size(
-        pos2(
-            rect.left() + HORIZONTAL_PADDING + ICON_SIZE / 2.0,
-            rect.center().y,
-        ),
-        Vec2::splat(ICON_SIZE),
-    );
-    icon.image(color, ICON_SIZE).paint_at(ui, icon_rect);
-    ui.painter().galley(
-        pos2(
-            rect.left() + HORIZONTAL_PADDING + ICON_SIZE + ICON_GAP,
-            rect.center().y - galley.size().y / 2.0,
-        ),
-        galley,
-        color,
-    );
+    if ui.is_rect_visible(rect) {
+        ui.painter()
+            .rect_filled(rect, CornerRadius::same(10), shown_fill);
+        if response.has_focus() {
+            ui.painter().rect_stroke(
+                rect.shrink(0.5),
+                CornerRadius::same(10),
+                Stroke::new(1.0, palette.accent.gamma_multiply(0.8)),
+                egui::StrokeKind::Inside,
+            );
+        }
+        let icon_rect = egui::Rect::from_center_size(
+            pos2(
+                rect.left() + HORIZONTAL_PADDING + ICON_SIZE / 2.0,
+                rect.center().y,
+            ),
+            Vec2::splat(ICON_SIZE),
+        );
+        icon.image(color, ICON_SIZE).paint_at(ui, icon_rect);
+        ui.painter().galley(
+            pos2(
+                rect.left() + HORIZONTAL_PADDING + ICON_SIZE + ICON_GAP,
+                rect.center().y - galley.size().y / 2.0,
+            ),
+            galley,
+            color,
+        );
+    }
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
