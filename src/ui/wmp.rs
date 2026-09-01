@@ -29,6 +29,7 @@ use crate::app::NowPlaying;
 use crate::skin::{Bitmap, Mask};
 use crate::wmp::ir::{self, Background, Binding, Element, Value, View};
 use crate::wmp::layout::{Attr, Layout};
+use crate::wmp::script;
 use crate::wmp::{Assets, SkinDocument};
 
 /// What a skin control asks of the player, once a click or a drag has
@@ -49,6 +50,9 @@ pub enum SkinAction {
     Minimize,
     Close,
     ReturnToMediaCenter,
+    /// A handler the skin wrote: the machine runs it and answers with
+    /// whatever the player is to do.
+    RunScript(String),
 }
 
 /// The art of one skin, decoded and on the graphics card, kept between
@@ -75,6 +79,11 @@ pub struct Render {
     /// The view's geometry as arithmetic settled it, built once per
     /// skin and consulted while elements are placed.
     pub layout: Option<Layout>,
+    /// The skin's script machine: the visible and button states its
+    /// scripts have set.
+    pub machine: Option<script::Machine>,
+    /// Whether the view's own handlers have run once.
+    booted: bool,
 }
 
 /// A bitmap that would not decode, kept so the attempt is not repeated.
@@ -195,6 +204,17 @@ pub fn show(
         return Vec::new();
     }
     render.layout.get_or_insert_with(|| Layout::build(view));
+    if render.machine.is_none() {
+        render.machine = Some(script::Machine::new(view));
+        render.booted = false;
+    }
+    if !render.booted {
+        render.booted = true;
+        let machine = render.machine.as_mut().expect("machine present");
+        for name in onload_names(view) {
+            machine.run(&document.script, &name);
+        }
+    }
     let mask = window_mask(render, document, view, size);
     let mut actions = Vec::new();
     let mut next_id = 0usize;
@@ -257,7 +277,7 @@ pub fn skin_size(document: &SkinDocument) -> (u32, u32) {
     }
     let mut widest = 0u32;
     let mut tallest = 0u32;
-    for layer in background_layers(view) {
+    for layer in background_layers(&mut Render::default(), view) {
         if let Some(bitmap) = document.assets.bitmap(&layer.file) {
             widest = widest.max(layer.at.0.max(0) as u32 + bitmap.width);
             tallest = tallest.max(layer.at.1.max(0) as u32 + bitmap.height);
@@ -363,6 +383,22 @@ pub fn show_window(app: &mut crate::app::App, ui: &mut Ui) {
             }
             SkinAction::Close => app.quit_requested = true,
             SkinAction::ReturnToMediaCenter => app.actions.push(Action::ToggleWmpWindow),
+            SkinAction::RunScript(handler) => {
+                // The skin's own handler: the machine runs it, and the
+                // player does whatever it asked. The panes it turned
+                // show on the next frame; a repaint is asked for with
+                // it so the change is immediate.
+                if let Some(machine) = render.machine.as_mut() {
+                    for action in machine.handler(&document.script, &handler) {
+                        if let Some(skin_action) = button_action(&action)
+                            && let Some(action) = player_action(skin_action, media.as_ref())
+                        {
+                            app.actions.push(action);
+                        }
+                    }
+                    ctx.request_repaint();
+                }
+            }
             other => {
                 if let Some(action) = player_action(other, media.as_ref()) {
                     app.actions.push(action);
@@ -446,7 +482,10 @@ fn player_action(action: SkinAction, media: Option<&NowPlaying>) -> Option<crate
         SkinAction::ToggleMute => Action::ToggleMute,
         SkinAction::ToggleShuffle => Action::ToggleShuffle,
         SkinAction::CycleRepeat => Action::CycleRepeat,
+        // The skin's own handler and the window's verbs are not the
+        // player's to answer, and are carried out by the caller.
         SkinAction::Minimize | SkinAction::Close | SkinAction::ReturnToMediaCenter => None?,
+        SkinAction::RunScript(_) => None?,
     })
 }
 
@@ -458,7 +497,7 @@ fn view_size(render: &mut Render, document: &SkinDocument, view: &View) -> (u32,
     }
     let mut widest = 0u32;
     let mut tallest = 0u32;
-    for layer in background_layers(view) {
+    for layer in background_layers(render, view) {
         let bitmap = render.bitmap(&document.assets, &layer.file);
         widest = widest.max(layer.at.0.max(0) as u32 + bitmap.width);
         tallest = tallest.max(layer.at.1.max(0) as u32 + bitmap.height);
@@ -481,6 +520,26 @@ impl Layer {
     }
 }
 
+/// What the view runs as it comes up: the handlers its definition
+/// names, one by one, as `onLoad="Init();"` writes them.
+fn onload_names(view: &View) -> Vec<String> {
+    view.on_load
+        .as_deref()
+        .map(|handler| handler.split(';'))
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .filter(|call| !call.is_empty())
+        .map(|call| {
+            call.trim_start_matches("jscript:")
+                .trim()
+                .trim_end_matches(['(', ')', ';'])
+                .trim()
+                .to_string()
+        })
+        .collect()
+}
+
 /// The window's shape: every background layer's non-keyed pixels,
 /// positioned where the layer sits, plus every visible subview's own
 /// opaque fill — a pane the frame leaves a hole for belongs to the
@@ -494,7 +553,7 @@ fn window_mask(
 ) -> Option<Mask> {
     let mut inside = vec![false; (width * height) as usize];
     let mut any = false;
-    for layer in background_layers(view) {
+    for layer in background_layers(render, view) {
         let at = layer.at;
         let bitmap = layer.keyed_bitmap(render, &document.assets);
         let Some(bitmap) = bitmap else { continue };
@@ -547,7 +606,7 @@ fn opaque_panes(render: &mut Render, view: &View) -> Vec<(i32, i32, u32, u32)> {
     ) {
         for element in elements {
             let common = element.common();
-            if common.visible_bool() == Some(false) {
+            if !element_visible_of(render, common) {
                 continue;
             }
             let left = geometry(render, common, Attr::Left).unwrap_or(0) + at.0;
@@ -570,7 +629,7 @@ fn opaque_panes(render: &mut Render, view: &View) -> Vec<(i32, i32, u32, u32)> {
 
 /// The skin's background layers: the view's own, then every visible
 /// subview's, each with its position and the colour it keys out.
-fn background_layers(view: &View) -> Vec<Layer> {
+fn background_layers(render: &mut Render, view: &View) -> Vec<Layer> {
     let mut layers = Vec::new();
     if let Some(file) = &view.background.image {
         layers.push(Layer {
@@ -581,14 +640,27 @@ fn background_layers(view: &View) -> Vec<Layer> {
         });
     }
     for child in &view.children {
-        collect_layers(child, (0, 0), &mut layers);
+        collect_layers(render, child, (0, 0), &mut layers);
     }
     layers
 }
 
-fn collect_layers(element: &Element, at: (i32, i32), layers: &mut Vec<Layer>) {
+/// Whether an element stands, as the machine and its definition
+/// together say it: the machine's word about an element by id wins,
+/// then what the definition wrote, then it stands.
+fn element_visible_of(render: &mut Render, common: &ir::Common) -> bool {
+    if let Some(machine) = render.machine.as_ref()
+        && let Some(id) = common.id.as_deref()
+        && let Some(visible) = machine.visible(id)
+    {
+        return visible;
+    }
+    common.visible_bool() != Some(false)
+}
+
+fn collect_layers(render: &mut Render, element: &Element, at: (i32, i32), layers: &mut Vec<Layer>) {
     let common = element.common();
-    if common.visible_bool() == Some(false) {
+    if !element_visible_of(render, common) {
         return;
     }
     let left = common.left_i32().unwrap_or(0) + at.0;
@@ -603,7 +675,7 @@ fn collect_layers(element: &Element, at: (i32, i32), layers: &mut Vec<Layer>) {
             });
         }
         for child in &subview.children {
-            collect_layers(child, (left, top), layers);
+            collect_layers(render, child, (left, top), layers);
         }
     }
 }
@@ -894,8 +966,25 @@ fn paint_element(skin: &mut Skin, art: &mut Art, element: &Element, at: (i32, i3
             ),
             alpha,
         ),
-        Element::Other(_) => {}
+        Element::Other(other) => paint_media_pane(skin, art.render, other, (left, top)),
     }
+}
+
+/// A media pane the skin reserved for video or a visualiser:
+/// Fastpotify is a music player, so the pane is a screen with nothing
+/// playing — an opaque dark surface, standing where the moving image
+/// would be. Nothing shows through it, and nothing plays in it.
+fn paint_media_pane(skin: &Skin, render: &mut Render, other: &ir::Other, at: (i32, i32)) {
+    if !matches!(other.name.as_str(), "wmpvideo" | "effects") {
+        return;
+    }
+    let Some(width) = geometry(render, &other.common, Attr::Width).filter(|w| *w > 0) else {
+        return;
+    };
+    let Some(height) = geometry(render, &other.common, Attr::Height).filter(|h| *h > 0) else {
+        return;
+    };
+    skin.fill(at.0, at.1, width as u32, height as u32, [8, 8, 8]);
 }
 
 /// A button on its own: it wears the state image the pointer asks for,
@@ -1047,6 +1136,12 @@ fn paint_group(skin: &mut Skin, art: &mut Art, group: &ir::ButtonGroup, at: (i32
 /// expression settles against the player's state and the view's own
 /// numbers. Everything else shows.
 fn element_visible(skin: &Skin, render: &mut Render, common: &ir::Common) -> bool {
+    if let Some(machine) = render.machine.as_ref()
+        && let Some(id) = common.id.as_deref()
+        && let Some(visible) = machine.visible(id)
+    {
+        return visible;
+    }
     match common.visible_bool() {
         Some(visible) => visible,
         None => {
@@ -1419,6 +1514,9 @@ fn button_action(action: &ir::Action) -> Option<SkinAction> {
         ir::Action::Minimize => SkinAction::Minimize,
         ir::Action::Close => SkinAction::Close,
         ir::Action::ReturnToMediaCenter => SkinAction::ReturnToMediaCenter,
+        // A handler the skin wrote: the machine runs it when the click
+        // lands, and whatever the player is to do comes back.
+        ir::Action::Unhandled(handler) => SkinAction::RunScript(handler.clone()),
         ir::Action::None
         | ir::Action::FastForward
         | ir::Action::Rewind
@@ -1426,8 +1524,7 @@ fn button_action(action: &ir::Action) -> Option<SkinAction> {
         | ir::Action::CloseView(_)
         | ir::Action::ResetEq
         | ir::Action::EffectsNext
-        | ir::Action::EffectsPrevious
-        | ir::Action::Unhandled(_) => return None,
+        | ir::Action::EffectsPrevious => return None,
     })
 }
 
@@ -1721,10 +1818,11 @@ mod tests {
             button_action(&ir::Action::ReturnToMediaCenter),
             Some(SkinAction::ReturnToMediaCenter)
         );
-        // A script's named function asks for nothing at all.
+        // A script's named function goes to the machine, which runs it
+        // when the click lands.
         assert_eq!(
             button_action(&ir::Action::Unhandled("TogglePl();".into())),
-            None
+            Some(SkinAction::RunScript("TogglePl();".into()))
         );
         assert_eq!(button_action(&ir::Action::ResetEq), None);
     }
