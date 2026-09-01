@@ -45,6 +45,8 @@ pub struct View {
     pub timer_interval: Option<u32>,
     /// The `scriptFile` entries as written, including any `res://` ones.
     pub script_files: Vec<String>,
+    /// What the view runs when it comes up, as written.
+    pub on_load: Option<String>,
     pub children: Vec<Element>,
 }
 
@@ -706,6 +708,7 @@ fn view(node: &Node) -> View {
                     .collect()
             })
             .unwrap_or_default(),
+        on_load: node.attr("onload").map(|raw| raw.trim().to_string()),
         children: node.children.iter().map(element).collect(),
     }
 }

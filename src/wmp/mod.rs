@@ -18,6 +18,7 @@ pub mod assets;
 pub mod inspect;
 pub mod ir;
 pub mod layout;
+pub mod script;
 pub mod xml;
 
 use std::path::Path;
@@ -57,6 +58,8 @@ pub struct SkinDocument {
     /// The script files the skin names that are plain files. These are
     /// never read, let alone run.
     pub scripts: Vec<String>,
+    /// The scripts, understood as far as the machine can follow them.
+    pub script: script::Script,
     pub assets: Assets,
 }
 
@@ -287,11 +290,25 @@ impl SkinDocument {
             .filter(|file| !file.contains(':'))
             .map(|file| file.to_string())
             .collect();
+        // The scripts come along with the art: what the machine can
+        // follow of them is parsed once, here, where the skin is read.
+        let sources = scripts
+            .iter()
+            .map(|file| {
+                files
+                    .iter()
+                    .find(|(name, _)| name.eq_ignore_ascii_case(file))
+                    .map(|(_, bytes)| String::from_utf8_lossy(bytes).into_owned())
+                    .unwrap_or_default()
+            })
+            .collect::<Vec<String>>();
+        let script = script::Script::parse(&sources);
         Ok(Self {
             name,
             theme,
             views,
             scripts,
+            script,
             assets: Assets::from_files(files),
         })
     }
