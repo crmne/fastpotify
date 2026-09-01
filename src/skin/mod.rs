@@ -67,6 +67,23 @@ impl Bitmap {
         self.rgba[at..at + 4].try_into().ok()
     }
 
+    /// A copy with every pixel of `key` made see-through: how a skin's
+    /// colour key hides parts of its art. Pixels the file made
+    /// transparent itself stay as they are.
+    pub fn keyed(&self, key: [u8; 3]) -> Self {
+        let mut rgba = self.rgba.clone();
+        for pixel in rgba.as_chunks_mut::<4>().0 {
+            if pixel[..3] == key {
+                pixel[3] = 0;
+            }
+        }
+        Self {
+            width: self.width,
+            height: self.height,
+            rgba,
+        }
+    }
+
     /// A copy of the part of this bitmap a sprite covers, clipped to it.
     pub fn crop(&self, sprite: Sprite) -> Option<Bitmap> {
         let sprite = sprite.clipped_to(self.width, self.height)?;

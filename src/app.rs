@@ -347,6 +347,13 @@ pub struct App {
     last_update_check: Option<Instant>,
     /// The Winamp window and the skin it wears.
     pub winamp: crate::winamp::WinampState,
+    /// A Windows Media Player skin drawn read-only, for the demo's
+    /// screenshot surface. No settings, no controls, nothing stored.
+    #[cfg(any(test, feature = "demo"))]
+    pub wmp_preview: Option<(
+        std::sync::Arc<crate::wmp::SkinDocument>,
+        crate::ui::wmp::Render,
+    )>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -544,6 +551,8 @@ impl App {
             update: None,
             last_update_check: None,
             winamp: crate::winamp::WinampState::new(session.winamp_pos, tap, eq),
+            #[cfg(any(test, feature = "demo"))]
+            wmp_preview: None,
         };
         app.local.volume = app.settings.volume;
         app
@@ -5018,6 +5027,12 @@ impl App {
             crate::ui::winamp::show(self, ui);
         } else {
             crate::ui::show(self, ui);
+            // A demo surface draws a WMP skin over the big window's
+            // ground; nothing of it exists in a release build.
+            #[cfg(any(test, feature = "demo"))]
+            if self.wmp_preview.is_some() {
+                crate::ui::wmp::preview(self, ui);
+            }
         }
         // MilkDrop is a window of its own, in a child process; the app opens,
         // updates, and hears back from it here.

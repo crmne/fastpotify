@@ -59,8 +59,8 @@ pub struct Background {
     pub tiled: bool,
 }
 
-/// The attributes every element shares. Left and top are relative to the
-/// view, not the parent; skins position everything in absolute pixels.
+/// The attributes every element shares. Left and top are relative to
+/// the parent view or subview the element sits in.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Common {
     pub id: Option<String>,

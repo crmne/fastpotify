@@ -22,10 +22,10 @@ impl Mask {
     /// The pixels inside any of the polygons, filled the even-odd way at
     /// the pixels' centres.
     pub fn from_polygons(width: u32, height: u32, polygons: &[Vec<(i32, i32)>]) -> Self {
-        let mut rows = Vec::with_capacity(height as usize);
+        let mut inside = vec![false; (width * height) as usize];
         for y in 0..height {
-            let mut inside = vec![false; width as usize];
-            let centre_y = y as f64 + 0.5;
+            let mut row = vec![false; width as usize];
+            let centre_y = f64::from(y) + 0.5;
             for polygon in polygons.iter().filter(|polygon| polygon.len() >= 3) {
                 let mut crossings = Vec::new();
                 for (index, &(x0, y0)) in polygon.iter().enumerate() {
@@ -41,18 +41,30 @@ impl Mask {
                 for pair in crossings.as_chunks::<2>().0 {
                     let start = ((pair[0] - 0.5).ceil().max(0.0)) as usize;
                     let end = ((pair[1] - 0.5).ceil().max(0.0) as usize).min(width as usize);
-                    for pixel in &mut inside[start.min(end)..end] {
+                    for pixel in &mut row[start.min(end)..end] {
                         *pixel = true;
                     }
                 }
             }
+            for (x, visible) in row.into_iter().enumerate() {
+                inside[y as usize * width as usize + x] = visible;
+            }
+        }
+        Self::from_pixels(width, height, |x, y| inside[(y * width + x) as usize])
+    }
+
+    /// The pixels a predicate says are the window, gathered into row
+    /// spans. Outside the given bounds nothing is inside.
+    pub fn from_pixels(width: u32, height: u32, is_inside: impl Fn(u32, u32) -> bool) -> Self {
+        let mut rows = Vec::with_capacity(height as usize);
+        for y in 0..height {
             let mut spans = Vec::new();
             let mut start = None;
-            for (x, visible) in inside.iter().enumerate() {
-                match (start, visible) {
-                    (None, true) => start = Some(x as u32),
+            for x in 0..width {
+                match (start, is_inside(x, y)) {
+                    (None, true) => start = Some(x),
                     (Some(from), false) => {
-                        spans.push((from, x as u32));
+                        spans.push((from, x));
                         start = None;
                     }
                     _ => {}

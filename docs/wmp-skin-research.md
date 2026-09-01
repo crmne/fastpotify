@@ -65,10 +65,14 @@ THEME                          author, copyright, title, currentViewID, version
 ```
 
 Position and size come from the *ambient* attributes every element shares:
-`left, top, width, height, zIndex, visible, enabled, id,
-transparencyColor`-independent `clippingImage/clippingColor` (clip a control
-to a shape), `alphaBlend`, horizontal/vertical alignment. Coordinates are
-absolute pixels within the view; views are fixed-size unless `resizable`.
+`left, top, width, height, zIndex, visible, enabled, id`,
+`clippingImage/clippingColor` (clip a control to a shape), `alphaBlend`,
+horizontal/vertical alignment. Coordinates are pixels relative to the
+parent container — a view's children sit in view coordinates, a
+subview's children in subview coordinates (Toothy's audio drawer holds
+its sliders at 0,0 within the drawer). Views are fixed-size unless
+`resizable`; a view without `width`/`height` is the size of its
+background image.
 
 ### 2. What a real corpus contains
 
