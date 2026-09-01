@@ -302,7 +302,8 @@ pub struct App {
     /// The Premium notice has been shown for this sign-in.
     premium_notice_shown: bool,
     /// The context the interface just started, shown as playing until
-    /// Spotify's own state says the same thing.
+    /// Spotify's own state says the same thing. An empty URI means a plain
+    /// track list, whose lack of a context must also hide stale state.
     assumed_context: Option<AssumedContext>,
     last_now_playing_uri: Option<String>,
     pub playlist_busy: bool,
@@ -695,7 +696,7 @@ impl App {
             // names another one and something is believed to be playing.
             let contradicted = remote.as_deref().is_some_and(|uri| uri != assumed.uri);
             if held || (!contradicted && self.believed_playing()) {
-                return Some(assumed.uri.clone());
+                return (!assumed.uri.is_empty()).then(|| assumed.uri.clone());
             }
         }
         remote
@@ -3833,14 +3834,14 @@ impl App {
         self.set_play_pending(keys);
         if let Some(context) = request.context_uri.clone() {
             self.note_recent_context(&context);
-            // Light the page and the sidebar up at once; Spotify's own
-            // state takes a poll or two to say the same thing.
-            self.assumed_context = Some(AssumedContext {
-                uri: context,
-                shuffle: shuffle.then_some(true),
-                at: Instant::now(),
-            });
         }
+        // Light a context up at once, or clear the previous one's light for
+        // plain tracks. Spotify's own state takes a poll or two to catch up.
+        self.assumed_context = Some(AssumedContext {
+            uri: request.context_uri.clone().unwrap_or_default(),
+            shuffle: shuffle.then_some(true),
+            at: Instant::now(),
+        });
         match self.target() {
             Target::Local if !self.local.connected => {
                 // The engine's session dropped (a sleep, a network change)
@@ -5428,6 +5429,41 @@ fn cap_uris(uris: Vec<String>, index: u32) -> (Vec<String>, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A song started outside a playlist must turn off the playlist's
+    /// sidebar light at once, even while Spotify still reports the old
+    /// context from before the click.
+    #[test]
+    fn a_plain_song_clears_the_sidebar_context() {
+        let ctx = egui::Context::default();
+        let mut app = headless_app();
+        app.assumed_context = Some(AssumedContext {
+            uri: "spotify:playlist:sidebar".into(),
+            shuffle: None,
+            at: Instant::now(),
+        });
+        app.remote = Some(RemoteSnapshot {
+            state: PlaybackState {
+                context: Some(crate::api::models::Context {
+                    uri: "spotify:playlist:sidebar".into(),
+                    ..Default::default()
+                }),
+                is_playing: true,
+                ..Default::default()
+            },
+            received_at: Instant::now(),
+        });
+
+        app.apply(
+            Action::PlayUris {
+                uris: vec!["spotify:track:standalone".into()],
+                index: 0,
+            },
+            &ctx,
+        );
+
+        assert_eq!(app.playing_context_uri(), None);
+    }
 
     #[test]
     fn volume_conversions_round_trip() {
