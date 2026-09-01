@@ -6,6 +6,9 @@ use fastpotify::{app, backend, paths, settings, single_instance, util};
 
 use clap::Parser;
 
+#[cfg(windows)]
+mod windows_caption;
+
 /// A fast, native Spotify client.
 #[derive(Debug, Parser)]
 #[command(name = "fastpotify", version, about)]
@@ -371,6 +374,8 @@ fn main() -> eframe::Result<()> {
             let guard = slot.lock().unwrap_or_else(|p| p.into_inner());
             MiniWindow::wanted(guard.as_ref().expect("application state present"))
         };
+        #[cfg(windows)]
+        let has_native_caption = mini.is_none();
         #[cfg(feature = "demo")]
         let options = native_options(shot.is_some() && mini.is_none(), mini);
         #[cfg(not(feature = "demo"))]
@@ -398,6 +403,10 @@ fn main() -> eframe::Result<()> {
                 Ok(Box::new(Shell {
                     app: Some(app),
                     slot: std::sync::Arc::clone(&creator_slot),
+                    #[cfg(windows)]
+                    caption: has_native_caption
+                        .then(|| windows_caption::Caption::new(cc))
+                        .flatten(),
                     #[cfg(feature = "demo")]
                     shot: creator_shot.clone(),
                 }))
@@ -585,6 +594,9 @@ fn native_options(fullscreen: bool, mini: Option<MiniWindow>) -> eframe::NativeO
 struct Shell {
     app: Option<app::App>,
     slot: std::sync::Arc<std::sync::Mutex<Option<app::App>>>,
+    /// The standard Windows frame, colored to continue the app surface.
+    #[cfg(windows)]
+    caption: Option<windows_caption::Caption>,
     /// A pending `--demo-shot` capture, if this is a screenshot run.
     #[cfg(feature = "demo")]
     shot: Option<Shot>,
@@ -718,6 +730,10 @@ impl eframe::App for Shell {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         if let Some(app) = self.app.as_mut() {
             app.frame_ui(ui);
+            #[cfg(windows)]
+            if let Some(caption) = &mut self.caption {
+                caption.apply(app.palette);
+            }
         }
     }
 

@@ -31,6 +31,10 @@ directories = "6"
 eframe = { version = "0.36", default-features = false, features = ["glow", "default_fonts", "links", "wayland", "x11", "persistence"] }
 egui = "0.36"
 egui_extras = { version = "0.36", features = ["image", "svg"] }
+# eframe exposes its native window through this shared handle type. Fastpotify
+# uses it to keep the Windows caption in sync with the app palette; MilkDrop
+# uses the same crate for its child window.
+raw-window-handle = "0.6"
 # Reading what a system font covers, so the app can borrow a face for a script
 # Inter cannot draw. skrifa is the parser epaint already rasterizes with, and
 # the version has to track epaint's or the binary compiles two copies of it;
@@ -58,7 +62,6 @@ projectm-sys = { version = "1.2.2", default-features = false, features = ["stati
 winit = { version = "0.30", optional = true }
 glutin = { version = "0.32", optional = true }
 glutin-winit = { version = "0.5", optional = true }
-raw-window-handle = { version = "0.6", optional = true }
 # Spotify playback and Connect. rustls everywhere so the client links one TLS
 # stack and builds without OpenSSL on every platform.
 #
@@ -120,7 +123,7 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["std
 
 [target.'cfg(windows)'.dependencies]
 # A hidden window for the media controls to belong to, and message loops.
-windows-sys = { version = "0.60", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_System_Com", "Win32_System_LibraryLoader", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.60", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_System_Com", "Win32_System_LibraryLoader", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 ksni = { version = "0.3", features = ["blocking"] }
@@ -138,7 +141,7 @@ demo = []
 # MilkDrop, through libprojectM: a C++ library that CMake builds into the
 # binary at compile time, so building needs cmake, a C++ compiler, and
 # libclang. `--no-default-features` leaves it out.
-milkdrop = ["dep:projectm-sys", "dep:winit", "dep:glutin", "dep:glutin-winit", "dep:raw-window-handle"]
+milkdrop = ["dep:projectm-sys", "dep:winit", "dep:glutin", "dep:glutin-winit"]
 
 [profile.release]
 lto = "thin"
