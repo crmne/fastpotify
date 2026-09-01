@@ -845,7 +845,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             &palette,
             "Play history",
             &format!(
-                "Spotify is never told what plays here, so Recently played keeps its own list, in {}. It is never sent anywhere.",
+                "Spotify is never told what plays here, so the Recent tab keeps its own list, in {}. It is never sent anywhere.",
                 app.dirs.history_file().display()
             ),
             |ui| {

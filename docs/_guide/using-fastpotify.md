@@ -111,7 +111,7 @@ menu starts Spotify's station for it and opens the queue, which is
 where the station lives. The full set of rules is in
 [The Queue's Rules](/queue/).
 
-### Recently played
+### Recent
 
 The panel's second tab lists what you have listened to, newest first.
 

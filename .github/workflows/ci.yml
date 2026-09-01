@@ -110,9 +110,22 @@ jobs:
           "--- $vcpkg ---"
           if (Test-Path $vcpkg) { Get-ChildItem $vcpkg -Filter *.lib | Select-Object -ExpandProperty Name }
           else { "missing" }
-          "--- projectm-sys build output ---"
-          Get-ChildItem target -Recurse -Filter 'projectM-4*.lib' -ErrorAction SilentlyContinue |
+          "--- any projectM library built ---"
+          Get-ChildItem target -Recurse -Filter 'projectM-4*.*' -ErrorAction SilentlyContinue |
             Select-Object -ExpandProperty FullName
+          # Cargo keeps what a build script printed, so its reasoning is
+          # readable even when it succeeded and said nothing.
+          foreach ($out in Get-ChildItem target -Recurse -Filter 'output' -ErrorAction SilentlyContinue |
+                     Where-Object { $_.DirectoryName -match 'projectm-sys' }) {
+            "--- $($out.FullName) ---"
+            Get-Content $out.FullName
+          }
+          "--- what CMake installed ---"
+          foreach ($dir in Get-ChildItem target -Recurse -Directory -Filter 'out' -ErrorAction SilentlyContinue |
+                     Where-Object { $_.FullName -match 'projectm-sys' }) {
+            Get-ChildItem $dir.FullName -Recurse -Depth 3 -ErrorAction SilentlyContinue |
+              Select-Object -ExpandProperty FullName
+          }
 
   docs:
     name: docs

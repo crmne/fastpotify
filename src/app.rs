@@ -226,7 +226,7 @@ pub struct App {
     /// down once it has really been listened to rather than skipped past.
     listening: Option<Listening>,
     pub recents: crate::model::CursorList<crate::api::models::PlayHistory>,
-    /// The Recently played tab's rows: what was played here and what
+    /// The Recent tab's rows: what was played here and what
     /// Spotify knows of the other devices, as one list. Rebuilt when
     /// either side changes rather than every frame.
     pub recents_view: Vec<crate::api::models::PlayHistory>,
@@ -3814,7 +3814,7 @@ impl App {
         }
     }
 
-    /// Puts the two histories together for the Recently played tab.
+    /// Puts the two histories together for the Recent tab.
     ///
     /// Spotify is never told about a play made here, so what it knows and
     /// what this app knows are two halves of the same list rather than

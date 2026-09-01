@@ -21,7 +21,7 @@ fn blend(from: egui::Color32, to: egui::Color32, t: f32) -> egui::Color32 {
 pub fn side_panel(app: &mut App, ui: &mut egui::Ui, workspace_reserve: f32) {
     let palette = app.palette;
     let max_width = (ui.available_width() - workspace_reserve).clamp(240.0, 640.0);
-    let min_width = 280.0_f32.min(max_width);
+    let min_width = theme::SIDE_PANEL_MIN_WIDTH.min(max_width);
     let width_constrained = app.settings.lyrics_width > max_width;
     let panel = egui::Panel::right("lyrics-panel")
         .resizable(true)

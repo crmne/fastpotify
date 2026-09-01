@@ -30,7 +30,7 @@ pub fn page(app: &mut App, ui: &mut egui::Ui) {
 pub fn side_panel(app: &mut App, ui: &mut egui::Ui, workspace_reserve: f32) {
     let palette = app.palette;
     let max_width = (ui.available_width() - workspace_reserve).clamp(240.0, 560.0);
-    let min_width = 280.0_f32.min(max_width);
+    let min_width = theme::SIDE_PANEL_MIN_WIDTH.min(max_width);
     let width_constrained = app.settings.queue_width > max_width;
     let panel = egui::Panel::right("queue-panel")
         .resizable(true)
@@ -47,9 +47,8 @@ pub fn side_panel(app: &mut App, ui: &mut egui::Ui, workspace_reserve: f32) {
         // (`shrink_left`; left to itself, `Sides` lets both grow and the
         // problem comes back). Laid out as an ordinary row, the chips
         // claim the whole width for their own wrapping and the buttons
-        // come down on top of them, which put the close button through
-        // "Recently played". Squeezed hard enough, the chips wrap onto a
-        // second line, which is a narrow panel rather than a broken one.
+        // come down on top of them, which used to put the close button
+        // through the second chip's name.
         let tab = app.queue_tab;
         let offer_save = tab == QueueTab::Queue && !app.queue_playlist_uris().is_empty();
         let mut picked = None;
@@ -62,10 +61,7 @@ pub fn side_panel(app: &mut App, ui: &mut egui::Ui, workspace_reserve: f32) {
                 picked = widgets::chips(
                     ui,
                     &palette,
-                    &[
-                        (QueueTab::Queue, "Queue"),
-                        (QueueTab::Recents, "Recently played"),
-                    ],
+                    &[(QueueTab::Queue, "Queue"), (QueueTab::Recents, "Recent")],
                     tab,
                 );
             },

@@ -102,6 +102,10 @@ pub const COMPACT_ROW_HEIGHT: f32 = 48.0;
 /// The compact track list: one line, no cover.
 pub const THIN_ROW_HEIGHT: f32 = 36.0;
 pub const PLAYER_BAR_HEIGHT: f32 = 88.0;
+/// The narrowest either right-hand panel goes. The queue and the lyrics
+/// take the same edge and swap places there, so a width that suits one
+/// has to suit the other, or the window would jump on the swap.
+pub const SIDE_PANEL_MIN_WIDTH: f32 = 280.0;
 pub const TOP_BAR_HEIGHT: f32 = 56.0;
 
 /// macOS hides the titlebar and draws the window content all the way to the

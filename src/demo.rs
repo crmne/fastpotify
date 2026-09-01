@@ -1108,6 +1108,84 @@ mod tests {
         app.backend.shutdown();
     }
 
+    /// Rule: at its narrowest the queue panel still puts its header on
+    /// one line. The chips used to wrap under the buttons, and then,
+    /// once the buttons were given their room first, onto a second row,
+    /// which is a lot of panel spent on saying what two words already
+    /// said.
+    #[test]
+    fn the_narrowest_panel_keeps_its_header_on_one_row() {
+        let root = std::env::temp_dir().join(format!(
+            "fastpotify-queue-header-test-{}",
+            std::process::id()
+        ));
+        let dirs = AppDirs {
+            config: root.join("config"),
+            state: root.join("state"),
+            cache: root.join("cache"),
+        };
+        let ctx = egui::Context::default();
+        let waker = crate::backend::Waker::default();
+        waker.attach(&ctx);
+        let mut app = App::new(
+            &waker,
+            dirs,
+            Settings::default(),
+            AppOptions {
+                media_controls: false,
+                tray: false,
+            },
+        );
+        app.attach(&ctx);
+        populate(&mut app);
+        app.show_queue_panel = true;
+        app.settings.queue_width = crate::theme::SIDE_PANEL_MIN_WIDTH;
+
+        // Where each piece of text was actually drawn.
+        let mut placed: Vec<(String, f32)> = Vec::new();
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1280.0, 800.0),
+            )),
+            ..Default::default()
+        };
+        // Twice: the panel takes its width from the first frame.
+        for _ in 0..2 {
+            placed.clear();
+            let mut output = ctx.run_ui(input.clone(), |ui| app.frame_ui(ui));
+            output.textures_delta.clear();
+            fn walk(shape: &egui::epaint::Shape, placed: &mut Vec<(String, f32)>) {
+                match shape {
+                    egui::epaint::Shape::Text(text) => {
+                        placed.push((text.galley.job.text.clone(), text.pos.y))
+                    }
+                    egui::epaint::Shape::Vec(shapes) => {
+                        shapes.iter().for_each(|shape| walk(shape, placed))
+                    }
+                    _ => {}
+                }
+            }
+            for clipped in &output.shapes {
+                walk(&clipped.shape, &mut placed);
+            }
+        }
+        let at = |label: &str| -> f32 {
+            placed
+                .iter()
+                .find(|(text, _)| text == label)
+                .unwrap_or_else(|| panic!("{label} was never drawn: {placed:?}"))
+                .1
+        };
+        let (queue, recents) = (at("Queue"), at("Recent"));
+        assert!(
+            (queue - recents).abs() < 1.0,
+            "both chips sit on one line at {} wide: Queue at {queue}, Recent at {recents}",
+            crate::theme::SIDE_PANEL_MIN_WIDTH
+        );
+        app.backend.shutdown();
+    }
+
     /// Every page, panel, and dialog lays out without panicking.
     #[test]
     fn every_surface_renders_headless() {
