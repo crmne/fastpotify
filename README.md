@@ -89,6 +89,29 @@ On macOS, with [Homebrew](https://brew.sh):
 brew install --cask crmne/tap/fastpotify
 ```
 
+With [Nix](https://nixos.org), from this repository's flake:
+
+```sh
+# try it without installing
+nix run github:crmne/fastpotify
+
+# or install it into your profile
+nix profile install github:crmne/fastpotify
+```
+
+On NixOS, a module installs it system-wide:
+
+```nix
+# flake.nix
+inputs.fastpotify.url = "github:crmne/fastpotify";
+
+# imports
+imports = [ inputs.fastpotify.nixosModules.default ];
+
+# configuration
+programs.fastpotify.enable = true;
+```
+
 Everywhere else, build the single binary with Rust 1.95 or newer:
 
 ```bash

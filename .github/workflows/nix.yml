@@ -1,0 +1,44 @@
+name: nix
+
+on:
+  push:
+    branches: [main]
+    paths: [Cargo.toml, Cargo.lock, rust-toolchain.toml, src/**, build.rs, packaging/**, flake.nix, flake.lock, .github/workflows/nix.yml]
+  pull_request:
+    paths: [Cargo.toml, Cargo.lock, rust-toolchain.toml, src/**, build.rs, packaging/**, flake.nix, flake.lock, .github/workflows/nix.yml]
+  schedule:
+    # Weekly, so an updated nixpkgs that breaks the flake is caught
+    # even when nothing in the repository changed.
+    - cron: "0 3 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  nix-build:
+    name: nix build (${{ matrix.system }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        system: [x86_64-linux, aarch64-linux, aarch64-darwin]
+        include:
+          - system: x86_64-linux
+            runner: ubuntu-24.04
+          - system: aarch64-linux
+            runner: ubuntu-24.04-arm
+          - system: aarch64-darwin
+            runner: macos-15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: cachix/install-nix-action@v31
+      # Eval is cheap and fails fast; do it before the long build.
+      - name: Flake evaluation
+        run: nix flake check --all-systems --no-build
+      - name: Build the package
+        run: nix build .#fastpotify --no-link
+      - name: Smoke test
+        if: matrix.system == 'x86_64-linux'
+        run: ./result/bin/fastpotify --version

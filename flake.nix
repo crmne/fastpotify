@@ -19,9 +19,10 @@
       ...
     }:
     let
+      # x86_64-darwin is gone: nixpkgs 26.11 dropped it, so its
+      # derivations no longer evaluate. Override `systems` if you need it.
       systems = [
         "aarch64-darwin"
-        "x86_64-darwin"
         "aarch64-linux"
         "x86_64-linux"
       ];
@@ -110,6 +111,28 @@
             version = (pkgs.lib.importTOML ./Cargo.toml).package.version;
             src = self;
             cargoLock.lockFile = ./Cargo.lock;
+            # Git dependencies in Cargo.lock need a fixed-output hash per
+            # crate so the vendor directory is reproducible.
+            cargoLock.outputHashes = {
+              "librespot-audio-0.8.0" = "sha256-TkHdN/dugdmK5iWmcvxGhz+0Cynki4/nNpp85F/qF/0=";
+              "librespot-connect-0.8.0" = "sha256-TkHdN/dugdmK5iWmcvxGhz+0Cynki4/nNpp85F/qF/0=";
+              "librespot-core-0.8.0" = "sha256-TkHdN/dugdmK5iWmcvxGhz+0Cynki4/nNpp85F/qF/0=";
+              "librespot-metadata-0.8.0" = "sha256-TkHdN/dugdmK5iWmcvxGhz+0Cynki4/nNpp85F/qF/0=";
+              "librespot-oauth-0.8.0" = "sha256-TkHdN/dugdmK5iWmcvxGhz+0Cynki4/nNpp85F/qF/0=";
+              "librespot-playback-0.8.0" = "sha256-TkHdN/dugdmK5iWmcvxGhz+0Cynki4/nNpp85F/qF/0=";
+              "librespot-protocol-0.8.0" = "sha256-TkHdN/dugdmK5iWmcvxGhz+0Cynki4/nNpp85F/qF/0=";
+              "projectm-sys-1.2.3" = "sha256-sgI6IOCpQUvdc5acQ1wjCM5mhfz2EPZmoeuyNLGB5UI=";
+            };
+
+            # projectm-sys' build.rs links the static library from
+            # $OUT_DIR/lib, but CMake's GNUInstallDirs installs it into
+            # lib64 on x86_64 Linux, so the link step cannot find it.
+            # Force `lib` in the vendored CMakeLists before the build
+            # script runs. (Vendored git crates carry no file checksums.)
+            preBuild = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
+              substituteInPlace "$NIX_BUILD_TOP/cargo-vendor-dir/projectm-sys-1.2.3/libprojectM/CMakeLists.txt" \
+                --replace 'set(PROJECTM_LIB_DIR "''${CMAKE_INSTALL_LIBDIR}" CACHE' 'set(PROJECTM_LIB_DIR "lib" CACHE'
+            '';
 
             nativeBuildInputs =
               with pkgs;
@@ -129,6 +152,8 @@
                   libpulseaudio
                   # libprojectM links OpenGL directly.
                   libGL
+                  # Its vendored glad GLX loader compiles against X11 headers.
+                  libx11
                 ]
               )
               ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isDarwin [ pkgs.apple-sdk ];
@@ -154,6 +179,32 @@
             };
           };
       });
+
+      nixosModules.default =
+        {
+          config,
+          lib,
+          pkgs,
+          ...
+        }:
+        let
+          cfg = config.programs.fastpotify;
+        in
+        {
+          options.programs.fastpotify = {
+            enable = lib.mkEnableOption "fastpotify";
+            package = lib.mkOption {
+              type = lib.types.package;
+              default = self.packages.${pkgs.system}.fastpotify;
+              defaultText = lib.literalExpression "fastpotify.packages.\${pkgs.system}.fastpotify";
+              description = "The fastpotify package to install.";
+            };
+          };
+
+          config = lib.mkIf cfg.enable {
+            environment.systemPackages = [ cfg.package ];
+          };
+        };
 
       formatter = forAllSystems (pkgs: pkgs.nixfmt-tree);
     };
