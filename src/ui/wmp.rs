@@ -18,6 +18,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use egui::{
     Align2, Color32, ColorImage, Context, FontId, Id, Pos2, Rect, Sense, TextureHandle, TextureId,
@@ -1335,13 +1336,47 @@ fn paint_text(
         );
         painter.rect_filled(rect, 0.0, fill_color);
     }
-    painter.text(
-        skin.screen(at.0, at.1) + Vec2::new(x, 0.0),
-        Align2::LEFT_TOP,
-        string,
-        font,
-        color,
-    );
+    let scroll = text
+        .scrolling
+        .as_ref()
+        .filter(|_| width.is_some_and(|w| w < galley.size().x));
+    match scroll {
+        None => {
+            painter.text(
+                skin.screen(at.0, at.1) + Vec2::new(x, 0.0),
+                Align2::LEFT_TOP,
+                string,
+                font,
+                color,
+            );
+        }
+        Some(scrolling) => {
+            // A marquee: the text walks its box and comes around again,
+            // a skin pixel every so many milliseconds, whichever way
+            // the definition asks. Nothing moves while it fits.
+            let step = (scrolling.amount.max(1) as f32) * skin.unit;
+            let delay_ms = scrolling.delay_ms.max(1) as f64;
+            let gap = width.unwrap_or(0.0) / 3.0;
+            let span = galley.size().x + gap;
+            let time = skin.ui.ctx().input(|input| input.time);
+            let walked = (time.max(0.0) * 1000.0 / delay_ms) * f64::from(step.max(0.001));
+            let offset = (walked % f64::from(span.max(1.0))) as f32;
+            let shift = match scrolling.direction {
+                ir::ScrollDirection::Left => -offset,
+                ir::ScrollDirection::Right => offset - span,
+            };
+            skin.ui
+                .ctx()
+                .request_repaint_after(Duration::from_millis(scrolling.delay_ms.max(10) as u64));
+            for at_x in [shift, shift + span] {
+                painter.galley(
+                    skin.screen(at.0, at.1) + Vec2::new(at_x, 0.0),
+                    galley.clone(),
+                    color,
+                );
+            }
+        }
+    }
 }
 
 /// The action a control's definition asks for. Handlers the skin has no
