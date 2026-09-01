@@ -1856,6 +1856,35 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    /// A request in flight does not make typed text permanent: one second
+    /// without another key always ends the type-ahead.
+    #[test]
+    fn typeahead_expires_while_initial_rows_are_still_loading() {
+        let (ctx, mut app, root) = playlist_app("typeahead-loading-expiry", typeahead_settings());
+        let items = {
+            let page = app.playlist_pages.get_mut("pl1").unwrap();
+            page.items.loading = true;
+            page.items.next_offset = Some(0);
+            page.items.revision = page.items.revision.wrapping_add(1);
+            std::mem::take(&mut page.items.items)
+        };
+        type_text(&ctx, &mut app, "rose");
+        std::thread::sleep(std::time::Duration::from_millis(1_050));
+        frame(&ctx, &mut app);
+        {
+            let page = app.playlist_pages.get_mut("pl1").unwrap();
+            page.items.items = items;
+            page.items.loading = false;
+            page.items.next_offset = None;
+            page.items.revision = page.items.revision.wrapping_add(1);
+        }
+        frame(&ctx, &mut app);
+        press(&ctx, &mut app, egui::Key::Enter);
+        assert!(!app.play_pending("spotify:track:trk0"));
+        app.backend.shutdown();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     /// A failed next page waits for the visible Retry control instead of
     /// being requested again every frame by an unmatched query.
     #[test]

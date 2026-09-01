@@ -392,7 +392,6 @@ fn typeahead_input(
             && search.has_needle()
             && search.row.is_none()
             && (loading || (!error && can_load_more));
-        search.set_waiting_for_results(waits_for_more, now);
         if waits_for_more && !loading {
             app.actions.push(Action::LoadMore(page.clone()));
         }

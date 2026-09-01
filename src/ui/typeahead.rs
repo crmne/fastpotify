@@ -206,12 +206,6 @@ pub struct Search {
     pub row: Option<usize>,
     /// Whether letters may match anywhere in a title, from the setting.
     loose: bool,
-    /// An unmatched query is waiting for another page. It does not expire
-    /// while the request is in flight.
-    waiting_for_results: bool,
-    /// IME preedit text is still being composed. The committed query must
-    /// not disappear while the candidate window is open.
-    ime_composing: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -238,23 +232,12 @@ impl Search {
         !normalize_typed(&self.buffer).is_empty()
     }
 
-    /// Starts or finishes a wait for another page. Once results arrive,
-    /// the ordinary timeout starts from their arrival rather than from the
-    /// keystroke that requested them.
-    pub fn set_waiting_for_results(&mut self, waiting: bool, now: Instant) {
-        if self.waiting_for_results && !waiting && !self.buffer.is_empty() {
-            self.last_keystroke = Some(now);
-        }
-        self.waiting_for_results = waiting;
-    }
-
-    /// Drops the search after a moment of silence, at the start of a frame.
+    /// Drops the search after one second without typing, at the start of a
+    /// frame.
     pub fn expire(&mut self, now: Instant) {
-        if !self.waiting_for_results
-            && !self.ime_composing
-            && let Some(elapsed) = self
-                .last_keystroke
-                .and_then(|keystroke| now.checked_duration_since(keystroke))
+        if let Some(elapsed) = self
+            .last_keystroke
+            .and_then(|keystroke| now.checked_duration_since(keystroke))
             && elapsed >= TIMEOUT
         {
             *self = Self::default();
@@ -263,9 +246,6 @@ impl Search {
 
     /// Wakes the otherwise idle UI exactly when this search should expire.
     pub fn schedule_expiry(&self, ctx: &Context, now: Instant) {
-        if self.waiting_for_results || self.ime_composing {
-            return;
-        }
         if let Some(keystroke) = self.last_keystroke {
             let elapsed = now.checked_duration_since(keystroke).unwrap_or_default();
             ctx.request_repaint_after(TIMEOUT.saturating_sub(elapsed));
@@ -300,13 +280,11 @@ impl Search {
         {
             self.row = Some(found);
             self.last_keystroke = Some(Instant::now());
-            self.waiting_for_results = false;
             return;
         }
 
         self.buffer = candidate;
         self.last_keystroke = Some(Instant::now());
-        self.waiting_for_results = false;
 
         // Punctuation and spaces stay visible in the hint but do not move a
         // match when they add nothing to the normalized query.
@@ -334,7 +312,6 @@ impl Search {
         let needle = normalize_typed(&self.buffer);
         self.row = find(titles, &needle, 0, false, self.loose);
         self.last_keystroke = Some(Instant::now());
-        self.waiting_for_results = false;
     }
 
     /// Escape: end the search at once.
@@ -368,12 +345,8 @@ impl Search {
         for event in events {
             match event {
                 Event::Text(text) | Event::Paste(text) => self.type_text(text, titles),
-                Event::Ime(ImeEvent::Commit(text)) => {
-                    self.ime_composing = false;
-                    self.type_text(text, titles);
-                }
+                Event::Ime(ImeEvent::Commit(text)) => self.type_text(text, titles),
                 Event::Ime(ImeEvent::Preedit { text, .. }) => {
-                    self.ime_composing = !text.is_empty();
                     if !text.is_empty() || !self.buffer.is_empty() {
                         self.last_keystroke = Some(Instant::now());
                     }
@@ -1032,7 +1005,7 @@ mod tests {
     }
 
     #[test]
-    fn ime_preedit_keeps_an_existing_query_alive() {
+    fn ime_preedit_restarts_the_one_second_timeout() {
         let titles = titles();
         let mut search = Search::default();
         search.type_char('b', &titles);
@@ -1044,12 +1017,9 @@ mod tests {
             &titles,
         );
         let composed_at = Instant::now();
-        search.expire(composed_at + TIMEOUT * 10);
+        search.expire(composed_at + TIMEOUT / 2);
         assert_eq!(search.buffer(), "b");
-        search.handle_events(&[Event::Ime(ImeEvent::Commit("o".into()))], &titles);
-        assert_eq!(search.buffer(), "bo");
-        let committed_at = Instant::now();
-        search.expire(committed_at + TIMEOUT + Duration::from_millis(1));
+        search.expire(composed_at + TIMEOUT + Duration::from_millis(1));
         assert!(search.buffer().is_empty());
     }
 
@@ -1116,19 +1086,13 @@ mod tests {
     }
 
     #[test]
-    fn an_unmatched_search_waits_for_a_loading_page() {
+    fn an_unmatched_search_expires_while_another_page_loads() {
         let mut search = Search::default();
         search.type_char('z', &[]);
-        let waiting_at = Instant::now();
-        search.set_waiting_for_results(true, waiting_at);
-        search.expire(waiting_at + TIMEOUT * 10);
+        let typed_at = Instant::now();
+        search.expire(typed_at + TIMEOUT / 2);
         assert_eq!(search.buffer(), "z");
-
-        let arrived_at = waiting_at + TIMEOUT * 10;
-        search.set_waiting_for_results(false, arrived_at);
-        search.expire(arrived_at + TIMEOUT / 2);
-        assert_eq!(search.buffer(), "z");
-        search.expire(arrived_at + TIMEOUT + Duration::from_millis(1));
+        search.expire(typed_at + TIMEOUT + Duration::from_millis(1));
         assert!(search.buffer().is_empty());
     }
 
