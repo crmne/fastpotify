@@ -634,6 +634,12 @@ pub enum Action {
     SetSkinScale(u8),
     ToggleWinampOnTop,
     OpenSkinsFolder,
+    /// Open or close the Windows Media Player skin window.
+    ToggleWmpWindow,
+    /// Wear a WMP skin from the skins folder, or none.
+    SetWmpSkin(Option<String>),
+    /// Screen pixels per skin pixel in the WMP skin window.
+    SetWmpScale(u8),
     /// Bars, then the scope, then nothing, in the mini player's display.
     CycleVisualiser,
     /// One of those, by name.

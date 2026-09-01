@@ -22,6 +22,7 @@ pub mod xml;
 
 use std::path::Path;
 
+use egui;
 use thiserror::Error;
 
 pub use assets::Assets;
@@ -57,6 +58,149 @@ pub struct SkinDocument {
     /// never read, let alone run.
     pub scripts: Vec<String>,
     pub assets: Assets,
+}
+
+/// A skin file in the skins folder: a `.wmz` archive.
+pub fn is_skin_file(path: &std::path::Path) -> bool {
+    path.extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("wmz"))
+}
+
+/// A skin's name without the archive extension, for showing.
+pub fn label(name: &str) -> &str {
+    name.rsplit_once('.')
+        .filter(|(_, extension)| extension.eq_ignore_ascii_case("wmz"))
+        .map_or(name, |(stem, _)| stem)
+}
+
+/// A skin listed in the skins folder.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SkinChoice {
+    /// The file name, which is what the settings store.
+    pub name: String,
+    pub path: std::path::PathBuf,
+}
+
+impl SkinChoice {
+    /// The name without its extension, for showing.
+    pub fn label(&self) -> &str {
+        label(&self.name)
+    }
+}
+
+/// Lists the skins folder's `.wmz` files, by name.
+pub fn list_skins(folder: &std::path::Path) -> Vec<SkinChoice> {
+    let Ok(entries) = std::fs::read_dir(folder) else {
+        return Vec::new();
+    };
+    let mut skins: Vec<SkinChoice> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().into_owned();
+            is_skin_file(&path).then_some(SkinChoice { name, path })
+        })
+        .collect();
+    skins.sort_by_key(|skin| skin.name.to_lowercase());
+    skins
+}
+
+/// What a loading thread reports back.
+pub struct Loaded {
+    /// The name the settings hold for this skin.
+    pub name: String,
+    pub result: Result<SkinDocument, WmpError>,
+}
+
+/// The skin the WMP window wears, read on another thread the way the
+/// Winamp skin is.
+#[derive(Default)]
+pub struct WmpState {
+    /// The skin on screen, with its drawing state.
+    pub skin: Option<WmpSkin>,
+    /// The setting the worn skin answers to.
+    pub worn: Option<String>,
+    loading: Option<std::sync::mpsc::Receiver<Loaded>>,
+    /// The skins folder's `.wmz` files, as last listed.
+    pub choices: Vec<SkinChoice>,
+    choices_listed: Option<std::time::Instant>,
+}
+
+/// A worn skin: the definition it draws from, and the caches it draws
+/// with. The textures belong to a window's context and go with it.
+pub struct WmpSkin {
+    pub document: std::sync::Arc<SkinDocument>,
+    pub render: crate::ui::wmp::Render,
+}
+
+impl WmpState {
+    /// Puts a skin on. Textures are remade from it at the next frame.
+    pub fn wear(&mut self, name: Option<String>, skin: WmpSkin) {
+        self.skin = Some(skin);
+        self.worn = name;
+    }
+
+    pub fn is_loading(&self) -> bool {
+        self.loading.is_some()
+    }
+
+    /// Starts reading a skin from the skins folder, on another thread.
+    pub fn load(&mut self, name: String, folder: &std::path::Path, ctx: &egui::Context) {
+        let path = folder.join(&name);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let ctx = ctx.clone();
+        let spawned = std::thread::Builder::new()
+            .name("wmp-skin-loader".into())
+            .spawn(move || {
+                let result = SkinDocument::load(&path);
+                let _ = sender.send(Loaded { name, result });
+                ctx.request_repaint();
+            });
+        if let Err(error) = spawned {
+            log::warn!("could not start reading the WMP skin: {error}");
+        }
+        self.loading = Some(receiver);
+    }
+
+    /// What a loading thread has finished with, if anything.
+    pub fn poll(&mut self) -> Option<Loaded> {
+        let receiver = self.loading.as_ref()?;
+        match receiver.try_recv() {
+            Ok(loaded) => {
+                self.loading = None;
+                Some(loaded)
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => None,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.loading = None;
+                None
+            }
+        }
+    }
+
+    /// Lists the folder again when the last listing is stale.
+    pub fn refresh_choices(&mut self, folder: &std::path::Path) {
+        if self
+            .choices_listed
+            .is_none_or(|at| at.elapsed() > std::time::Duration::from_secs(5))
+        {
+            self.list_choices(folder);
+        }
+    }
+
+    /// Lists the folder: the `.wmz` files in it.
+    pub fn list_choices(&mut self, folder: &std::path::Path) {
+        self.choices_listed = Some(std::time::Instant::now());
+        self.choices = list_skins(folder);
+    }
+
+    /// The textures are gone with a window's context; the next frame
+    /// makes them again.
+    pub fn forget_textures(&mut self) {
+        if let Some(skin) = self.skin.as_mut() {
+            skin.render.forget_textures();
+        }
+    }
 }
 
 impl SkinDocument {

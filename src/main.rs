@@ -522,13 +522,12 @@ struct MiniWindow {
 impl MiniWindow {
     fn wanted(app: &app::App) -> Option<Self> {
         // A WMP skin is the window: transparent and chromeless, sized
-        // to the view, wherever the skin sits. The feature, not `test`:
-        // the field lives in the library, and a test build of this file
-        // links the library without its own tests.
-        #[cfg(feature = "demo")]
-        if let Some((document, _)) = app.wmp_preview.as_ref() {
+        // to the view, wherever the skin sits.
+        if app.settings.wmp_window
+            && let Some(skin) = app.wmp.skin.as_ref()
+        {
             return Some(Self {
-                size: fastpotify::ui::wmp::initial_size(document, &app.settings),
+                size: fastpotify::ui::wmp::initial_size(&skin.document, &app.settings),
                 position: None,
                 on_top: false,
             });
@@ -748,11 +747,7 @@ impl eframe::App for Shell {
     /// out; the big window paints itself over eframe's own ground.
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
         let skinned = self.app.as_ref().is_some_and(|app| {
-            #[cfg(feature = "demo")]
-            let wmp = app.wmp_preview.is_some();
-            #[cfg(not(feature = "demo"))]
-            let wmp = false;
-            app.settings.winamp_window || wmp
+            app.settings.winamp_window || (app.settings.wmp_window && app.wmp.skin.is_some())
         });
         if skinned {
             [0.0; 4]

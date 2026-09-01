@@ -261,14 +261,12 @@ pub fn window_size(document: &SkinDocument, unit: f32) -> Vec2 {
 
 /// A first guess at the window's size, before the display's scale is
 /// known; the first frame corrects it.
-#[cfg(any(test, feature = "demo"))]
 pub fn initial_size(document: &SkinDocument, settings: &crate::settings::Settings) -> Vec2 {
     window_size(document, device_scale(settings, 1.0) as f32)
 }
 
 /// Screen pixels per skin pixel: the setting, or else double size on
 /// this display, the size people remember skins at.
-#[cfg(any(test, feature = "demo"))]
 pub fn device_scale(settings: &crate::settings::Settings, pixels_per_point: f32) -> u32 {
     let chosen = settings
         .wmp_scale
@@ -278,7 +276,6 @@ pub fn device_scale(settings: &crate::settings::Settings, pixels_per_point: f32)
 }
 
 /// Logical points per skin pixel: a whole number of screen pixels.
-#[cfg(any(test, feature = "demo"))]
 fn unit(settings: &crate::settings::Settings, ctx: &egui::Context) -> f32 {
     device_scale(settings, ctx.pixels_per_point()) as f32 / ctx.pixels_per_point()
 }
@@ -286,7 +283,6 @@ fn unit(settings: &crate::settings::Settings, ctx: &egui::Context) -> f32 {
 /// Keeps the window exactly the skin's size. The size it was made with
 /// is a guess, since the display's scale is only known once the window
 /// exists.
-#[cfg(any(test, feature = "demo"))]
 fn fit_window(ctx: &egui::Context, document: &SkinDocument, unit: f32) {
     let wanted = window_size(document, unit);
     let current = ctx.input(|input| {
@@ -317,8 +313,8 @@ fn fit_window(ctx: &egui::Context, document: &SkinDocument, unit: f32) {
 /// moves the window — the handle is registered before any control, so
 /// the controls keep the pointer that is theirs. Escape quits, since a
 /// window without chrome has no close button to offer.
-#[cfg(any(test, feature = "demo"))]
 pub fn show_window(app: &mut crate::app::App, ui: &mut Ui) {
+    use crate::model::Action;
     let media = app.now_playing();
     let ctx = ui.ctx().clone();
     let scale = unit(&app.settings, &ctx);
@@ -328,9 +324,11 @@ pub fn show_window(app: &mut crate::app::App, ui: &mut Ui) {
         app.settings = settings;
         app.mark_settings_dirty();
     }
-    let Some((document, render)) = app.wmp_preview.as_mut() else {
+    let Some(skin) = app.wmp.skin.as_mut() else {
         return;
     };
+    let document = &skin.document;
+    let render = &mut skin.render;
     fit_window(&ctx, document, scale);
 
     if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
@@ -339,8 +337,19 @@ pub fn show_window(app: &mut crate::app::App, ui: &mut Ui) {
 
     let origin = ui.max_rect().min;
     for action in show(ui, document, render, origin, scale, media.as_ref()) {
-        if let Some(action) = player_action(action, media.as_ref()) {
-            app.actions.push(action);
+        match action {
+            // The window's own verbs: a minimize folds the window, a
+            // close ends the run (a window without chrome has no close
+            // button of its own), and the media-center verb is the
+            // toggle that brings the big window back.
+            SkinAction::Minimize => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
+            SkinAction::Close => app.quit_requested = true,
+            SkinAction::ReturnToMediaCenter => app.actions.push(Action::ToggleWmpWindow),
+            other => {
+                if let Some(action) = player_action(other, media.as_ref()) {
+                    app.actions.push(action);
+                }
+            }
         }
     }
 
@@ -376,7 +385,6 @@ pub fn show_window(app: &mut crate::app::App, ui: &mut Ui) {
 
 /// Command (or Control) with plus and minus steps the skin's scale, the
 /// way the Winamp window is zoomed from its own keys.
-#[cfg(any(test, feature = "demo"))]
 fn zoom_keys(settings: &mut crate::settings::Settings, ctx: &egui::Context) {
     let (zoom_in, zoom_out) = ctx.input(|input| {
         (
@@ -398,9 +406,8 @@ fn zoom_keys(settings: &mut crate::settings::Settings, ctx: &egui::Context) {
     settings.wmp_scale = Some(stepped as u8);
 }
 
-/// A skin's wish as a player action. The window's own verbs — minimize,
-/// close, back to the media center — have no player to ask yet.
-#[cfg(any(test, feature = "demo"))]
+/// A skin's wish as a player action. The window's own verbs are not the
+/// player's to answer, and are carried out by the caller instead.
 fn player_action(action: SkinAction, media: Option<&NowPlaying>) -> Option<crate::model::Action> {
     use crate::model::Action;
     Some(match action {
