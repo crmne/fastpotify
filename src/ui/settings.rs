@@ -316,7 +316,10 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             ui,
             &palette,
             "Keep music playing when the window closes",
-            "Fastpotify hides to the system tray. Quit from the tray menu or with Ctrl+Q.",
+            super::keys::platform_shortcut(
+                "Fastpotify hides to the system tray. Quit from the tray menu or with Ctrl+Q.",
+                "Fastpotify hides to the system tray. Quit from the tray menu or with Cmd+Q.",
+            ),
             |ui| {
                 if widgets::switch(ui, &palette, &mut app.settings.keep_playing_in_background)
                     .changed()
@@ -479,7 +482,10 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             ui,
             &palette,
             "Interface zoom",
-            "Ctrl+Plus and Ctrl+Minus work anywhere; Ctrl+0 resets.",
+            super::keys::platform_shortcut(
+                "Ctrl+Plus and Ctrl+Minus work anywhere; Ctrl+0 resets.",
+                "Cmd+Plus and Cmd+Minus work anywhere; Cmd+0 resets.",
+            ),
             |ui| {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
@@ -511,7 +517,10 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             ui,
             &palette,
             "Mini player",
-            "Fastpotify becomes a small player that wears classic Winamp skins (.wsz files); the logo in the skin, or Ctrl+M, brings this window back. Drop a skin on either window to add it.",
+            super::keys::platform_shortcut(
+                "Fastpotify becomes a small player that wears classic Winamp skins (.wsz files); the logo in the skin, or Ctrl+M, brings this window back. Drop a skin on either window to add it.",
+                "Fastpotify becomes a small player that wears classic Winamp skins (.wsz files); the logo in the skin, or Cmd+Shift+M, brings this window back. Drop a skin on either window to add it.",
+            ),
             |ui| {
                 if theme::pill_button(ui, &palette, "Switch to it", true).clicked() {
                     app.actions.push(Action::ToggleWinampWindow);
@@ -615,7 +624,10 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             ui,
             &palette,
             "MilkDrop window",
-            "The classic Winamp visualiser, drawn by projectM in a window of its own. Open it here, with the vis button in the top bar, with Ctrl+Shift+K, or with the V on the mini player. Its keys are MilkDrop's own; press ? or F1 inside it to see them. It draws the music played on this computer.",
+            super::keys::platform_shortcut(
+                "The classic Winamp visualiser, drawn by projectM in a window of its own. Open it here, with the vis button in the top bar, with Ctrl+Shift+K, or with the V on the mini player. Its keys are MilkDrop's own; press ? or F1 inside it to see them. It draws the music played on this computer.",
+                "The classic Winamp visualiser, drawn by projectM in a window of its own. Open it here, with the vis button in the top bar, with Cmd+Shift+K, or with the V on the mini player. Its keys are MilkDrop's own; press ? or F1 inside it to see them. It draws the music played on this computer.",
+            ),
             |ui| {
                 let mut open = app.settings.milkdrop_open;
                 if widgets::switch(ui, &palette, &mut open).changed() {
@@ -827,6 +839,22 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             "Audio cache",
             &format!("Audio is kept in {}", app.dirs.audio_cache_dir().display()),
             |_| {},
+        );
+        widgets::setting_row(
+            ui,
+            &palette,
+            "Play history",
+            &format!(
+                "Spotify is never told what plays here, so Recently played keeps its own list, in {}. It is never sent anywhere.",
+                app.dirs.history_file().display()
+            ),
+            |ui| {
+                if theme::soft_button(ui, &palette, Some(Icon::Trash), "Clear history", false)
+                    .clicked()
+                {
+                    app.actions.push(Action::ClearPlayHistory);
+                }
+            },
         );
         widgets::setting_row(
             ui,

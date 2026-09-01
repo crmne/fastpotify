@@ -58,6 +58,12 @@ impl AppDirs {
         self.state.join("session.json")
     }
 
+    /// What was played here, which Spotify never hears about and so
+    /// cannot tell us later. See [`crate::history`].
+    pub fn history_file(&self) -> PathBuf {
+        self.state.join("history.json")
+    }
+
     pub fn shared_web_token_file(&self) -> PathBuf {
         self.state.join("shared_web_api_token.json")
     }

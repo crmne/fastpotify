@@ -124,6 +124,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, id: &str) {
                                 compact: false,
                                 thin: app.settings.tracklist_compact,
                                 shift: 0.0,
+                                picked: false,
+                                picked_songs: &[],
                             },
                         );
                     }

@@ -450,6 +450,25 @@ pub fn table(app: &mut App, ui: &mut egui::Ui, table: Table<'_>) {
         (row >= 0.0 && row <= entry.visible.len() as f32)
             .then(|| (row.round() as usize).min(entry.visible.len()))
     });
+    // Rows picked out here are picked by their place in what is on
+    // screen, so a sort or a filter that reorders them lets them go
+    // rather than acting on whatever now sits at those numbers. The view
+    // is remembered as the sort, the filter, and how many rows there are;
+    // a change to any of them is a different list.
+    let view = format!("{sort:?}|{needle}|{}", entry.visible.len());
+    app.keep_picked_rows_for(&table.page, &view);
+    let picked: std::collections::BTreeSet<usize> =
+        app.picked_rows(&table.page).cloned().unwrap_or_default();
+    // Names travel with the uris so a queued run shows itself straight
+    // away, before Spotify has answered.
+    let picked_songs: Vec<(String, String)> = picked
+        .iter()
+        .filter_map(|row| entry.visible.get(*row))
+        .filter_map(|index| table.items.get(*index))
+        .map(|(item, _, _)| (item.uri().to_string(), item.name().to_string()))
+        .collect();
+    let rows = entry.visible.len();
+    let mut pick = None;
     widgets::virtual_rows(ui, entry.visible.len(), row_height, |ui, row| {
         let index = entry.visible[row];
         let (item, added_at, added_by) = &table.items[index];
@@ -464,7 +483,7 @@ pub fn table(app: &mut App, ui: &mut egui::Ui, table: Table<'_>) {
             },
             0.12,
         );
-        widgets::track_row(
+        if let Some(asked) = widgets::track_row(
             ui,
             app,
             TrackRow {
@@ -480,9 +499,21 @@ pub fn table(app: &mut App, ui: &mut egui::Ui, table: Table<'_>) {
                 compact: false,
                 thin,
                 shift,
+                picked: picked.contains(&row),
+                picked_songs: &picked_songs,
             },
-        );
+        ) {
+            pick = Some((row, asked));
+        }
     });
+    if let Some((row, asked)) = pick {
+        app.pick_row(&table.page, &view, row, asked, rows);
+    }
+    // Escape lets them go, and so does a click on the empty space under
+    // the last row, which is where anyone reaches to mean "never mind".
+    if !picked.is_empty() && ui.input(|input| input.key_pressed(egui::Key::Escape)) {
+        app.clear_picked_rows();
+    }
     if let Some(slot) = move_slot {
         // A line in the gap the rows opened, so the eye lands where the
         // row will.

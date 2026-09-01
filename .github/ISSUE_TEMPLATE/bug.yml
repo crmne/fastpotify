@@ -16,7 +16,7 @@ body:
     id: version
     attributes:
       label: Fastpotify version and how you installed it
-      placeholder: "0.1.4 from the AUR / the DMG / the Windows installer / Homebrew / FlatPark"
+      placeholder: "0.4.1 from the AUR / the DMG / the Windows installer / Homebrew / the Flatpak bundle"
     validations:
       required: true
   - type: dropdown

@@ -156,11 +156,21 @@ pub struct Tapped {
     inner: Box<dyn Sink>,
     tap: Arc<AudioTap>,
     eq: crate::eq::Processor,
-    /// The volume this sink applies itself, after the tap, so the bars
-    /// show the music and not the knob; undoing an already-applied volume
-    /// cannot work at zero, where the signal is gone. `None` when the
-    /// inner sink applies the volume, also after the tap.
-    apply_volume: Option<Box<dyn VolumeGetter + Send>>,
+    /// The player's volume, read here whoever applies it. It is what the
+    /// ceiling is worked out from: the last chance to hold the signal to
+    /// full scale is after the volume, and this sink is the last place
+    /// that knows what the volume is going to be.
+    volume: Box<dyn VolumeGetter + Send>,
+    /// Whether the volume is applied here, after the tap, so the bars show
+    /// the music and not the knob; undoing an already-applied volume
+    /// cannot work at zero, where the signal is gone. False when the sink
+    /// underneath applies it instead, also after the tap, which lets a
+    /// turn of the knob be heard in sound already queued.
+    applies_volume: bool,
+    /// The one thing in the chain that says "no louder", held here
+    /// because this is the last place that knows what the volume is
+    /// going to be. See [`crate::limiter`].
+    limiter: crate::limiter::Limiter,
     /// The playing track's normalisation factor, reported by the player;
     /// the tap undoes it so the picture shows the music, not the loudness
     /// housekeeping. Winamp's analyser compensated the same way.
@@ -171,7 +181,8 @@ impl Tapped {
     pub fn new(
         inner: Box<dyn Sink>,
         tap: Arc<AudioTap>,
-        apply_volume: Option<Box<dyn VolumeGetter + Send>>,
+        volume: Box<dyn VolumeGetter + Send>,
+        applies_volume: bool,
         eq: crate::eq::SharedEq,
         normalisation: Arc<std::sync::atomic::AtomicU64>,
     ) -> Self {
@@ -179,9 +190,29 @@ impl Tapped {
             inner,
             tap,
             eq: crate::eq::Processor::new(eq),
-            apply_volume,
+            volume,
+            applies_volume,
+            limiter: crate::limiter::Limiter::new(f64::from(SAMPLE_RATE)),
             normalisation,
         }
+    }
+}
+
+/// Where full scale sits in the numbers `Tapped` is about to hand on.
+///
+/// One when the volume has already been multiplied in. When the sink
+/// underneath is going to multiply afterwards, it is the level that lands
+/// on full scale once it has, so a quarter volume leaves room for four
+/// times the signal.
+fn full_scale(volume: f64, applied: bool) -> Option<f64> {
+    if applied {
+        Some(1.0)
+    } else if volume > f64::EPSILON {
+        Some(1.0 / volume)
+    } else {
+        // Multiplied by zero nothing survives, and there is no ceiling
+        // to speak of.
+        None
     }
 }
 
@@ -212,11 +243,14 @@ impl Sink for Tapped {
                     1.0
                 };
                 self.tap.push(&samples, restore);
-                if let Some(volume) = &self.apply_volume {
-                    let attenuation = volume.attenuation_factor();
+                let attenuation = self.volume.attenuation_factor();
+                if self.applies_volume {
                     for sample in &mut samples {
                         *sample *= attenuation;
                     }
+                }
+                if let Some(full_scale) = full_scale(attenuation, self.applies_volume) {
+                    self.limiter.process(&mut samples, full_scale);
                 }
                 AudioPacket::Samples(samples)
             }
@@ -624,5 +658,18 @@ mod tests {
         assert_eq!(scope_shade(7), 0);
         assert_eq!(scope_shade(0), 3);
         assert_eq!(scope_shade(15), 4);
+    }
+
+    /// Rule: full scale is one when the volume is already in, and the
+    /// level that lands on one when the output has yet to apply it.
+    /// Getting this wrong would hold a quiet listener to a quarter of
+    /// what their speaker could have had. The limiting itself is
+    /// [`crate::limiter`]'s, and tested there.
+    #[test]
+    fn full_scale_follows_the_volume_still_to_come() {
+        assert_eq!(full_scale(0.5, true), Some(1.0), "already applied: one");
+        assert_eq!(full_scale(0.25, false), Some(4.0), "a quarter to come");
+        assert_eq!(full_scale(1.0, false), Some(1.0), "full volume to come");
+        assert_eq!(full_scale(0.0, false), None, "silence has no ceiling");
     }
 }

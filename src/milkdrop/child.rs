@@ -252,12 +252,21 @@ impl Child {
     /// from the end of the drawing adds its cost to every wait, which is
     /// what turned a limit of 60 into 50 frames a second.
     fn schedule_next_frame(&mut self) {
+        self.schedule_next_frame_at(Instant::now());
+    }
+
+    /// The same, told what the time is.
+    ///
+    /// The clock comes in rather than being read here so that a test can
+    /// walk it forward by hand. Watching this by sleeping is a test that
+    /// passes on a quiet machine and fails on a busy one, because
+    /// `sleep` promises a floor and not a ceiling.
+    fn schedule_next_frame_at(&mut self, now: Instant) {
         let Some(interval) = self.frame_interval() else {
-            self.next_frame = Instant::now();
+            self.next_frame = now;
             return;
         };
         self.next_frame += interval;
-        let now = Instant::now();
         if self.next_frame <= now {
             // Slower than the limit asks for, or back from a pause: take
             // the rhythm up from here rather than chasing frames whose
@@ -1043,27 +1052,29 @@ mod tests {
         let start = Instant::now();
         child.next_frame = start;
 
-        // Ten frames, each taking a third of an interval to draw.
+        // Ten frames, each taking a third of an interval to draw. The
+        // clock is walked by hand: sleeping for a third of an interval
+        // and expecting to be woken after a third of an interval is a
+        // test that fails on a machine with something else to do.
         for frame in 1..=10 {
-            child.schedule_next_frame();
+            child.schedule_next_frame_at(start + interval * (frame - 1) / 3);
             assert_eq!(
                 child.next_frame,
                 start + interval * frame,
                 "frame {frame} is due on the beat"
             );
-            // The drawing of the next one starts late, as it always does.
-            std::thread::sleep(interval / 3);
         }
 
         // Falling behind for good does not pile up a debt of frames to
         // catch up on: the rhythm picks up from now.
-        child.next_frame = Instant::now() - Duration::from_secs(5);
-        child.schedule_next_frame();
-        assert!(
-            child.next_frame > Instant::now(),
+        let late = start + Duration::from_secs(60);
+        child.next_frame = late - Duration::from_secs(5);
+        child.schedule_next_frame_at(late);
+        assert_eq!(
+            child.next_frame,
+            late + interval,
             "a missed stretch is let go, not chased"
         );
-        assert!(child.next_frame <= Instant::now() + interval);
     }
 
     /// Each corner carries its own thing, and says nothing at all when

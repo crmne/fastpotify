@@ -32,11 +32,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libasound2-dev libpulse-dev libxkbcommon-dev \
             libwayland-dev libgl1-mesa-dev cmake libclang-dev
+      # Only main writes the cache. A pull request reads it and builds on
+      # top; letting every branch save its own copy filled the repository's
+      # ten-gigabyte cache in a few days, and a full cache evicts the entry
+      # the next build wanted.
       - uses: Swatinem/rust-cache@v2
         with:
           # v2: caches from before the projectm-sys fork replay its stale
           # build output instead of compiling the fork.
           prefix-key: v2
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Formatting
         run: cargo fmt --all --check
       - name: Clippy (default features)
@@ -81,6 +86,8 @@ jobs:
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # The demo feature carries the headless render test that lays out every
       # page, panel, and dialog without a display.
       - name: Tests (default features)
@@ -89,6 +96,23 @@ jobs:
         run: cargo test --locked --all-targets --all-features
       - name: Documentation tests
         run: cargo test --locked --all-features --doc
+      # libprojectM has never linked on a Windows runner, and the linker
+      # only ever names the library it wanted, never the ones that are
+      # there. List both folders it draws from, pass or fail, so the next
+      # attempt starts from the layout instead of a guess. Delete once
+      # Windows is green.
+      - name: Where the Windows libraries landed
+        if: always() && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $vcpkg = Join-Path $env:VCPKG_INSTALLATION_ROOT 'installed\x64-windows-static-md\lib'
+          "VCPKG_INSTALLATION_ROOT = $env:VCPKG_INSTALLATION_ROOT"
+          "--- $vcpkg ---"
+          if (Test-Path $vcpkg) { Get-ChildItem $vcpkg -Filter *.lib | Select-Object -ExpandProperty Name }
+          else { "missing" }
+          "--- projectm-sys build output ---"
+          Get-ChildItem target -Recurse -Filter 'projectM-4*.lib' -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty FullName
 
   docs:
     name: docs

@@ -531,7 +531,7 @@ pub struct FollowedArtists {
     pub artists: CursorPage<Artist>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
 pub struct PlayHistory {
     pub track: Track,
     #[serde(default)]

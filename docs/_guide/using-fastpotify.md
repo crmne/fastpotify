@@ -68,6 +68,19 @@ place, or from its menu; while the table is sorted or filtered, rows
 keep their place. Dropping a song on Liked Songs saves it. Playlists
 you follow can be followed and unfollowed.
 
+### Picking out several songs
+
+On a playlist, album, or Liked Songs, click a song once to pick it out.
+Ctrl-click (Cmd-click on macOS) adds another, and shift-click takes
+everything between it and the last one you picked on its own. Right-click
+any of them and the menu acts on the whole set: play them all next, save
+or remove them all, or add them all to a playlist. Escape lets them go,
+and so does clicking a single picked song again.
+
+Picking songs does not play anything: double-click a song, or click its
+number, to play as before. Sorting or filtering the list lets the picked
+songs go, since the rows are no longer the ones you picked.
+
 ## Search
 
 Ctrl+F (or `/`) focuses search from anywhere. Results are grouped into top
@@ -97,6 +110,25 @@ a playlist named after its song. *Go to song radio* in a song's context
 menu starts Spotify's station for it and opens the queue, which is
 where the station lives. The full set of rules is in
 [The Queue's Rules](/queue/).
+
+### Recently played
+
+The panel's second tab lists what you have listened to, newest first.
+
+It comes from two places. Spotify records what its own apps play, so your
+phone and the official desktop client are in the list. It does not record
+what Fastpotify plays, because Spotify offers no way for a client like
+this one to tell it, so Fastpotify keeps its own list of what it played
+and shows both together.
+
+A song is added once you have listened to about half a minute of it, or
+half the song when the song is shorter than that, so skipping through a
+playlist does not fill the list up. Pausing stops the clock, and skipping
+ahead does not count.
+
+That list is a file on your computer, `history.json` beside the other
+settings, and it is never sent anywhere. Settings, Storage says where it
+is and has a **Clear history** button that empties it.
 
 ### Receivers on the local network
 

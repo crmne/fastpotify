@@ -433,7 +433,10 @@ fn full_window(
     if view
         .interact(layout::ABOUT, "about", Sense::click())
         .on_hover_cursor(egui::CursorIcon::PointingHand)
-        .on_hover_text("Back to the big window (Ctrl+M)")
+        .on_hover_text(super::keys::platform_shortcut(
+            "Back to the big window (Ctrl+M)",
+            "Back to the big window (Cmd+Shift+M)",
+        ))
         .clicked()
     {
         app.actions.push(Action::ToggleWinampWindow);
@@ -475,7 +478,10 @@ fn shade_bar(
     menu(egui::Popup::context_menu(&title), view.skin, unit, |ui| {
         options_menu(app, ui, unit);
     });
-    let big_window = "Back to the big window (Ctrl+M)";
+    let big_window = super::keys::platform_shortcut(
+        "Back to the big window (Ctrl+M)",
+        "Back to the big window (Cmd+Shift+M)",
+    );
     if view
         .button(
             layout::OPTIONS_BUTTON,
@@ -640,8 +646,11 @@ fn title_bar(app: &mut App, view: &mut View, ctx: &egui::Context, focused: bool)
     });
     // The logo and the close button lead back to the big window: the mini
     // player is a way of looking at the same app, not a second one to
-    // close. Quitting is in the menu and Ctrl+Q.
-    let big_window = "Back to the big window (Ctrl+M)";
+    // close. Quitting is in the menu and through the platform shortcut.
+    let big_window = super::keys::platform_shortcut(
+        "Back to the big window (Ctrl+M)",
+        "Back to the big window (Cmd+Shift+M)",
+    );
     if view
         .button(
             layout::OPTIONS_BUTTON,
@@ -715,7 +724,7 @@ fn options_menu(app: &mut App, ui: &mut Ui, unit: f32) {
     let mut milkdrop = app.settings.milkdrop_open;
     if ui
         .checkbox(&mut milkdrop, "MilkDrop")
-        .on_hover_text("Ctrl+Shift+K")
+        .on_hover_text(super::keys::MILKDROP_SHORTCUT)
         .clicked()
     {
         app.actions.push(Action::ToggleWinampMilkdrop);
@@ -904,7 +913,7 @@ fn clutter_bar(app: &mut App, view: &mut View, now: Option<&NowPlaying>) {
         let mut milkdrop = app.settings.milkdrop_open;
         if ui
             .checkbox(&mut milkdrop, "MilkDrop")
-            .on_hover_text("Ctrl+Shift+K")
+            .on_hover_text(super::keys::MILKDROP_SHORTCUT)
             .clicked()
         {
             app.actions.push(Action::ToggleWinampMilkdrop);

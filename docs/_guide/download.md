@@ -95,6 +95,11 @@ flatpak install --user ~/Downloads/fastpotify-vX.Y.Z-x86_64.flatpak
 A bundle does not update itself; a Flathub listing, which would, is in the
 works.
 
+That bundle is the one built here, from the same binary as the tarball
+above. Fastpotify on other stores is packaged by other people and is not
+supported: if one of those will not start or will not play, the packager
+is the person who can fix it, so please raise it with them.
+
 ### Other distributions
 
 - [fastpotify-v{{ v }}-x86_64-unknown-linux-gnu.tar.gz]({{ base }}/fastpotify-v{{ v }}-x86_64-unknown-linux-gnu.tar.gz)

@@ -592,7 +592,7 @@ fn sink_builder(
                 return (
                     Box::new(move || {
                         let sink = builder(device, AudioFormat::S16);
-                        Box::new(Tapped::new(sink, tap, Some(applied), eq, normalisation))
+                        Box::new(Tapped::new(sink, tap, applied, true, eq, normalisation))
                             as Box<dyn Sink>
                     }),
                     Box::new(NoOpVolume),
@@ -602,10 +602,14 @@ fn sink_builder(
         }
     }
     let volume = mixer.get_soft_volume();
+    // The output applies the volume, so a turn of the knob is heard in
+    // sound already queued rather than a buffer later. The wrapper reads
+    // the same volume without applying it, to know where its ceiling is.
+    let ceiling = mixer.get_soft_volume();
     (
         Box::new(move || {
             let sink = Box::new(RodioSink::new(device, report, volume));
-            Box::new(Tapped::new(sink, tap, None, eq, normalisation)) as Box<dyn Sink>
+            Box::new(Tapped::new(sink, tap, ceiling, false, eq, normalisation)) as Box<dyn Sink>
         }),
         Box::new(NoOpVolume),
     )

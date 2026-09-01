@@ -2,10 +2,15 @@
 //!
 //! librespot has no equalizer, so this is Fastpotify's own: a peaking
 //! filter per band (the textbook second-order kind) run over every sample
-//! of local playback, and a preamp that only ever turns down, since the
-//! app does not boost past 0 dB. The settings live behind a mutex the
-//! window writes and the player's thread reads once per packet; the
-//! filters are rebuilt only when something changed.
+//! of local playback, and a preamp, both of which go twelve decibels
+//! either way. The settings live behind a mutex the window writes and the
+//! player's thread reads once per packet; the filters are rebuilt only
+//! when something changed.
+//!
+//! Nothing here holds the sound to full scale. A boost is left whole, in
+//! floats with room for it, and `vis::Tapped` holds the result once the
+//! volume is known: a boost that would clip at full volume has room three
+//! notches down, and clipping it here would take that away for good.
 
 use std::sync::{Arc, Mutex};
 
@@ -30,7 +35,7 @@ const SOLVED_LIMIT: f64 = 36.0;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct EqSettings {
     pub on: bool,
-    /// Never above zero.
+    /// Twelve decibels either way, like the bands.
     pub preamp_db: f32,
     pub bands_db: [f32; 10],
     /// -1 is all left, 1 all right.
@@ -471,7 +476,12 @@ impl Processor {
                 frame[1] = middle;
             }
             for (sample, gain) in frame.iter_mut().zip(gains) {
-                *sample = (*sample * gain).clamp(-1.0, 1.0);
+                // No ceiling here. These are floats with room to spare, and
+                // the one ceiling in the chain sits at the end, past the
+                // volume: a boost that would clip at full volume is fine
+                // three notches down, and holding it back here would take
+                // that away for good. See `vis::Tapped`.
+                *sample *= gain;
             }
         }
     }

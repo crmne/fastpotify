@@ -212,7 +212,14 @@ fn topbar_contents(app: &mut App, ui: &mut egui::Ui, palette: Palette) {
             ui.add_space(super::widgets::PAGE_PADDING);
             ui.spacing_mut().item_spacing.x = 6.0;
             if !app.settings.sidebar_visible {
-                if nav_button(ui, &palette, Icon::PanelLeft, true, "Show sidebar (Cmd+B)").clicked()
+                if nav_button(
+                    ui,
+                    &palette,
+                    Icon::PanelLeft,
+                    true,
+                    super::keys::platform_shortcut("Show sidebar (Ctrl+B)", "Show sidebar (Cmd+B)"),
+                )
+                .clicked()
                 {
                     app.actions.push(Action::ToggleSidebar);
                 }
@@ -403,9 +410,15 @@ fn topbar_contents(app: &mut App, ui: &mut egui::Ui, palette: Palette) {
                         }
                         super::widgets::menu_separator(ui, &palette);
                         let milkdrop_label = if app.settings.milkdrop_open {
-                            "Close MilkDrop visualiser"
+                            super::keys::platform_shortcut(
+                                "Close MilkDrop visualiser (Ctrl+Shift+K)",
+                                "Close MilkDrop visualiser (Cmd+Shift+K)",
+                            )
                         } else {
-                            "Open MilkDrop visualiser"
+                            super::keys::platform_shortcut(
+                                "Open MilkDrop visualiser (Ctrl+Shift+K)",
+                                "Open MilkDrop visualiser (Cmd+Shift+K)",
+                            )
                         };
                         if super::widgets::menu_item(
                             ui,
@@ -419,7 +432,10 @@ fn topbar_contents(app: &mut App, ui: &mut egui::Ui, palette: Palette) {
                             ui,
                             &palette,
                             Some(Icon::Shrink),
-                            "Winamp mini player",
+                            super::keys::platform_shortcut(
+                                "Winamp mini player (Ctrl+M)",
+                                "Winamp mini player (Cmd+Shift+M)",
+                            ),
                         ) {
                             app.actions.push(Action::ToggleWinampWindow);
                         }

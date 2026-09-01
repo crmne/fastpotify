@@ -11,10 +11,11 @@ use crate::api::models::{
 };
 use crate::backend::{
     ApiRequest, ApiResponse, AuthStatus, Backend, Command, Event, LocalPlayback, LyricsRequest,
-    PLAYLIST_PAGE_SIZE, RemoteAction, Waker,
+    PLAYLIST_PAGE_SIZE, RecentsFor, RemoteAction, Waker,
 };
 use crate::media::{MediaCommand, MediaState, MediaTrack};
 use crate::media_controls::MediaService;
+use crate::model::QueueTab;
 use crate::model::*;
 use crate::paths::AppDirs;
 use crate::player::{EngineConfig, LoadSpec, LocalState, Playback, PlayerCommand, RepeatMode};
@@ -126,6 +127,18 @@ impl Default for AppOptions {
     }
 }
 
+/// A song being listened to, and how much of it has really been heard.
+///
+/// `listened` is the stretches already finished; `playing_since` is when
+/// the current stretch began, and is `None` while paused, so paused time
+/// never counts towards a play.
+struct Listening {
+    uri: String,
+    listened: std::time::Duration,
+    playing_since: Option<Instant>,
+    recorded: bool,
+}
+
 pub struct App {
     pub dirs: AppDirs,
     pub settings: Settings,
@@ -206,6 +219,19 @@ pub struct App {
 
     pub library: Library,
     pub home: HomeData,
+    /// What was played here. Spotify never hears about it, so nothing
+    /// else can tell us later. See [`crate::history`].
+    pub plays: crate::history::History,
+    /// The song being listened to and how long for, so a play is written
+    /// down once it has really been listened to rather than skipped past.
+    listening: Option<Listening>,
+    pub recents: crate::model::CursorList<crate::api::models::PlayHistory>,
+    /// The Recently played tab's rows: what was played here and what
+    /// Spotify knows of the other devices, as one list. Rebuilt when
+    /// either side changes rather than every frame.
+    pub recents_view: Vec<crate::api::models::PlayHistory>,
+    pub recents_generation: u64,
+    pub queue_tab: QueueTab,
     pub search: SearchState,
     pub playlist_pages: HashMap<String, PlaylistPage>,
     load_generation: u64,
@@ -320,6 +346,11 @@ pub struct App {
     /// When the last scroll event arrived, for lifts nobody announces.
     scroll_last_event: Option<Instant>,
     /// How each table is sorted, per page, for as long as the app runs.
+    /// The rows picked out in a track table, and the page they belong to.
+    /// One table at a time: picking rows on another page replaces it.
+    /// The page it belongs to, what that page's list looked like when the
+    /// rows were picked, and the rows.
+    pub selection: Option<(Page, String, RowSelection)>,
     pub table_sorts: HashMap<Page, TableSort>,
     /// User ids resolved to display names; `None` while unknown, so an id
     /// is asked about only once per run.
@@ -368,12 +399,20 @@ const TRACKPAD_SCALE: f32 = 1.8;
 /// The glide's exponential decay time, in seconds; the speed below which a
 /// lift starts no glide; and the speed at which a glide stops, points per
 /// second.
+/// How many plays the Home shelf asks for: it shows sixteen cards.
+const HOME_RECENTS: u32 = 50;
+/// How many plays the Recents tab asks for at a time. Spotify's own
+/// ceiling for this endpoint is fifty, and a page shorter than what was
+/// asked for is how the end of the history is known.
+const RECENTS_PAGE: u32 = 50;
+
 const GLIDE_DECAY: f32 = 0.35;
 const GLIDE_START: f32 = 120.0;
 const GLIDE_STOP: f32 = 40.0;
 
 impl App {
     pub fn new(waker: &Waker, dirs: AppDirs, settings: Settings, options: AppOptions) -> Self {
+        let plays = crate::history::History::load(&dirs.history_file());
         let tap = crate::vis::AudioTap::new();
         let eq = crate::eq::shared();
         if let Ok(mut shared) = eq.lock() {
@@ -465,6 +504,16 @@ impl App {
             window_title: String::new(),
             library: Library::default(),
             home: HomeData::default(),
+            plays,
+            listening: None,
+            recents: crate::model::CursorList::default(),
+            recents_view: Vec::new(),
+            recents_generation: 0,
+            queue_tab: session
+                .queue_tab
+                .as_deref()
+                .and_then(QueueTab::decode)
+                .unwrap_or_default(),
             search: SearchState::default(),
             playlist_pages: HashMap::new(),
             load_generation: 0,
@@ -529,6 +578,7 @@ impl App {
             scroll_accum: egui::Vec2::ZERO,
             glide: None,
             scroll_last_event: None,
+            selection: None,
             table_sorts: session
                 .sorts
                 .iter()
@@ -550,6 +600,9 @@ impl App {
             winamp: crate::winamp::WinampState::new(session.winamp_pos, tap, eq),
         };
         app.local.volume = app.settings.volume;
+        // What was played here is on disk and needs nothing from the
+        // network, so the tab has rows before Spotify has answered.
+        app.rebuild_recents();
         app
     }
 
@@ -1737,7 +1790,7 @@ impl App {
     /// Shows a folder of the config directory in the desktop's file
     /// manager, making it first if need be.
     fn open_folder(&mut self, folder: std::path::PathBuf) {
-        let opened = std::fs::create_dir_all(&folder).and_then(|()| open::that(&folder));
+        let opened = std::fs::create_dir_all(&folder).and_then(|()| crate::opener::open(&folder));
         if let Err(error) = opened {
             self.toast_error(format!("Couldn't open {}: {error}", folder.display()));
         }
@@ -2214,7 +2267,12 @@ impl App {
         if self.home.top_tracks.get().is_none() {
             self.home.top_tracks = Loadable::Loading;
         }
-        self.backend.api(ApiRequest::RecentlyPlayed { generation });
+        self.backend.api(ApiRequest::RecentlyPlayed {
+            who: RecentsFor::Home,
+            generation,
+            before: None,
+            limit: HOME_RECENTS,
+        });
         self.backend.api(ApiRequest::TopArtists { generation });
         self.backend.api(ApiRequest::TopTracks {
             offset: 0,
@@ -2251,6 +2309,43 @@ impl App {
             full: true,
             generation: self.home.top_songs_generation,
         });
+    }
+
+    pub fn load_recents(&mut self, force: bool) {
+        if self.recents.loading {
+            return;
+        }
+        if self.recents.complete && !force {
+            return;
+        }
+        if force {
+            self.recents.reset();
+        }
+        self.recents.loading = true;
+        self.recents.error = None;
+        self.recents_generation = self.recents_generation.wrapping_add(1);
+        let generation = self.recents_generation;
+        // `CursorList::after` is simply "the cursor that continues this
+        // list"; for this endpoint Spotify pages backwards and calls it
+        // `before`.
+        let before = self.recents.after.clone();
+        self.backend.api(ApiRequest::RecentlyPlayed {
+            who: RecentsFor::Panel,
+            generation,
+            before,
+            limit: RECENTS_PAGE,
+        });
+    }
+
+    pub fn load_more_recents(&mut self) {
+        if !self.recents.can_load_more() {
+            return;
+        }
+        self.load_recents(false);
+    }
+
+    pub fn reload_recents(&mut self) {
+        self.load_recents(true);
     }
 
     pub fn load_more(&mut self, page: Page) {
@@ -2910,23 +3005,37 @@ impl App {
                     self.request_contains(uris);
                 }
             }
-            ApiResponse::RecentlyPlayed { generation, result } => {
-                if generation != self.home.generation {
-                    return;
+            ApiResponse::RecentlyPlayed {
+                who,
+                generation,
+                limit,
+                result,
+            } => match who {
+                RecentsFor::Home => {
+                    if generation != self.home.generation {
+                        return;
+                    }
+                    if let Ok(page) = &result {
+                        self.note_recent_contexts(&page.items);
+                    }
+                    let items = result
+                        .as_ref()
+                        .map(|page| page.items.clone())
+                        .map_err(|error| error.to_string());
+                    self.home.recently_played.refresh(items);
                 }
-                if let Ok(history) = &result {
-                    // Oldest first, so the newest ends up at the front.
-                    let contexts: Vec<String> = history
-                        .iter()
-                        .rev()
-                        .filter_map(|play| play.context.as_ref().map(|context| context.uri.clone()))
-                        .collect();
-                    for context in contexts {
-                        self.note_recent_context(&context);
+                RecentsFor::Panel => {
+                    if generation != self.recents_generation {
+                        return;
+                    }
+                    self.recents.loading = false;
+                    self.recents.loaded_once = true;
+                    match result {
+                        Ok(page) => self.absorb_recents(page, limit),
+                        Err(error) => self.recents.error = Some(error.to_string()),
                     }
                 }
-                self.home.recently_played.refresh(result);
-            }
+            },
             ApiResponse::TopTracks {
                 offset,
                 full,
@@ -3692,6 +3801,75 @@ impl App {
         self.recent_contexts.truncate(60);
     }
 
+    /// Notes every context in a page of play history, oldest first, so
+    /// the newest ends up at the front of the sidebar's order.
+    fn note_recent_contexts(&mut self, history: &[crate::api::models::PlayHistory]) {
+        let contexts: Vec<String> = history
+            .iter()
+            .rev()
+            .filter_map(|play| play.context.as_ref().map(|context| context.uri.clone()))
+            .collect();
+        for context in contexts {
+            self.note_recent_context(&context);
+        }
+    }
+
+    /// Puts the two histories together for the Recently played tab.
+    ///
+    /// Spotify is never told about a play made here, so what it knows and
+    /// what this app knows are two halves of the same list rather than
+    /// two versions of it. See [`crate::history`].
+    fn rebuild_recents(&mut self) {
+        self.recents_view = crate::history::merged(self.plays.plays(), &self.recents.items);
+    }
+
+    /// Adds a page of play history to the Recents tab.
+    ///
+    /// A song played twice is two rows here, each with its own time: this
+    /// is a history, and collapsing repeats would lose the very thing it
+    /// is for. What is dropped is the same play arriving twice, which
+    /// paging can do when something is played while the list is open, and
+    /// a play is the pair of a song and the moment it started.
+    ///
+    /// Spotify pages this list backwards, so the cursor that continues it
+    /// is `before`, and a page shorter than the one asked for is the end.
+    fn absorb_recents(
+        &mut self,
+        page: crate::api::models::CursorPage<crate::api::models::PlayHistory>,
+        limit: u32,
+    ) {
+        self.note_recent_contexts(&page.items);
+        self.recents.error = None;
+        let short_page = (page.items.len() as u32) < limit;
+        let cursor = page.cursors.as_ref().and_then(|c| c.before.clone());
+        let mut seen: std::collections::HashSet<(String, Option<String>)> = self
+            .recents
+            .items
+            .iter()
+            .map(|play| (play.track.uri.clone(), play.played_at.clone()))
+            .collect();
+        let fresh: Vec<crate::api::models::PlayHistory> = page
+            .items
+            .into_iter()
+            .filter(|play| seen.insert((play.track.uri.clone(), play.played_at.clone())))
+            .collect();
+        let uris: Vec<String> = fresh.iter().map(|play| play.track.uri.clone()).collect();
+        self.recents.items.extend(fresh);
+        match cursor {
+            Some(cursor) if !short_page => self.recents.after = Some(cursor),
+            _ => {
+                self.recents.complete = true;
+                self.recents.after = None;
+            }
+        }
+        // Only the songs just added need asking about; the ones already
+        // here were asked about when they arrived.
+        if !uris.is_empty() {
+            self.request_contains(uris);
+        }
+        self.rebuild_recents();
+    }
+
     /// A random playable track of a context the app has rows for: the
     /// start of a shuffle play. `None` when no rows are at hand.
     /// The songs a context holds, in the order they are shown, from the
@@ -4210,6 +4388,14 @@ impl App {
     /// queued and before the playing context's own, and the backend makes
     /// it true behind it.
     fn add_to_queue(&mut self, uri: String, label: String) {
+        self.queue_one(uri, label, true);
+    }
+
+    /// Puts one song at the end of what was queued by hand.
+    ///
+    /// `announce` is off when several are queued together, so a run of
+    /// twelve songs says so once instead of twelve times.
+    fn queue_one(&mut self, uri: String, label: String, announce: bool) {
         // A double-click is one wish; a deliberate second ask is a second
         // row, the way Spotify queues the same song twice.
         self.expire_pending_queue_adds();
@@ -4233,7 +4419,9 @@ impl App {
             self.manual_queue.remove(0);
         }
         self.session_dirty = true;
-        self.toast(format!("{label} will play next"));
+        if announce {
+            self.toast(format!("{label} will play next"));
+        }
         // This computer's playing engine queues directly: no round trip
         // through the Web API, no device for it to fail to find. Anything
         // else, and any album, goes the long way.
@@ -4547,6 +4735,24 @@ impl App {
             }
             Action::SetRepeat(mode) => self.set_repeat(mode),
             Action::AddToQueue { uri, label } => self.add_to_queue(uri, label),
+            Action::QueueMany { songs } => {
+                let count = songs.len();
+                for (uri, label) in songs {
+                    self.queue_one(uri, label, false);
+                }
+                self.toast(match count {
+                    1 => "1 song will play next".to_string(),
+                    count => format!("{count} songs will play next"),
+                });
+            }
+            Action::SetSavedMany { uris, saved } => {
+                for uri in &uris {
+                    self.saved.insert(uri.clone(), saved);
+                }
+                if !uris.is_empty() {
+                    self.backend.api(ApiRequest::SetSaved { uris, saved });
+                }
+            }
             Action::ToggleSaved(uri) => {
                 let saved = self.saved.get(&uri).copied().unwrap_or(false);
                 self.set_saved(uri, !saved);
@@ -4686,6 +4892,18 @@ impl App {
                 }
             }
             Action::LoadMore(page) => self.load_more(page),
+            Action::LoadMoreRecents => self.load_more_recents(),
+            Action::ReloadRecents => self.reload_recents(),
+            Action::SetQueueTab(tab) => {
+                self.queue_tab = tab;
+                self.session_dirty = true;
+                if tab == QueueTab::Recents
+                    && self.recents.items.is_empty()
+                    && !self.recents.loading
+                {
+                    self.load_recents(false);
+                }
+            }
             Action::LoadMoreArtistAlbums(id) => {
                 let Some(page) = self.artist_pages.get_mut(&id) else {
                     return;
@@ -4816,10 +5034,16 @@ impl App {
                 // guessing launcher, and a click that does nothing is worse
                 // than no link.
                 std::thread::spawn(move || {
-                    if let Err(error) = open::that(&url) {
+                    if let Err(error) = crate::opener::open(&url) {
                         log::warn!("unable to open {url}: {error}");
                     }
                 });
+            }
+            Action::ClearPlayHistory => {
+                self.plays.clear();
+                self.plays.save(&self.dirs.history_file());
+                self.rebuild_recents();
+                self.toast("Play history cleared".to_string());
             }
             Action::ClearArtCache => match self.backend.art().clear_disk_cache() {
                 Ok(bytes) => {
@@ -5009,6 +5233,86 @@ impl App {
     }
 
     /// Playlists the signed-in user can add to.
+    /// The rows picked out on `page`, if any are.
+    pub fn picked_rows(&self, page: &Page) -> Option<&std::collections::BTreeSet<usize>> {
+        self.selection
+            .as_ref()
+            .filter(|(owner, _, _)| owner == page)
+            .map(|(_, _, selection)| &selection.rows)
+            .filter(|rows| !rows.is_empty())
+    }
+
+    /// Lets the picked rows go unless `page` still looks the way it did
+    /// when they were picked. A row number means one song in one list;
+    /// sort it, filter it, or let another page of songs arrive, and the
+    /// same number is a different song.
+    pub fn keep_picked_rows_for(&mut self, page: &Page, view: &str) {
+        let stale = self
+            .selection
+            .as_ref()
+            .is_some_and(|(owner, seen, _)| owner == page && seen != view);
+        if stale {
+            self.selection = None;
+        }
+    }
+
+    /// Acts on a click on a row body: picks it out on its own, adds it to
+    /// what is already picked, or takes in everything back to the anchor.
+    ///
+    /// `len` is how many rows the table has, so a range cannot reach past
+    /// its end when rows have gone since the anchor was set.
+    pub fn pick_row(&mut self, page: &Page, view: &str, row: usize, pick: RowPick, len: usize) {
+        let mut selection = match self.selection.take() {
+            Some((owner, seen, selection)) if owner == *page && seen == view => selection,
+            _ => RowSelection::default(),
+        };
+        match pick {
+            RowPick::Only => {
+                // Clicking a row already picked out on its own lets it go,
+                // so there is a way back to nothing without hunting for
+                // empty space.
+                let only_this = selection.rows.len() == 1 && selection.rows.contains(&row);
+                selection.rows.clear();
+                if only_this {
+                    selection.anchor = None;
+                } else {
+                    selection.rows.insert(row);
+                    selection.anchor = Some(row);
+                }
+            }
+            RowPick::Toggle => {
+                if !selection.rows.remove(&row) {
+                    selection.rows.insert(row);
+                }
+                selection.anchor = Some(row);
+            }
+            RowPick::Range => {
+                // With nothing to measure from, a shift-click is a plain
+                // one, which is what a list with no selection yet does.
+                let anchor = selection.anchor.unwrap_or(row);
+                let (from, to) = if anchor <= row {
+                    (anchor, row)
+                } else {
+                    (row, anchor)
+                };
+                selection.rows.clear();
+                selection.rows.extend((from..=to).filter(|row| *row < len));
+                selection.anchor = Some(anchor);
+            }
+        }
+        if selection.rows.is_empty() {
+            self.selection = None;
+        } else {
+            self.selection = Some((page.clone(), view.to_string(), selection));
+        }
+    }
+
+    /// Lets every row go. The rows underneath moved, or the listener
+    /// pressed Escape, or they went somewhere else.
+    pub fn clear_picked_rows(&mut self) {
+        self.selection = None;
+    }
+
     pub fn editable_playlists(&self) -> Vec<(String, String)> {
         let Some(user_id) = self.user_id() else {
             return Vec::new();
@@ -5038,9 +5342,77 @@ impl App {
         self.handle_media_commands();
         self.handle_tray();
         self.tick(ctx);
+        self.note_listening();
+        // MilkDrop is a window of its own, in a child process; the app opens,
+        // updates, and hears back from it here. This is the frame that runs
+        // whether or not the main window exists, which is the point: the
+        // MilkDrop window outlives it, and used to be left with a song title
+        // that stopped changing and keys that went nowhere. Before the
+        // actions, because its keys arrive as actions.
+        #[cfg(feature = "milkdrop")]
+        self.sync_milkdrop(ctx);
         self.apply_actions(ctx);
         self.sync_media_controls();
         self.sync_window_title(ctx);
+    }
+
+    /// Watches the playing song and writes it down once it has really
+    /// been listened to.
+    ///
+    /// The clock only runs while the song is actually playing, so a song
+    /// left paused never creeps up on the threshold, and it starts from
+    /// nothing when the song changes. Seeking forward buys nothing
+    /// either: what counts is time spent listening, not where the needle
+    /// sits. A song is written down once, when it crosses.
+    fn note_listening(&mut self) {
+        let Some(now) = self.now_playing() else {
+            self.listening = None;
+            return;
+        };
+        // A remembered song shown paused from the last session has not
+        // been played by anyone yet.
+        if now.resuming {
+            self.listening = None;
+            return;
+        }
+        let listening = match &mut self.listening {
+            Some(held) if held.uri == now.uri => held,
+            _ => {
+                self.listening = Some(Listening {
+                    uri: now.uri.clone(),
+                    listened: std::time::Duration::ZERO,
+                    playing_since: now.playing.then(Instant::now),
+                    recorded: false,
+                });
+                return;
+            }
+        };
+        match (now.playing, listening.playing_since) {
+            // Paused: bank the stretch that just ended and stop the clock,
+            // or the time spent paused would count as listening.
+            (false, Some(since)) => {
+                listening.listened += since.elapsed();
+                listening.playing_since = None;
+            }
+            (true, None) => listening.playing_since = Some(Instant::now()),
+            _ => {}
+        }
+        if listening.recorded {
+            return;
+        }
+        let listened = listening.listened
+            + listening
+                .playing_since
+                .map(|since| since.elapsed())
+                .unwrap_or_default();
+        if listened < crate::history::counts_after(now.duration_ms) {
+            return;
+        }
+        listening.recorded = true;
+        self.plays
+            .record(crate::history::played_track(&now), jiff::Timestamp::now());
+        self.plays.save(&self.dirs.history_file());
+        self.rebuild_recents();
     }
 
     /// The title bar carries the playing song, the way Spotify's does, so
@@ -5075,10 +5447,6 @@ impl App {
         } else {
             crate::ui::show(self, ui);
         }
-        // MilkDrop is a window of its own, in a child process; the app opens,
-        // updates, and hears back from it here.
-        #[cfg(feature = "milkdrop")]
-        self.sync_milkdrop(ctx);
         self.apply_actions(ctx);
         self.sync_media_controls();
 
@@ -5260,6 +5628,7 @@ impl App {
                 window_size: self.last_window_size.or(self.session_window_size),
                 window_pos: self.last_window_pos.or(self.session_window_pos),
                 queue_open: Some(self.show_queue_panel),
+                queue_tab: Some(self.queue_tab.encode().to_string()),
                 winamp_pos: self.winamp.last_pos.or(self.winamp.restore_pos),
                 milkdrop_pos: self.milkdrop_pos,
             }
@@ -6127,6 +6496,235 @@ mod tests {
         );
         app.manual_queue.clear();
         assert_eq!(app.queued_rows_len(), 0);
+    }
+
+    fn picked(app: &App, page: &Page) -> Vec<usize> {
+        app.picked_rows(page)
+            .map(|rows| rows.iter().copied().collect())
+            .unwrap_or_default()
+    }
+
+    /// Rule: a plain click picks one row and drops the rest; clicking the
+    /// one already picked on its own lets it go, so there is a way back
+    /// to nothing without hunting for empty space.
+    #[test]
+    fn a_plain_click_picks_one_row_and_a_second_lets_it_go() {
+        let mut app = test_app("pick-one");
+        let page = Page::LikedSongs;
+        app.pick_row(&page, "v", 3, RowPick::Only, 10);
+        assert_eq!(picked(&app, &page), vec![3]);
+        app.pick_row(&page, "v", 5, RowPick::Only, 10);
+        assert_eq!(picked(&app, &page), vec![5], "the first one is dropped");
+        app.pick_row(&page, "v", 5, RowPick::Only, 10);
+        assert!(picked(&app, &page).is_empty(), "clicking it again lets go");
+    }
+
+    /// Rule: ctrl-click adds and removes one row at a time.
+    #[test]
+    fn ctrl_click_adds_and_removes_one_row() {
+        let mut app = test_app("pick-toggle");
+        let page = Page::LikedSongs;
+        app.pick_row(&page, "v", 1, RowPick::Only, 10);
+        app.pick_row(&page, "v", 4, RowPick::Toggle, 10);
+        app.pick_row(&page, "v", 7, RowPick::Toggle, 10);
+        assert_eq!(picked(&app, &page), vec![1, 4, 7]);
+        app.pick_row(&page, "v", 4, RowPick::Toggle, 10);
+        assert_eq!(
+            picked(&app, &page),
+            vec![1, 7],
+            "the same click takes it out"
+        );
+    }
+
+    /// Rule: shift-click takes everything back to the last row picked on
+    /// its own, in either direction, and never past the end of the list.
+    #[test]
+    fn shift_click_takes_the_run_back_to_the_anchor() {
+        let mut app = test_app("pick-range");
+        let page = Page::LikedSongs;
+        app.pick_row(&page, "v", 2, RowPick::Only, 10);
+        app.pick_row(&page, "v", 5, RowPick::Range, 10);
+        assert_eq!(picked(&app, &page), vec![2, 3, 4, 5]);
+        // Back the other way, from the same anchor.
+        app.pick_row(&page, "v", 0, RowPick::Range, 10);
+        assert_eq!(picked(&app, &page), vec![0, 1, 2]);
+        // A list that has since shrunk cannot be reached past its end.
+        app.pick_row(&page, "v", 9, RowPick::Range, 4);
+        assert_eq!(picked(&app, &page), vec![2, 3]);
+    }
+
+    /// Rule: with nothing picked yet, a shift-click is a plain one.
+    #[test]
+    fn shift_click_with_no_anchor_picks_one_row() {
+        let mut app = test_app("pick-no-anchor");
+        let page = Page::LikedSongs;
+        app.pick_row(&page, "v", 6, RowPick::Range, 10);
+        assert_eq!(picked(&app, &page), vec![6]);
+    }
+
+    /// Rule: rows belong to the list they were picked in. Sorting it,
+    /// filtering it, or another page of songs arriving lets them go,
+    /// because row four is a different song afterwards.
+    #[test]
+    fn the_rows_let_go_when_the_list_moves_underneath() {
+        let mut app = test_app("pick-stale");
+        let page = Page::LikedSongs;
+        app.pick_row(&page, "by-name|", 3, RowPick::Only, 10);
+        app.keep_picked_rows_for(&page, "by-name|");
+        assert_eq!(picked(&app, &page), vec![3], "the same list keeps them");
+        app.keep_picked_rows_for(&page, "by-date|");
+        assert!(picked(&app, &page).is_empty(), "a re-sort lets them go");
+    }
+
+    /// Rule: one table at a time. Picking rows somewhere else replaces
+    /// what was picked, and the old page has nothing picked.
+    #[test]
+    fn picking_rows_on_another_page_replaces_the_first() {
+        let mut app = test_app("pick-other-page");
+        let liked = Page::LikedSongs;
+        let album = Page::Album("a".to_string());
+        app.pick_row(&liked, "v", 1, RowPick::Only, 10);
+        app.pick_row(&album, "v", 2, RowPick::Only, 10);
+        assert_eq!(picked(&app, &album), vec![2]);
+        assert!(picked(&app, &liked).is_empty());
+    }
+
+    fn test_app(name: &str) -> App {
+        let root =
+            std::env::temp_dir().join(format!("fastpotify-{name}-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        App::new(
+            &Waker::default(),
+            AppDirs {
+                config: root.join("config"),
+                state: root.join("state"),
+                cache: root.join("cache"),
+            },
+            Settings::default(),
+            AppOptions {
+                media_controls: false,
+                tray: false,
+            },
+        )
+    }
+
+    fn play(uri: &str, at: &str) -> crate::api::models::PlayHistory {
+        crate::api::models::PlayHistory {
+            track: crate::api::models::Track {
+                uri: uri.to_string(),
+                ..Default::default()
+            },
+            played_at: Some(at.to_string()),
+            context: None,
+        }
+    }
+
+    fn history(
+        items: Vec<crate::api::models::PlayHistory>,
+        before: Option<&str>,
+    ) -> crate::api::models::CursorPage<crate::api::models::PlayHistory> {
+        crate::api::models::CursorPage {
+            items,
+            cursors: Some(crate::api::models::Cursors {
+                before: before.map(str::to_string),
+                after: None,
+            }),
+            ..Default::default()
+        }
+    }
+
+    /// Rule: the Recents tab is a history, so the same song played twice
+    /// is two rows. Collapsing repeats would lose what the list is for.
+    #[test]
+    fn recents_keep_a_song_played_twice() {
+        let mut app = test_app("recents-repeat");
+        let page = history(
+            vec![
+                play("spotify:track:a", "2026-09-01T10:00:00Z"),
+                play("spotify:track:a", "2026-09-01T09:00:00Z"),
+                play("spotify:track:b", "2026-09-01T08:00:00Z"),
+            ],
+            Some("cursor-1"),
+        );
+        app.absorb_recents(page, 3);
+        assert_eq!(app.recents.items.len(), 3, "both plays of a are kept");
+    }
+
+    /// Rule: the same play arriving twice is dropped. Paging can hand back
+    /// a row already held when something plays while the list is open.
+    #[test]
+    fn recents_drop_a_play_that_arrives_twice() {
+        let mut app = test_app("recents-dedup");
+        app.absorb_recents(
+            history(
+                vec![
+                    play("spotify:track:a", "2026-09-01T10:00:00Z"),
+                    play("spotify:track:b", "2026-09-01T09:00:00Z"),
+                ],
+                Some("cursor-1"),
+            ),
+            2,
+        );
+        app.absorb_recents(
+            history(
+                vec![
+                    play("spotify:track:b", "2026-09-01T09:00:00Z"),
+                    play("spotify:track:c", "2026-09-01T08:00:00Z"),
+                ],
+                Some("cursor-2"),
+            ),
+            2,
+        );
+        let uris: Vec<&str> = app
+            .recents
+            .items
+            .iter()
+            .map(|play| play.track.uri.as_str())
+            .collect();
+        assert_eq!(
+            uris,
+            vec!["spotify:track:a", "spotify:track:b", "spotify:track:c"]
+        );
+    }
+
+    /// Rule: a page shorter than the one asked for is the end of the
+    /// history, cursor or no cursor.
+    #[test]
+    fn a_short_page_ends_the_recents_list() {
+        let mut app = test_app("recents-short");
+        app.absorb_recents(
+            history(
+                vec![play("spotify:track:a", "2026-09-01T10:00:00Z")],
+                Some("more"),
+            ),
+            50,
+        );
+        assert!(
+            app.recents.complete,
+            "a page of one against fifty is the end"
+        );
+        assert!(
+            app.recents.after.is_none(),
+            "and there is nothing to ask for"
+        );
+    }
+
+    /// Rule: a full page with a cursor keeps the list going.
+    #[test]
+    fn a_full_page_leaves_the_recents_list_open() {
+        let mut app = test_app("recents-full");
+        app.absorb_recents(
+            history(
+                vec![
+                    play("spotify:track:a", "2026-09-01T10:00:00Z"),
+                    play("spotify:track:b", "2026-09-01T09:00:00Z"),
+                ],
+                Some("cursor-1"),
+            ),
+            2,
+        );
+        assert!(!app.recents.complete);
+        assert_eq!(app.recents.after.as_deref(), Some("cursor-1"));
     }
 
     /// Rule: closing the app keeps the queue. The rows come back on the

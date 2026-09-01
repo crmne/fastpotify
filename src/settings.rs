@@ -391,6 +391,8 @@ pub struct SessionState {
     pub window_pos: Option<[f32; 2]>,
     /// Whether the queue panel was open.
     pub queue_open: Option<bool>,
+    /// Which tab the queue panel showed: `queue` or `recents`.
+    pub queue_tab: Option<String>,
     /// Last outer position of the Winamp window.
     pub winamp_pos: Option<[f32; 2]>,
     /// Last outer position of the MilkDrop window.

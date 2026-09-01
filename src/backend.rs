@@ -48,6 +48,14 @@ pub enum RemoteAction {
     Repeat,
 }
 
+/// Which of the two readers of the recently-played endpoint an answer
+/// belongs to: the shelf on Home, or the Recents tab in the queue panel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RecentsFor {
+    Home,
+    Panel,
+}
+
 #[derive(Clone, Debug)]
 pub enum ApiRequest {
     Me,
@@ -59,7 +67,15 @@ pub enum ApiRequest {
         seq: u64,
     },
     RecentlyPlayed {
+        /// Who asked. The Home shelf and the queue panel's Recents tab
+        /// both read this endpoint and each count their own requests, so
+        /// the generation alone cannot tell their answers apart: two
+        /// counters that both start at zero agree far more often than
+        /// not, and an answer meant for one would land in the other.
+        who: RecentsFor,
         generation: u64,
+        before: Option<String>,
+        limit: u32,
     },
     TopTracks {
         offset: u32,
@@ -241,8 +257,10 @@ pub enum ApiResponse {
         result: ApiResult<Queue>,
     },
     RecentlyPlayed {
+        who: RecentsFor,
         generation: u64,
-        result: ApiResult<Vec<PlayHistory>>,
+        limit: u32,
+        result: ApiResult<CursorPage<PlayHistory>>,
     },
     TopTracks {
         offset: u32,
@@ -1017,7 +1035,7 @@ impl Worker {
         }
         let browser_url = flow.url.clone();
         tokio::task::spawn_blocking(move || {
-            if let Err(error) = open::that(&browser_url) {
+            if let Err(error) = crate::opener::open(&browser_url) {
                 log::warn!("unable to open a browser: {error}");
             }
         });
@@ -1188,7 +1206,7 @@ impl Worker {
         self.emit(Event::Playback(LocalPlayback::Authorizing));
         let browser_url = flow.url.clone();
         tokio::task::spawn_blocking(move || {
-            if let Err(error) = open::that(&browser_url) {
+            if let Err(error) = crate::opener::open(&browser_url) {
                 log::warn!("unable to open a browser: {error}");
             }
         });
@@ -1759,9 +1777,16 @@ async fn handle(api: &ApiGateway, request: ApiRequest) -> (ApiResponse, Option<A
             seq,
             result: routed!(queue()),
         },
-        ApiRequest::RecentlyPlayed { generation } => ApiResponse::RecentlyPlayed {
+        ApiRequest::RecentlyPlayed {
+            who,
             generation,
-            result: routed!(recently_played(50)).map(|page| page.items),
+            before,
+            limit,
+        } => ApiResponse::RecentlyPlayed {
+            who,
+            generation,
+            limit,
+            result: routed!(recently_played(limit, None, before.as_deref())),
         },
         ApiRequest::TopTracks {
             offset,

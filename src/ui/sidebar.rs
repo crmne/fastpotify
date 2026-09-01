@@ -335,7 +335,7 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
                 16.0,
                 palette.secondary,
                 palette.text,
-                "Hide sidebar (Cmd+B)",
+                super::keys::platform_shortcut("Hide sidebar (Ctrl+B)", "Hide sidebar (Cmd+B)"),
             )
             .clicked()
             {

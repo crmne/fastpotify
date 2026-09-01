@@ -69,7 +69,7 @@ the player's window. Drag the picture to move the window, double-click it or
 press **F** to fill the screen, **Esc** to come back or close it, and drag
 the bottom-right corner to resize.
 
-Presets fade into one another every thirty seconds (Settings sets the
+Presets fade into one another every ten seconds (Settings sets the
 time). The arrows, or **N** and **P**, move between them, **H** cuts to
 the next one on the beat, **L** keeps the one playing, and **R** switches
 between random and the folder's own order. Playback answers the same keys

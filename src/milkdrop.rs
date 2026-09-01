@@ -34,7 +34,7 @@ pub mod overlay;
 pub mod shm;
 
 /// How long a preset plays before the next fades in.
-pub const DEFAULT_SECONDS: u32 = 30;
+pub const DEFAULT_SECONDS: u32 = 10;
 /// How many frames a second the window draws by default.
 pub const DEFAULT_FPS: u32 = 60;
 /// The choices Settings offers for that; 0 is uncapped.
