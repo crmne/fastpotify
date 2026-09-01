@@ -91,12 +91,12 @@ brew install --cask crmne/tap/fastpotify
 Everywhere else, build the single binary with Rust 1.95 or newer:
 
 ```bash
-cargo install --path .
+cargo install --path . --locked
 ```
 
 MilkDrop uses libprojectM, which is built from source. This needs CMake, a C++
 compiler, and libclang. To build without MilkDrop or those tools, run
-`cargo install --path . --no-default-features`. On Linux, you also need the
+`cargo install --path . --locked --no-default-features`. On Linux, you also need the
 development packages for ALSA, PulseAudio or PipeWire, and the windowing
 libraries. On Arch:
 
@@ -109,6 +109,13 @@ and on Debian or Ubuntu:
 ```bash
 sudo apt install libasound2-dev libpulse-dev libxkbcommon-dev libwayland-dev \
   cmake clang libclang-dev
+```
+
+and on Fedora:
+
+```bash
+sudo dnf install alsa-lib-devel pulseaudio-libs-devel libxkbcommon-devel \
+  wayland-devel cmake clang libclang-devel
 ```
 
 On Windows, libprojectM is built with Visual Studio 2022, CMake, LLVM, and
