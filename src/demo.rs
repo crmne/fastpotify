@@ -1856,7 +1856,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
-    /// A request in flight does not make typed text permanent: one second
+    /// A request in flight does not make typed text permanent: two seconds
     /// without another key always ends the type-ahead.
     #[test]
     fn typeahead_expires_while_initial_rows_are_still_loading() {
@@ -1869,7 +1869,7 @@ mod tests {
             std::mem::take(&mut page.items.items)
         };
         type_text(&ctx, &mut app, "rose");
-        std::thread::sleep(std::time::Duration::from_millis(1_050));
+        std::thread::sleep(std::time::Duration::from_millis(2_050));
         frame(&ctx, &mut app);
         {
             let page = app.playlist_pages.get_mut("pl1").unwrap();

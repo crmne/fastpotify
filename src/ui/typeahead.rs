@@ -16,7 +16,7 @@ use crate::model::{Loadable, Page};
 use crate::theme::{self, Palette};
 
 /// How long the typed characters survive without another keystroke.
-const TIMEOUT: Duration = Duration::from_secs(1);
+const TIMEOUT: Duration = Duration::from_secs(2);
 
 /// A title as the search sees it: lowercased, accents folded, and
 /// punctuation and spaces gone, plus where the title begins without a
@@ -206,6 +206,9 @@ pub struct Search {
     pub row: Option<usize>,
     /// Whether letters may match anywhere in a title, from the setting.
     loose: bool,
+    /// The last IME candidate text, so a platform repeating the same preedit
+    /// event every frame does not look like fresh typing forever.
+    ime_preedit: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -232,7 +235,7 @@ impl Search {
         !normalize_typed(&self.buffer).is_empty()
     }
 
-    /// Drops the search after one second without typing, at the start of a
+    /// Drops the search after two seconds without typing, at the start of a
     /// frame.
     pub fn expire(&mut self, now: Instant) {
         if let Some(elapsed) = self
@@ -345,9 +348,13 @@ impl Search {
         for event in events {
             match event {
                 Event::Text(text) | Event::Paste(text) => self.type_text(text, titles),
-                Event::Ime(ImeEvent::Commit(text)) => self.type_text(text, titles),
+                Event::Ime(ImeEvent::Commit(text)) => {
+                    self.ime_preedit.clear();
+                    self.type_text(text, titles);
+                }
                 Event::Ime(ImeEvent::Preedit { text, .. }) => {
-                    if !text.is_empty() || !self.buffer.is_empty() {
+                    if text != &self.ime_preedit {
+                        self.ime_preedit.clone_from(text);
                         self.last_keystroke = Some(Instant::now());
                     }
                 }
@@ -1005,7 +1012,7 @@ mod tests {
     }
 
     #[test]
-    fn ime_preedit_restarts_the_one_second_timeout() {
+    fn ime_preedit_restarts_the_two_second_timeout() {
         let titles = titles();
         let mut search = Search::default();
         search.type_char('b', &titles);
@@ -1017,6 +1024,15 @@ mod tests {
             &titles,
         );
         let composed_at = Instant::now();
+        let first_keystroke = search.last_keystroke;
+        search.handle_events(
+            &[Event::Ime(ImeEvent::Preedit {
+                text: "ぼ".into(),
+                active_range_chars: None,
+            })],
+            &titles,
+        );
+        assert_eq!(search.last_keystroke, first_keystroke);
         search.expire(composed_at + TIMEOUT / 2);
         assert_eq!(search.buffer(), "b");
         search.expire(composed_at + TIMEOUT + Duration::from_millis(1));

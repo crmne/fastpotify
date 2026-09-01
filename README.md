@@ -181,7 +181,7 @@ With Type-ahead in song lists enabled, typing letters on a playlist, album,
 or Liked Songs page jumps to the first song whose title starts with what you
 typed, the way file explorers jump to files: more letters narrow the search,
 and with Loose type-ahead off, the same first letter again moves to the next
-match. Enter starts playing; Esc or one second without typing clears it.
+match. Enter starts playing; Esc or two seconds without typing clears it.
 Matching forgives case,
 accents, punctuation, spaces, and a leading The (`dont` finds "Don't Stop",
 `letit` finds "Let It Be"); Space
