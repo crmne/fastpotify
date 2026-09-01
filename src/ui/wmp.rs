@@ -649,12 +649,27 @@ impl Skin<'_> {
         height: u32,
         sense: Sense,
     ) -> egui::Response {
+        self.interact_tipped(x, y, width, height, sense, None)
+    }
+
+    fn interact_tipped(
+        &mut self,
+        x: i32,
+        y: i32,
+        width: u32,
+        height: u32,
+        sense: Sense,
+        tooltip: Option<&str>,
+    ) -> egui::Response {
         let id = self.next_id();
         let rect = self.rect(x, y, width, height);
-        let response = self
+        let mut response = self
             .ui
             .interact(rect, id, sense)
             .on_hover_cursor(egui::CursorIcon::PointingHand);
+        if let Some(tooltip) = tooltip {
+            response = response.on_hover_text(tooltip);
+        }
         if response.is_pointer_button_down_on() {
             self.took_pointer = true;
         }
@@ -893,7 +908,14 @@ fn paint_button(skin: &mut Skin, art: &mut Art, button: &ir::Button, at: (i32, i
     if bitmap.width == 0 {
         return;
     }
-    let response = skin.interact(at.0, at.1, bitmap.width, bitmap.height, Sense::click());
+    let response = skin.interact_tipped(
+        at.0,
+        at.1,
+        bitmap.width,
+        bitmap.height,
+        Sense::click(),
+        button.common.tooltip.as_deref(),
+    );
     let state = if response.is_pointer_button_down_on() {
         button.states.down.as_ref().or(Some(file))
     } else if response.hovered() {
@@ -950,13 +972,16 @@ fn paint_group(skin: &mut Skin, art: &mut Art, group: &ir::ButtonGroup, at: (i32
     if !group.show_background {
         return;
     }
-    let response = skin.interact(at.0, at.1, area.0, area.1, Sense::click());
+    let mut response = skin.interact(at.0, at.1, area.0, area.1, Sense::click());
     let pointer = skin.pointer(&response);
     let hovered = element_at_pointer(
         &map_bitmap,
         &group.buttons,
         pointer.map(|(x, y)| ((x - at.0 as f32) as i32, (y - at.1 as f32) as i32)),
     );
+    if let Some(tooltip) = hovered.and_then(|index| group.buttons[index].tooltip.as_deref()) {
+        response = response.on_hover_text(tooltip);
+    }
     // The resting bitmap always goes down first.
     paint_picture(
         skin,
