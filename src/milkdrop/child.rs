@@ -314,7 +314,7 @@ impl Child {
     fn set_fullscreen(&mut self, on: bool) {
         if let Some(live) = &mut self.live {
             live.window
-                .set_fullscreen(on.then(|| Fullscreen::Borderless(None)));
+                .set_fullscreen(on.then_some(Fullscreen::Borderless(None)));
             live.fullscreen = on;
         }
     }
