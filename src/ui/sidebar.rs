@@ -36,20 +36,21 @@ struct Entry {
     depth: u8,
 }
 
-pub fn show(app: &mut App, ui: &mut egui::Ui) {
+pub fn show(app: &mut App, ui: &mut egui::Ui, context_reserve: f32) {
     let palette = app.palette;
-    // The traffic lights float over the top-left of the sidebar now, so the
-    // first nav row has to start below them.
-    let top = 12 + theme::titlebar_inset(ui.ctx()) as i8;
+    let max_width =
+        (ui.available_width() - super::MIN_WORKSPACE_WIDTH - context_reserve).clamp(180.0, 440.0);
+    let min_width = 210.0_f32.min(max_width);
+    let width_constrained = app.settings.sidebar_width > max_width;
     let panel = egui::Panel::left("sidebar")
         .resizable(true)
         .default_size(app.settings.sidebar_width)
-        .size_range(210.0..=440.0)
+        .size_range(min_width..=max_width)
         .show_separator_line(false)
         .frame(Frame::new().fill(palette.panel).inner_margin(Margin {
             left: 12,
             right: 8,
-            top,
+            top: 12,
             bottom: 8,
         }));
     let response = panel.show(ui, |ui| {
@@ -57,10 +58,15 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         contents(app, ui);
     });
     let width = response.response.rect.width();
-    if (width - app.settings.sidebar_width).abs() > 1.0 {
+    if !width_constrained && (width - app.settings.sidebar_width).abs() > 1.0 {
         app.settings.sidebar_width = width;
         app.actions.push(Action::SettingsChanged);
     }
+    ui.painter().vline(
+        response.response.rect.right() - 0.5,
+        response.response.rect.y_range(),
+        egui::Stroke::new(1.0, palette.outline.gamma_multiply(0.45)),
+    );
 }
 
 /// The playing album's art, docked large at the sidebar's bottom the way
@@ -312,12 +318,15 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
     let mut show_search = ui
         .data(|data| data.get_temp::<bool>(show_search_id))
         .unwrap_or(false);
+    let show_library_label = ui.available_width() >= 220.0;
 
     ui.horizontal(|ui| {
         ui.add_space(6.0);
         theme::icon(ui, Icon::Library, 22.0, palette.secondary);
-        ui.add_space(2.0);
-        theme::text(ui, "Your Library", theme::bold(15.0), palette.text);
+        if show_library_label {
+            ui.add_space(2.0);
+            theme::text(ui, "Your Library", theme::bold(15.0), palette.text);
+        }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
             if theme::icon_button(

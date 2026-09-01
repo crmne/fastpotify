@@ -123,9 +123,10 @@ pub fn actions_row(
     app: &mut App,
     ui: &mut egui::Ui,
     actions: Actions<'_>,
-    filter: Option<&mut String>,
+    mut filter: Option<&mut String>,
 ) {
     let palette = app.palette;
+    let stack_filter = filter.is_some() && ui.available_width() < 480.0;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 18.0;
         if let Some(uri) = &actions.play_uri {
@@ -236,7 +237,7 @@ pub fn actions_row(
                     )
                 });
         }
-        if let Some(filter) = filter {
+        if !stack_filter && let Some(filter) = filter.as_deref_mut() {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 widgets::search_field(
                     ui,
@@ -249,6 +250,24 @@ pub fn actions_row(
             });
         }
     });
+    if stack_filter {
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if let Some(filter) = filter {
+                    let width = ui.available_width().min(220.0);
+                    widgets::search_field(
+                        ui,
+                        &palette,
+                        egui::Id::new(("collection-filter", actions.name)),
+                        filter,
+                        "Filter",
+                        width,
+                    );
+                }
+            });
+        });
+    }
     ui.add_space(14.0);
 }
 

@@ -109,9 +109,12 @@ screenshots in these pages are made:
 
 ```
 cargo run --release --features demo -- \
-  --demo-shot docs/screenshot.png --demo-page playlist:pl1 --demo-show queue
+  --demo-shot docs/screenshot.png --demo-size 1240x800 \
+  --demo-page playlist:pl1 --demo-show queue
 ```
 
-The shot is the window's own frame buffer, so it comes out at whatever size
-the window is. `--demo-shot-delay <MS>` sets how long cover art has to arrive
-before the frame is taken.
+The shot is the window's own frame buffer. `--demo-size WIDTHxHEIGHT` sets a
+repeatable logical inner size (at least `760x520`); the PNG's physical pixel
+dimensions still follow the display scale. Without it, the shot uses the
+window's current size. `--demo-shot-delay <MS>` sets how long cover art has to
+arrive before the frame is taken.

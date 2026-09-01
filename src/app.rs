@@ -1790,6 +1790,17 @@ impl App {
         self.session_dirty = true;
     }
 
+    /// Override restored window geometry for a deterministic demo capture.
+    ///
+    /// The normal native window size is followed by the saved session size in
+    /// [`Self::attach`]. Capture runs must enter through that same path so the
+    /// requested logical size wins without changing production persistence.
+    #[cfg(feature = "demo")]
+    pub fn set_demo_window_size(&mut self, size: [f32; 2]) {
+        self.session_window_size = Some(size);
+        self.session_window_pos = None;
+    }
+
     fn save_settings(&mut self) {
         self.settings_dirty = false;
         self.last_settings_save = Instant::now();

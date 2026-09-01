@@ -294,7 +294,8 @@ cargo run --features demo -- --demo --demo-page playlist:pl1 --demo-show queue
 ```
 
 Demo mode never writes settings. `--demo-shot <PATH>` writes the window to a
-PNG and exits, which is how the screenshot above is made.
+PNG and exits, which is how the screenshot above is made. Add
+`--demo-size 1240x800` for a repeatable logical window size.
 
 ## Contributing
 

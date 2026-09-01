@@ -50,10 +50,54 @@ struct Cli {
     #[arg(long, value_name = "PATH")]
     demo_shot: Option<std::path::PathBuf>,
 
+    /// Set the demo window's inner size, e.g. `1240x800`. Useful with
+    /// `--demo-shot` for repeatable responsive-layout captures.
+    #[cfg(feature = "demo")]
+    #[arg(long, value_name = "WIDTHxHEIGHT", value_parser = parse_demo_size)]
+    demo_size: Option<[f32; 2]>,
+
     /// How long to let cover art download before the shot is taken.
     #[cfg(feature = "demo")]
     #[arg(long, value_name = "MS", default_value_t = 6000)]
     demo_shot_delay: u64,
+}
+
+#[cfg(feature = "demo")]
+fn parse_demo_size(value: &str) -> Result<[f32; 2], String> {
+    let Some((width, height)) = value.split_once(['x', 'X']) else {
+        return Err("expected WIDTHxHEIGHT, for example 1240x800".to_owned());
+    };
+    let width = width
+        .parse::<f32>()
+        .map_err(|_| "width must be a number".to_owned())?;
+    let height = height
+        .parse::<f32>()
+        .map_err(|_| "height must be a number".to_owned())?;
+    if !width.is_finite() || !height.is_finite() {
+        return Err("demo size must contain finite numbers".to_owned());
+    }
+    if width < 760.0 || height < 520.0 {
+        return Err("demo size must be at least 760x520".to_owned());
+    }
+    Ok([width, height])
+}
+
+#[cfg(all(test, feature = "demo"))]
+mod demo_size_tests {
+    use super::parse_demo_size;
+
+    #[test]
+    fn parses_supported_demo_sizes() {
+        assert_eq!(parse_demo_size("1240x800"), Ok([1240.0, 800.0]));
+        assert_eq!(parse_demo_size("760X520"), Ok([760.0, 520.0]));
+    }
+
+    #[test]
+    fn rejects_malformed_or_unsupported_demo_sizes() {
+        for value in ["760", "wide", "759x520", "760x519", "NaNx520"] {
+            assert!(parse_demo_size(value).is_err(), "accepted {value}");
+        }
+    }
 }
 
 /// Remote control of the running instance, for Raycast scripts, launchers,
@@ -356,6 +400,9 @@ fn main() -> eframe::Result<()> {
     if demo {
         fastpotify::demo::populate(&mut app);
         fastpotify::demo::apply_flags(&mut app, cli.demo_page.as_deref(), cli.demo_show.as_deref());
+        if let Some(size) = cli.demo_size {
+            app.set_demo_window_size(size);
+        }
     }
     #[cfg(feature = "demo")]
     let shot = cli.demo_shot.clone().map(|path| Shot {
@@ -364,7 +411,6 @@ fn main() -> eframe::Result<()> {
         asked: false,
     });
     let slot = std::sync::Arc::new(std::sync::Mutex::new(Some(app)));
-
     loop {
         let creator_slot = std::sync::Arc::clone(&slot);
         let creator_waker = waker.clone();
@@ -377,9 +423,13 @@ fn main() -> eframe::Result<()> {
         #[cfg(windows)]
         let has_native_caption = mini.is_none();
         #[cfg(feature = "demo")]
-        let options = native_options(shot.is_some() && mini.is_none(), mini);
+        let options = native_options(
+            shot.is_some() && cli.demo_size.is_none() && mini.is_none(),
+            mini,
+            cli.demo_size,
+        );
         #[cfg(not(feature = "demo"))]
-        let options = native_options(false, mini);
+        let options = native_options(false, mini, None);
         eframe::run_native(
             "Fastpotify",
             options,
@@ -527,7 +577,11 @@ impl MiniWindow {
     }
 }
 
-fn native_options(fullscreen: bool, mini: Option<MiniWindow>) -> eframe::NativeOptions {
+fn native_options(
+    fullscreen: bool,
+    mini: Option<MiniWindow>,
+    requested_size: Option<[f32; 2]>,
+) -> eframe::NativeOptions {
     let icon = if cfg!(target_os = "macos") {
         // macOS takes the dock icon from the bundle's .icns, which is the
         // 1024px drawing with the platform's rounding. Setting a window
@@ -536,9 +590,14 @@ fn native_options(fullscreen: bool, mini: Option<MiniWindow>) -> eframe::NativeO
     } else {
         app_icon()
     };
+    let app_id = if requested_size.is_some() {
+        "fastpotify-demo-capture"
+    } else {
+        "fastpotify"
+    };
     let viewport = egui::ViewportBuilder::default()
         .with_title("Fastpotify")
-        .with_app_id("fastpotify")
+        .with_app_id(app_id)
         .with_icon(icon);
     let viewport = match mini {
         Some(mini) => {
@@ -572,12 +631,15 @@ fn native_options(fullscreen: bool, mini: Option<MiniWindow>) -> eframe::NativeO
             .with_fullsize_content_view(true)
             .with_titlebar_shown(false)
             .with_title_shown(false)
-            .with_inner_size([1240.0, 800.0])
+            .with_inner_size(requested_size.unwrap_or([1240.0, 800.0]))
             .with_min_inner_size([760.0, 520.0])
             .with_fullscreen(fullscreen),
     };
     eframe::NativeOptions {
         viewport,
+        // A requested demo size is evidence: `App::attach` receives the same
+        // override, and eframe must not save the throwaway geometry either.
+        persist_window: requested_size.is_none(),
         // A Wayland compositor stops sending frame callbacks to a hidden
         // window; waiting for vsync there would block the event loop.
         // Repaints are event-driven, so nothing spins.

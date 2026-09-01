@@ -27,6 +27,11 @@ use crate::backend::AuthStatus;
 use crate::model::{Action, Page, ToastKind};
 use crate::theme::{self, Icon};
 
+/// Enough room for the compact track table to keep a title column. Side
+/// panels yield before the listening workspace becomes unusable.
+const MIN_WORKSPACE_WIDTH: f32 = 320.0;
+const MIN_CONTEXT_WIDTH: f32 = 240.0;
+
 pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
     let ctx = &ctx;
@@ -43,14 +48,20 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         return;
     }
     player_bar::show(app, ui);
+    topbar::show(app, ui);
     if app.settings.sidebar_visible {
-        sidebar::show(app, ui);
+        let context_reserve = if app.show_queue_panel || app.show_lyrics_panel {
+            MIN_CONTEXT_WIDTH
+        } else {
+            0.0
+        };
+        sidebar::show(app, ui, context_reserve);
     }
     if app.show_queue_panel {
-        queue::side_panel(app, ui);
+        queue::side_panel(app, ui, MIN_WORKSPACE_WIDTH);
     }
     if app.show_lyrics_panel {
-        lyrics::side_panel(app, ui);
+        lyrics::side_panel(app, ui, MIN_WORKSPACE_WIDTH);
     }
     central(app, ui);
     devices::popup(app, ctx);
@@ -119,7 +130,6 @@ fn central(app: &mut App, ui: &mut egui::Ui) {
                 widgets::paint_vertical_gradient(ui, header, top, palette.window);
             }
             ui.spacing_mut().item_spacing = vec2(8.0, 6.0);
-            topbar::show(app, ui);
             let page = app.page().clone();
             egui::ScrollArea::vertical()
                 .id_salt(("page", page.encode()))

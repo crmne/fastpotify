@@ -168,22 +168,35 @@ fn status_chip(
 
 pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
-    let width = ui.available_width();
-    let density = TopbarDensity::for_width(width);
-    // Where the titlebar used to be: the bar grows upwards into that space and
-    // its empty parts drag the window.
     let inset = theme::titlebar_inset(ui.ctx());
     let height = theme::TOP_BAR_HEIGHT + inset;
-    let bar_rect = egui::Rect::from_min_size(ui.cursor().min, vec2(width, height));
-    ui.painter().rect_filled(bar_rect, 0.0, palette.window);
-    ui.painter().hline(
-        bar_rect.x_range(),
-        bar_rect.bottom() - 0.5,
-        Stroke::new(1.0, palette.outline.gamma_multiply(0.45)),
-    );
-    super::titlebar_drag(ui, bar_rect);
+    egui::Panel::top("top-bar")
+        .exact_size(height)
+        .resizable(false)
+        .show_separator_line(false)
+        .frame(egui::Frame::new().fill(palette.window))
+        .show(ui, |ui| {
+            let bar_rect = ui.max_rect();
+            ui.painter().hline(
+                bar_rect.x_range(),
+                bar_rect.bottom() - 0.5,
+                Stroke::new(1.0, palette.outline.gamma_multiply(0.45)),
+            );
+            super::titlebar_drag(ui, bar_rect);
+
+            // A full-size macOS content view puts the traffic lights in this
+            // first strip. The top rail owns it so no panel below compensates
+            // a second time.
+            ui.add_space(inset);
+            topbar_contents(app, ui, palette);
+        });
+}
+
+fn topbar_contents(app: &mut App, ui: &mut egui::Ui, palette: Palette) {
+    let width = ui.available_width();
+    let density = TopbarDensity::for_width(width);
     ui.allocate_ui_with_layout(
-        vec2(width, height),
+        vec2(width, theme::TOP_BAR_HEIGHT),
         Layout::left_to_right(Align::Center),
         |ui| {
             ui.add_space(super::widgets::PAGE_PADDING);

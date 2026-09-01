@@ -18,12 +18,15 @@ fn blend(from: egui::Color32, to: egui::Color32, t: f32) -> egui::Color32 {
     egui::Color32::from(egui::Rgba::from(from) * (1.0 - t) + egui::Rgba::from(to) * t)
 }
 
-pub fn side_panel(app: &mut App, ui: &mut egui::Ui) {
+pub fn side_panel(app: &mut App, ui: &mut egui::Ui, workspace_reserve: f32) {
     let palette = app.palette;
+    let max_width = (ui.available_width() - workspace_reserve).clamp(240.0, 640.0);
+    let min_width = 280.0_f32.min(max_width);
+    let width_constrained = app.settings.lyrics_width > max_width;
     let panel = egui::Panel::right("lyrics-panel")
         .resizable(true)
         .default_size(app.settings.lyrics_width)
-        .size_range(280.0..=640.0)
+        .size_range(min_width..=max_width)
         .show_separator_line(false)
         .frame(
             Frame::new()
@@ -54,10 +57,15 @@ pub fn side_panel(app: &mut App, ui: &mut egui::Ui) {
         contents(app, ui);
     });
     let current_width = response.response.rect.width();
-    if (app.settings.lyrics_width - current_width).abs() > 1.0 {
+    if !width_constrained && (app.settings.lyrics_width - current_width).abs() > 1.0 {
         app.settings.lyrics_width = current_width;
         app.actions.push(Action::SettingsChanged);
     }
+    ui.painter().vline(
+        response.response.rect.left() + 0.5,
+        response.response.rect.y_range(),
+        egui::Stroke::new(1.0, palette.outline.gamma_multiply(0.45)),
+    );
 }
 
 fn contents(app: &mut App, ui: &mut egui::Ui) {

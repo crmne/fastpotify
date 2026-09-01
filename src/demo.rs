@@ -772,18 +772,25 @@ mod tests {
     use super::*;
     use crate::app::AppOptions;
     use crate::paths::AppDirs;
-    use crate::settings::Settings;
+    use crate::settings::{Settings, ThemeChoice};
+    use crate::theme;
 
     fn frame(ctx: &egui::Context, app: &mut App) {
         frame_events(ctx, app, Vec::new());
     }
 
     fn frame_events(ctx: &egui::Context, app: &mut App, events: Vec<egui::Event>) {
+        frame_events_at(ctx, app, events, egui::vec2(1280.0, 800.0));
+    }
+
+    fn frame_events_at(
+        ctx: &egui::Context,
+        app: &mut App,
+        events: Vec<egui::Event>,
+        size: egui::Vec2,
+    ) {
         let input = egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(
-                egui::Pos2::ZERO,
-                egui::vec2(1280.0, 800.0),
-            )),
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
             events,
             ..Default::default()
         };
@@ -791,6 +798,79 @@ mod tests {
             app.frame_ui(ui);
         });
         output.textures_delta.clear();
+    }
+
+    /// The application rails own the whole window edge, leaving the workspace
+    /// between them instead of nesting chrome inside the content column.
+    #[test]
+    fn shell_panels_share_the_window_edges_at_desktop_widths() {
+        use egui::containers::panel::PanelState;
+
+        let root =
+            std::env::temp_dir().join(format!("fastpotify-shell-test-{}", std::process::id()));
+        let dirs = AppDirs {
+            config: root.join("config"),
+            state: root.join("state"),
+            cache: root.join("cache"),
+        };
+        let ctx = egui::Context::default();
+        let waker = crate::backend::Waker::default();
+        waker.attach(&ctx);
+        let mut app = App::new(
+            &waker,
+            dirs,
+            Settings::default(),
+            AppOptions {
+                media_controls: false,
+                tray: false,
+            },
+        );
+        app.attach(&ctx);
+        populate(&mut app);
+        app.open(Page::Playlist("pl1".into()));
+        app.settings.sidebar_visible = true;
+        app.show_queue_panel = true;
+
+        for (size, theme_choice) in [
+            (egui::vec2(1240.0, 800.0), ThemeChoice::Dark),
+            (egui::vec2(900.0, 600.0), ThemeChoice::Dark),
+            (egui::vec2(760.0, 520.0), ThemeChoice::Light),
+        ] {
+            app.settings.theme = theme_choice;
+            ctx.set_theme(match theme_choice {
+                ThemeChoice::Dark => egui::ThemePreference::Dark,
+                ThemeChoice::Light => egui::ThemePreference::Light,
+                ThemeChoice::System => unreachable!(),
+            });
+            for _ in 0..2 {
+                frame_events_at(&ctx, &mut app, Vec::new(), size);
+            }
+
+            let panel = |id| {
+                PanelState::load(&ctx, egui::Id::new(id))
+                    .unwrap_or_else(|| panic!("{id} should have laid itself out"))
+                    .outer_rect
+            };
+            let top = panel("top-bar");
+            let player = panel("player-bar");
+            let sidebar = panel("sidebar");
+            let queue = panel("queue-panel");
+
+            assert_eq!(top.left(), 0.0);
+            assert_eq!(top.right(), size.x);
+            assert_eq!(player.left(), 0.0);
+            assert_eq!(player.right(), size.x);
+            assert_eq!(sidebar.top(), top.bottom());
+            assert_eq!(queue.top(), top.bottom());
+            assert_eq!(sidebar.bottom(), player.top());
+            assert_eq!(queue.bottom(), player.top());
+            assert!(sidebar.right() < queue.left());
+            assert_eq!(
+                top.height(),
+                theme::TOP_BAR_HEIGHT + theme::titlebar_inset(&ctx)
+            );
+        }
+        app.backend.shutdown();
     }
 
     /// A toast lays its words out in a line. The anchored area it lives
