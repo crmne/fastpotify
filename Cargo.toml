@@ -164,8 +164,9 @@ opt-level = 0
 
 # projectm-sys 1.2.2 hardcodes the Visual Studio 17 2022 CMake generator,
 # which GitHub's windows-latest images no longer carry. The fork also keeps
-# the `lib` prefix CMake gives static MSVC archives when naming them to rustc.
-# Drop when upstream takes both changes.
+# the `lib` prefix CMake gives static MSVC archives when naming them to rustc
+# and matches Rust's non-debug MSVC runtime in Cargo dev builds. Drop when
+# upstream takes these changes.
 [patch.crates-io]
 projectm-sys = { git = "https://github.com/BraydenPB/projectm-rs", branch = "respect-cmake-generator" }
 # librespot 0.8.0 plus one patch: the loaded track's normalisation factor
