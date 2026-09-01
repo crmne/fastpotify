@@ -92,6 +92,13 @@
               cargo = toolchain;
               rustc = toolchain;
             };
+            cmakeWithLibdir = pkgs.writeShellScript "cmake-fastpotify" ''
+              if [[ "$1" == "--build" ]]; then
+                exec ${pkgs.cmake}/bin/cmake "$@"
+              else
+                exec ${pkgs.cmake}/bin/cmake "$@" -DCMAKE_INSTALL_LIBDIR=lib
+              fi
+            '';
             runtimeLibs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux (
               with pkgs;
               [
@@ -109,7 +116,15 @@
             pname = "fastpotify";
             version = (pkgs.lib.importTOML ./Cargo.toml).package.version;
             src = self;
-            cargoLock.lockFile = ./Cargo.lock;
+
+            # The lock file contains git dependencies. fetchCargoVendor includes
+            # them in the fixed-output dependency tree, unlike cargoLock alone.
+            cargoDeps = pkgs.rustPlatform.fetchCargoVendor {
+              pname = "fastpotify";
+              version = (pkgs.lib.importTOML ./Cargo.toml).package.version;
+              src = self;
+              hash = "sha256-e/uJwqYszz7ASo5elWcTIX6Smb0xJgQZA5fgHuwvzaE=";
+            };
 
             nativeBuildInputs =
               with pkgs;
@@ -127,11 +142,17 @@
                 [
                   alsa-lib
                   libpulseaudio
-                  # libprojectM links OpenGL directly.
+                  # libprojectM links OpenGL directly and its GL loader needs
+                  # X11 headers while it is built.
                   libGL
+                  libx11
                 ]
               )
               ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isDarwin [ pkgs.apple-sdk ];
+
+            # projectm-sys expects CMake to install into lib/, while CMake
+            # defaults to lib64/ on NixOS.
+            env.CMAKE = "${cmakeWithLibdir}";
 
             # The GUI dlopens its Wayland, X11 and GL libraries at run time.
             postFixup = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
