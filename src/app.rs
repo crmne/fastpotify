@@ -1795,6 +1795,14 @@ impl App {
             Err(error) => {
                 self.toast_error(format!("{}: {error}", crate::wmp::label(&loaded.name)));
                 self.settings.wmp_skin = self.wmp.worn.clone();
+                // Nothing worn to fall back on: the skin window is over,
+                // and the plain player is what the person has again. A
+                // window showing now is the plain one already — the
+                // skin window only stands where a skin was worn — so
+                // the setting alone comes back, with no window dance.
+                if self.settings.wmp_window && self.wmp.skin.is_none() {
+                    self.settings.wmp_window = false;
+                }
                 self.settings_dirty = true;
             }
         }
@@ -6726,6 +6734,57 @@ mod tests {
 
         // #then
         assert!(app.wmp.skin.is_none());
+    }
+
+    /// A skin that will not assemble does not leave the app saying the
+    /// skin window is on with nothing to show in it: the plain player
+    /// is what the person has, and the setting says so.
+    #[test]
+    fn a_skin_that_fails_to_assemble_restores_the_plain_player() {
+        // #given
+        let mut app = headless_app();
+        app.settings.wmp_window = true;
+        app.settings.wmp_skin = Some("Broken.wmz".into());
+
+        // #when
+        app.wmp_loaded(crate::wmp::Loaded {
+            name: "Broken.wmz".into(),
+            result: Err(crate::wmp::WmpError::NoDefinition),
+        });
+
+        // #then
+        assert!(!app.settings.wmp_window);
+        assert_eq!(app.settings.wmp_skin, None);
+    }
+
+    /// A skin that fails while another is worn falls back to the one
+    /// still on, and the skin window stays on.
+    #[test]
+    fn a_skin_that_fails_falls_back_to_the_one_worn() {
+        // #given
+        let mut app = headless_app();
+        app.settings.wmp_window = true;
+        let document =
+            crate::wmp::SkinDocument::from_files("toothy", [("toothy.wms", b"<theme/>".to_vec())])
+                .unwrap();
+        app.wmp.wear(
+            Some("Toothy.wmz".into()),
+            crate::wmp::WmpSkin {
+                document: std::sync::Arc::new(document),
+                render: crate::ui::wmp::Render::default(),
+            },
+        );
+        app.settings.wmp_skin = Some("Broken.wmz".into());
+
+        // #when
+        app.wmp_loaded(crate::wmp::Loaded {
+            name: "Broken.wmz".into(),
+            result: Err(crate::wmp::WmpError::NoDefinition),
+        });
+
+        // #then
+        assert!(app.settings.wmp_window);
+        assert_eq!(app.settings.wmp_skin, Some("Toothy.wmz".into()));
     }
 
     /// The verbs a Stream Deck key needs and a media key never asked for:
