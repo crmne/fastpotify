@@ -1288,15 +1288,17 @@ fn element_visible(skin: &Skin, render: &mut Render, common: &ir::Common) -> boo
 
 /// One geometry value, resolved through the layout's arithmetic.
 fn geometry(render: &mut Render, common: &ir::Common, attr: Attr) -> Option<i32> {
-    let value = match attr {
-        Attr::Left => &common.left,
-        Attr::Top => &common.top,
-        Attr::Width => &common.width,
-        Attr::Height => &common.height,
-    };
     match render.layout.as_mut() {
-        Some(layout) => layout.number(value, common.id.as_deref(), attr),
-        None => value.as_ref().and_then(Value::as_i32),
+        Some(layout) => layout.number(common, attr),
+        None => {
+            let value = match attr {
+                Attr::Left => &common.left,
+                Attr::Top => &common.top,
+                Attr::Width => &common.width,
+                Attr::Height => &common.height,
+            };
+            value.as_ref().and_then(Value::as_i32)
+        }
     }
 }
 

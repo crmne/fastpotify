@@ -65,7 +65,7 @@ impl Layout {
     /// skins write it.
     pub fn build(view: &View) -> Self {
         let mut resolved = HashMap::new();
-        let view_entry = [None, None, view.width, view.height];
+        let view_entry = [Some(0), Some(0), view.width, view.height];
         if let Some(id) = &view.id {
             resolved.insert(id.clone(), view_entry);
         }
@@ -89,6 +89,11 @@ impl Layout {
                     }
                     Some(Value::JScript(expr)) => exprs.push((id.clone(), index, expr.clone())),
                     Some(Value::WmpProp(_)) => {}
+                    // An unset left or top stands at the origin, the way
+                    // the player places it; sizes keep their fallbacks.
+                    None if index < 2 => {
+                        entry[index] = Some(0);
+                    }
                     None => {}
                 }
             }
@@ -106,6 +111,14 @@ impl Layout {
                     continue;
                 }
                 let look = |name: &str, attr: &str| {
+                    // A bare attribute name answers from the element
+                    // itself: its own numbers as they settle, round by
+                    // round.
+                    if attr.is_empty() {
+                        return Attr::from_name(name).and_then(|attr| {
+                            resolved.get(id).and_then(|entry| entry[attr.index()])
+                        });
+                    }
                     Attr::from_name(attr)
                         .and_then(|attr| resolved.get(name).and_then(|entry| entry[attr.index()]))
                 };
@@ -131,11 +144,18 @@ impl Layout {
     /// One geometry value: a number as written, or the expression that
     /// computed it. Nothing resolvable stands in as nothing, and the
     /// caller falls back as its element demands.
-    pub fn number(&mut self, value: &Option<Value>, id: Option<&str>, attr: Attr) -> Option<i32> {
+    pub fn number(&mut self, common: &Common, attr: Attr) -> Option<i32> {
+        let value = match attr {
+            Attr::Left => &common.left,
+            Attr::Top => &common.top,
+            Attr::Width => &common.width,
+            Attr::Height => &common.height,
+        };
         match value.as_ref()? {
             Value::Literal(text) => text.trim().parse().ok(),
             Value::WmpProp(_) => None,
             Value::JScript(expr) => {
+                let id = common.id.as_deref();
                 if let Some(number) = id
                     .and_then(|id| self.resolved.get(id))
                     .and_then(|entry| entry[attr.index()])
@@ -143,6 +163,9 @@ impl Layout {
                     return Some(number);
                 }
                 let look = |name: &str, attr: &str| {
+                    if attr.is_empty() {
+                        return Self::own(common, self, id, name);
+                    }
                     Attr::from_name(attr).and_then(|attr| {
                         self.resolved
                             .get(name)
@@ -160,6 +183,25 @@ impl Layout {
         }
     }
 
+    /// A bare attribute name answers from the element itself: what the
+    /// layout settled for it, or what it wrote outright when the layout
+    /// never heard of it - an element without an id settles nothing
+    /// ahead of time.
+    fn own(common: &Common, layout: &Layout, id: Option<&str>, name: &str) -> Option<i32> {
+        let attr = Attr::from_name(name)?;
+        let own = match attr {
+            Attr::Left => &common.left,
+            Attr::Top => &common.top,
+            Attr::Width => &common.width,
+            Attr::Height => &common.height,
+        };
+        if let Some(Value::Literal(text)) = own.as_ref() {
+            return text.trim().parse().ok();
+        }
+        id.and_then(|id| layout.resolved.get(id))
+            .and_then(|entry| entry[attr.index()])
+    }
+
     /// Whether a visibility expression says an element shows. A number
     /// stands for its truth: anything but zero shows.
     pub fn truth(
@@ -173,6 +215,14 @@ impl Layout {
             _ => return None,
         };
         let look = |name: &str, attr: &str| {
+            // A bare attribute name answers from the element itself;
+            // anything else falls through to the states below.
+            if attr.is_empty() && Attr::from_name(name).is_some() {
+                return Attr::from_name(name).and_then(|attr| {
+                    id.and_then(|id| self.resolved.get(id))
+                        .and_then(|entry| entry[attr.index()])
+                });
+            }
             if name.eq_ignore_ascii_case("player") {
                 return if attr.eq_ignore_ascii_case("playstate") {
                     playstate
@@ -522,16 +572,54 @@ mod tests {
     }
 
     #[test]
+    fn a_bare_attribute_answers_from_the_element_itself() {
+        let view = view_with(
+            r#"<subview id="cpane" left="0" top="208" width="285" height="jscript:view.height - top"/>"#,
+        );
+        let layout = Layout::build(&view);
+        assert_eq!(layout.resolved.get("cpane").unwrap()[3], Some(92));
+    }
+
+    #[test]
+    fn an_element_without_an_id_reads_its_own_literals() {
+        let view = view_with(
+            r#"<subview id="cpane" left="0" top="208" width="285" height="151"><subview top="55" width="285" height="jscript:cpane.height-top"/></subview>"#,
+        );
+        let layout = Layout::build(&view);
+        assert_eq!(layout.resolved.get("cpane").unwrap()[3], Some(151));
+        // The inner subview names no id, so the layout never heard of
+        // it; its numbers still settle from its own literals and the
+        // elements it names.
+        let outer = match &view.children[0] {
+            crate::wmp::ir::Element::Subview(outer) => outer,
+            other => panic!("expected a subview, got {other:?}"),
+        };
+        assert_eq!(outer.common.id.as_deref(), Some("cpane"));
+        let inner = match &outer.children[0] {
+            crate::wmp::ir::Element::Subview(inner) => inner.common.clone(),
+            other => panic!("expected a subview, got {other:?}"),
+        };
+        assert_eq!(inner.id, None);
+        let mut layout = layout;
+        assert_eq!(layout.number(&inner, Attr::Height), Some(96));
+    }
+
+    #[test]
+    fn an_unset_left_or_top_stands_at_the_origin() {
+        let view = view_with(r#"<image id="glyph" top="5"/>"#);
+        let layout = Layout::build(&view);
+        assert_eq!(layout.resolved.get("glyph").unwrap()[0], Some(0));
+        assert_eq!(layout.resolved.get("glyph").unwrap()[2], None);
+    }
+
+    #[test]
     fn an_expression_that_names_nothing_stands_at_zero() {
         let view = view_with(r#"<image id="pane" left="jscript:ghost.left+1;"/>"#);
         let layout = Layout::build(&view);
         assert_eq!(layout.resolved.get("pane").unwrap()[0], None);
         let common = walk_first_common(&view);
         let mut layout = layout;
-        assert_eq!(
-            layout.number(&common.left, common.id.as_deref(), Attr::Left),
-            None
-        );
+        assert_eq!(layout.number(&common, Attr::Left), None);
     }
 
     fn walk_first_common(view: &View) -> Common {
@@ -546,18 +634,9 @@ mod tests {
         let layout = Layout::build(&view);
         let common = walk_first_common(&view);
         let mut layout = layout;
-        assert_eq!(
-            layout.number(&common.left, common.id.as_deref(), Attr::Left),
-            Some(-12)
-        );
-        assert_eq!(
-            layout.number(&common.width, common.id.as_deref(), Attr::Width),
-            Some(20)
-        );
-        assert_eq!(
-            layout.number(&common.height, common.id.as_deref(), Attr::Height),
-            None
-        );
+        assert_eq!(layout.number(&common, Attr::Left), Some(-12));
+        assert_eq!(layout.number(&common, Attr::Width), Some(20));
+        assert_eq!(layout.number(&common, Attr::Height), None);
     }
 
     #[test]
