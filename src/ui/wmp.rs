@@ -725,8 +725,11 @@ fn collect_layers(render: &mut Render, element: &Element, at: (i32, i32), layers
     if !element_visible_of(render, common) {
         return;
     }
-    let left = common.left_i32().unwrap_or(0) + at.0;
-    let top = common.top_i32().unwrap_or(0) + at.1;
+    // Where the layout settled the element: a subview placed by
+    // arithmetic shapes the window where it stands, not at the
+    // origin the raw attributes alone would give.
+    let left = geometry(render, common, Attr::Left).unwrap_or(0) + at.0;
+    let top = geometry(render, common, Attr::Top).unwrap_or(0) + at.1;
     if let Element::Subview(subview) = element {
         if let Some(file) = &subview.background.image {
             layers.push(Layer {
