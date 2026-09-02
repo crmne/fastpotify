@@ -1,5 +1,5 @@
 title: Fastpotify
-fastpotify_version: "0.4.1"
+fastpotify_version: "0.5.0"
 description: A fast, native Spotify client for Linux, macOS, and Windows, written in Rust.
 lang: en-US
 timezone: Europe/Berlin

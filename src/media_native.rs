@@ -9,6 +9,7 @@
 //! closing to the tray. macOS needs none of that: its handlers run on the
 //! main thread, which the headless loop in `main` keeps pumping.
 
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::Duration;
@@ -25,6 +26,41 @@ type Wake = Arc<dyn Fn() + Send + Sync>;
 
 /// How far a seek button without an amount moves.
 const SEEK_STEP_MS: i64 = 10_000;
+
+/// Where cover art lives, in the spelling each platform reads back.
+///
+/// Only ever a local file. Handed a remote URL, macOS fetches it itself,
+/// synchronously, on a queue of its own, and dereferences the result without
+/// checking it: artwork that fails to arrive -- an offline laptop, a slow
+/// network, a CDN with a bad minute -- aborts the process from inside a
+/// callback that cannot unwind. So the art cache downloads it first and this
+/// names the file.
+///
+/// The two platforms want different spellings after `file://`. macOS parses
+/// the whole thing as a URL, so anything URL-significant in the path has to
+/// be escaped or it silently reads as a fragment and the load fails the same
+/// way. Windows takes the remainder as a plain path and opens it as-is, so
+/// escaping it there would break it instead.
+#[cfg(target_os = "macos")]
+fn file_url(path: &Path) -> String {
+    use std::fmt::Write;
+    let mut url = String::from("file://");
+    for byte in path.to_string_lossy().bytes() {
+        match byte {
+            b'/' | b'-' | b'.' | b'_' | b'~' => url.push(byte as char),
+            _ if byte.is_ascii_alphanumeric() => url.push(byte as char),
+            _ => {
+                let _ = write!(url, "%{byte:02X}");
+            }
+        }
+    }
+    url
+}
+
+#[cfg(not(target_os = "macos"))]
+fn file_url(path: &Path) -> String {
+    format!("file://{}", path.display())
+}
 
 #[cfg(any(target_os = "macos", test))]
 fn should_claim_now_playing(claimed: bool, state: &MediaState) -> bool {
@@ -114,12 +150,21 @@ impl Bridge {
                 .as_ref()
                 .map(|track| track.uri.clone())
                 .unwrap_or_default();
+            // Never a remote URL: see `file_url`. Artwork that has not been
+            // downloaded yet is simply left out, and the next state with the
+            // file in place sets it, because `MediaTrack` compares equal only
+            // while the art file is the same one.
+            let cover = state
+                .track
+                .as_ref()
+                .and_then(|track| track.art_file.as_deref())
+                .map(file_url);
             let metadata = match &state.track {
                 Some(track) => MediaMetadata {
                     title: Some(track.title.as_str()),
                     album: Some(track.album.as_str()),
                     artist: Some(artist.as_str()),
-                    cover_url: track.art_url.as_deref(),
+                    cover_url: cover.as_deref(),
                     duration: Some(Duration::from_millis(u64::from(track.duration_ms))),
                 },
                 None => MediaMetadata::default(),
@@ -400,6 +445,62 @@ impl MediaService {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Cover art is never handed over as a network URL. macOS loads whatever
+    /// it is given synchronously and dereferences the result unchecked, so a
+    /// fetch that fails takes the process with it.
+    #[test]
+    fn artwork_is_a_local_file() {
+        let url = file_url(Path::new("/tmp/fastpotify/art/0badc0de"));
+        assert!(url.starts_with("file://"));
+        assert!(!url.starts_with("http"));
+    }
+
+    /// macOS parses the whole string as a URL. A `#` in the path -- a home
+    /// directory is enough to put one there -- ends it early, the image comes
+    /// back nil, and the unchecked dereference aborts. Escaping is what keeps
+    /// the path a path.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_macos_url_escapes_what_a_url_would_read() {
+        assert_eq!(
+            file_url(Path::new("/Users/ada #1/Caches/art/0badc0de")),
+            "file:///Users/ada%20%231/Caches/art/0badc0de"
+        );
+        // Separators and the unreserved set stay legible.
+        assert_eq!(
+            file_url(Path::new("/a-b/c.d/e_f~g/0badc0de")),
+            "file:///a-b/c.d/e_f~g/0badc0de"
+        );
+    }
+
+    /// Windows takes the remainder as a plain path and opens it directly, so
+    /// escaping it there would break the very case it fixes on macOS.
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn a_windows_url_keeps_the_path_as_written() {
+        assert_eq!(
+            file_url(Path::new(r"C:\Users\ada #1\art\0badc0de")),
+            r"file://C:\Users\ada #1\art\0badc0de"
+        );
+    }
+
+    /// Artwork arrives after the song does. The bridge sets the metadata
+    /// again when it lands, which works only because a track carrying the
+    /// file differs from the same track without it.
+    #[test]
+    fn art_arriving_is_a_change_worth_sending() {
+        let bare = crate::media::MediaTrack {
+            uri: "spotify:track:1".to_owned(),
+            art_url: Some("https://i.scdn.co/image/abc".to_owned()),
+            ..Default::default()
+        };
+        let with_art = crate::media::MediaTrack {
+            art_file: Some(std::path::PathBuf::from("/tmp/fastpotify/art/0badc0de")),
+            ..bare.clone()
+        };
+        assert_ne!(bare, with_art);
+    }
 
     #[test]
     fn a_remembered_paused_track_claims_the_media_keys_once() {

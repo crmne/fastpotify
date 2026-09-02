@@ -708,6 +708,10 @@ fn apply_event(state: &mut LocalState, event: PlayerEvent) -> bool {
                 track_id.to_uri().unwrap_or_default()
             )),
         ),
+        PlayerEvent::AudioKeyUnavailable { .. } => set(
+            &mut state.error,
+            Some("Spotify refused the audio key. Try again later".into()),
+        ),
         PlayerEvent::VolumeChanged { volume } => set(&mut state.volume, volume),
         PlayerEvent::SessionConnected { user_name, .. } => {
             let mut changed = set(&mut state.connected, true);
@@ -920,6 +924,23 @@ mod tests {
             },
         );
         assert_eq!(state.playback, Playback::Playing);
+    }
+
+    #[test]
+    fn a_rejected_audio_key_has_its_own_error() {
+        let mut state = LocalState::default();
+
+        assert!(apply_event(
+            &mut state,
+            PlayerEvent::AudioKeyUnavailable {
+                play_request_id: 1,
+                track_id: uri(),
+            },
+        ));
+        assert_eq!(
+            state.error.as_deref(),
+            Some("Spotify refused the audio key. Try again later")
+        );
     }
 
     #[test]

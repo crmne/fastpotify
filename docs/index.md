@@ -56,6 +56,28 @@ features:
     link_text: Read the source
 ---
 
+## It turns into Winamp
+
+Load a classic `.wsz` skin from the
+[Winamp Skin Museum](https://skins.webamp.org). The mini player includes a
+spectrum analyser, equalizer, playlist, shade modes, and crisp integer pixel
+scaling. [See the mini player in detail](/winamp/).
+
+<div class="winamp-showcase">
+  <img src="/assets/images/winamp.png" alt="The mini player wearing the built-in skin" width="550" height="812">
+</div>
+
+## MilkDrop with more than 10,000 presets
+
+On first use, Fastpotify automatically downloads the original MilkDrop 2
+presets and projectM's Cream of the Crop collection. They react to local
+playback in a resizable window or fullscreen.
+[See the controls and preset details](/milkdrop/).
+
+<video class="milkdrop-showcase" autoplay loop muted playsinline preload="metadata" poster="/assets/images/milkdrop-poster.jpg" aria-label="MilkDrop presets reacting to music in Fastpotify">
+  <source src="/assets/images/milkdrop.mp4" type="video/mp4">
+</video>
+
 <style>
   /* The hero image slot is sized for a square logo; the screenshot needs the
      room. Page-scoped overrides, so the theme stays untouched. */
@@ -76,6 +98,20 @@ features:
     padding: 0 !important;
     border-radius: 12px;
     box-shadow: 0 12px 48px rgba(0, 0, 0, 0.45);
+  }
+  .winamp-showcase {
+    text-align: center;
+  }
+  .winamp-showcase img,
+  .milkdrop-showcase {
+    max-width: 100%;
+    height: auto;
+    border-radius: 12px;
+    box-shadow: 0 12px 48px rgba(0, 0, 0, 0.35);
+  }
+  .milkdrop-showcase {
+    display: block;
+    width: 100%;
   }
   @media (max-width: 959px) {
     .VPHero .image {

@@ -55,9 +55,10 @@ everyday use, and connection details.
   this computer, in Settings and in the skin.
 - **MilkDrop.** The visualiser, powered by
   [projectM](https://github.com/projectM-visualizer/projectm), runs in its own
-  window and process. It supports fullscreen and `.milk` presets.
+  window and process. It supports fullscreen and automatically downloads more
+  than 10,000 `.milk` presets on first use (about 26 MB).
 
-  https://github.com/user-attachments/assets/0d408524-2c31-4e43-bd05-73eef3a20f1e
+  https://github.com/user-attachments/assets/12b31312-0e0c-4b34-9383-e8c66aabc58d
 - **Keyboard-first.** Every common action has a shortcut (`Ctrl+/` or `?` lists
   them).
 - **Keeps playing when you close the window.** Fastpotify stays in the system
@@ -115,12 +116,12 @@ programs.fastpotify.enable = true;
 Everywhere else, build the single binary with Rust 1.95 or newer:
 
 ```bash
-cargo install --path .
+cargo install --path . --locked
 ```
 
 MilkDrop uses libprojectM, which is built from source. This needs CMake, a C++
 compiler, and libclang. To build without MilkDrop or those tools, run
-`cargo install --path . --no-default-features`. On Linux, you also need the
+`cargo install --path . --locked --no-default-features`. On Linux, you also need the
 development packages for ALSA, PulseAudio or PipeWire, and the windowing
 libraries. On Arch:
 
@@ -133,6 +134,13 @@ and on Debian or Ubuntu:
 ```bash
 sudo apt install libasound2-dev libpulse-dev libxkbcommon-dev libwayland-dev \
   cmake clang libclang-dev
+```
+
+and on Fedora:
+
+```bash
+sudo dnf install alsa-lib-devel pulseaudio-libs-devel libxkbcommon-devel \
+  wayland-devel cmake clang libclang-devel
 ```
 
 On Windows, libprojectM is built with Visual Studio 2022, CMake, LLVM, and

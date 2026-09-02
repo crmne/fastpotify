@@ -85,6 +85,20 @@ impl ArtLoader {
         }
     }
 
+    /// The disk-cache file holding `url`'s artwork, once it has been fetched.
+    ///
+    /// The cache is written atomically (a `.part` file, then a rename), so a
+    /// file that is here at all holds a complete, successful response. The
+    /// desktop media controls hand this path to the platform instead of the
+    /// remote URL: macOS loads cover art itself, synchronously, inside a
+    /// callback that cannot report a failure.
+    pub fn cached_file(&self, url: &str) -> Option<PathBuf> {
+        let path = self.inner.cache_path(url);
+        std::fs::metadata(&path)
+            .is_ok_and(|meta| meta.is_file() && meta.len() > 0)
+            .then_some(path)
+    }
+
     pub fn clear_disk_cache(&self) -> std::io::Result<u64> {
         let mut removed = 0;
         for entry in std::fs::read_dir(&self.inner.cache_dir)? {
@@ -301,6 +315,38 @@ pub fn accent_color(bytes: &[u8]) -> Option<[u8; 3]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The media controls ask for a file rather than a URL, and have to be
+    /// told "not yet" rather than handed a path to nothing: macOS loads cover
+    /// art itself and dereferences a failed load without checking it, which
+    /// takes the whole process with it.
+    #[test]
+    fn a_cached_file_is_named_only_once_it_is_really_there() {
+        let dir = std::env::temp_dir().join(format!("fastpotify-art-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("a runtime to hand the loader");
+        let loader = ArtLoader::new(
+            reqwest::Client::new(),
+            runtime.handle().clone(),
+            dir.clone(),
+        );
+        let url = "https://i.scdn.co/image/abc";
+
+        assert_eq!(loader.cached_file(url), None, "nothing downloaded yet");
+
+        // A half-written download never appears under its real name -- the
+        // cache renames one into place -- but an empty file is not artwork.
+        let path = loader.inner.cache_path(url);
+        std::fs::write(&path, b"").expect("an empty file");
+        assert_eq!(loader.cached_file(url), None, "empty is not artwork");
+
+        std::fs::write(&path, b"\xff\xd8\xff jpeg-ish").expect("a file with bytes");
+        assert_eq!(loader.cached_file(url), Some(path));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn accent_color_finds_dominant_hue() {

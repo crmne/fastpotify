@@ -127,6 +127,20 @@ jobs:
               Select-Object -ExpandProperty FullName
           }
 
+  nix:
+    name: Nix package
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: wimpysworld/nothing-but-nix@v9
+      - uses: cachix/install-nix-action@v31
+      - uses: nix-community/cache-nix-action@v7
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('**/flake.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+      - run: nix build .#default
+
   docs:
     name: docs
     runs-on: ubuntu-latest

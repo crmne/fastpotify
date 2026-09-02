@@ -1,6 +1,7 @@
 //! The application: state, event handling, and the actions views ask for.
 
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use egui::Color32;
@@ -139,6 +140,10 @@ pub struct App {
     last_settings_save: Instant,
     pub backend: Backend,
     media_controls: Option<MediaService>,
+    /// The artwork the media controls were last given, and the URL it came
+    /// from. Finding the file touches the disk and the controls are synced
+    /// every frame, so the answer is kept until the artwork changes.
+    media_art: Option<(String, PathBuf)>,
     tray: Option<TrayService>,
     pub window_hidden: bool,
     /// The window should close but the process should stay in the tray.
@@ -306,7 +311,9 @@ pub struct App {
     last_unavailable_reconnect: Option<Instant>,
     /// The Premium notice has been shown for this sign-in.
     premium_notice_shown: bool,
-    /// Context shown immediately after play, until Spotify confirms it.
+    /// Context shown immediately after play, until Spotify confirms it. An
+    /// empty URI means a plain track list, whose lack of a context must also
+    /// hide stale state.
     assumed_context: Option<AssumedContext>,
     last_now_playing_uri: Option<String>,
     pub playlist_busy: bool,
@@ -440,6 +447,7 @@ impl App {
             last_settings_save: Instant::now(),
             backend,
             media_controls,
+            media_art: None,
             tray,
             window_hidden: false,
             hide_intent: false,
@@ -731,7 +739,7 @@ impl App {
             // report a context URI. Keep the assumed URI unless contradicted.
             let contradicted = remote.as_deref().is_some_and(|uri| uri != assumed.uri);
             if held || (!contradicted && self.believed_playing()) {
-                return Some(assumed.uri.clone());
+                return (!assumed.uri.is_empty()).then(|| assumed.uri.clone());
             }
         }
         remote
@@ -1912,7 +1920,27 @@ impl App {
         }
     }
 
+    /// The downloaded file for `url`, once the art cache has it.
+    ///
+    /// The media controls are handed a file rather than the URL, so the disk
+    /// is asked until the download lands and the answer remembered after
+    /// that; see `media_native::file_url` for why a URL will not do.
+    fn media_art_file(&mut self, url: &str) -> Option<PathBuf> {
+        if let Some((known, file)) = &self.media_art
+            && known == url
+        {
+            return Some(file.clone());
+        }
+        let file = self.backend.art().cached_file(url)?;
+        self.media_art = Some((url.to_owned(), file.clone()));
+        Some(file)
+    }
+
     fn sync_media_controls(&mut self) {
+        let art_file = self
+            .now_playing()
+            .and_then(|now| now.art_url)
+            .and_then(|url| self.media_art_file(&url));
         let state = match self.now_playing() {
             Some(now) => MediaState {
                 playback: if now.playing {
@@ -1932,6 +1960,7 @@ impl App {
                         .collect(),
                     album: now.album_name.clone(),
                     art_url: now.art_url.clone(),
+                    art_file,
                     duration_ms: now.duration_ms,
                 }),
                 position_ms: now.position_ms,
@@ -3904,13 +3933,14 @@ impl App {
         self.set_play_pending(keys);
         if let Some(context) = request.context_uri.clone() {
             self.note_recent_context(&context);
-            // Show the context as playing before Spotify confirms it.
-            self.assumed_context = Some(AssumedContext {
-                uri: context,
-                shuffle: shuffle.then_some(true),
-                at: Instant::now(),
-            });
         }
+        // Show a context as playing at once, or clear the previous context
+        // for a plain track list. Spotify's state catches up behind it.
+        self.assumed_context = Some(AssumedContext {
+            uri: request.context_uri.clone().unwrap_or_default(),
+            shuffle: shuffle.then_some(true),
+            at: Instant::now(),
+        });
         match self.target() {
             Target::Local if !self.local.connected => {
                 // Hold the request while the local engine reconnects.
@@ -4861,6 +4891,11 @@ impl App {
                     // No window exists; the outer loop creates one.
                     self.wants_show = true;
                 } else {
+                    // A minimized window has to be restored before it can be
+                    // focused: Focus alone leaves it in the Dock, and the
+                    // platform draws no frames while it is down there, so
+                    // nothing arrives to ask a second time.
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
                     ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                 }
             }
@@ -4908,6 +4943,10 @@ impl App {
             Action::ClearArtCache => match self.backend.art().clear_disk_cache() {
                 Ok(bytes) => {
                     ctx.forget_all_images();
+                    // The media controls hold a path into what was just
+                    // deleted; forget it, or the next sync hands the system
+                    // a file that is no longer there.
+                    self.media_art = None;
                     self.toast(format!(
                         "Cleared {:.1} MB of artwork",
                         bytes as f64 / 1_048_576.0
@@ -5632,6 +5671,41 @@ fn cap_uris(uris: Vec<String>, index: u32) -> (Vec<String>, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A song started outside a playlist must turn off the playlist's
+    /// sidebar light at once, even while Spotify still reports the old
+    /// context from before the click.
+    #[test]
+    fn a_plain_song_clears_the_sidebar_context() {
+        let ctx = egui::Context::default();
+        let mut app = headless_app();
+        app.assumed_context = Some(AssumedContext {
+            uri: "spotify:playlist:sidebar".into(),
+            shuffle: None,
+            at: Instant::now(),
+        });
+        app.remote = Some(RemoteSnapshot {
+            state: PlaybackState {
+                context: Some(crate::api::models::Context {
+                    uri: "spotify:playlist:sidebar".into(),
+                    ..Default::default()
+                }),
+                is_playing: true,
+                ..Default::default()
+            },
+            received_at: Instant::now(),
+        });
+
+        app.apply(
+            Action::PlayUris {
+                uris: vec!["spotify:track:standalone".into()],
+                index: 0,
+            },
+            &ctx,
+        );
+
+        assert_eq!(app.playing_context_uri(), None);
+    }
 
     #[test]
     fn volume_conversions_round_trip() {
@@ -6715,6 +6789,72 @@ mod tests {
             "the new screen is noted"
         );
         assert_eq!(app.settings.milkdrop_fps, 30, "their number stands");
+    }
+
+    /// A window in the Dock is drawn no frames, so the one frame a Show
+    /// request buys has to be the frame that brings it back. Focus alone
+    /// leaves it down there, and nothing asks again.
+    #[test]
+    fn showing_a_minimized_window_restores_it_before_focusing_it() {
+        // #given a window exists, minimized rather than closed
+        let mut app = headless_app();
+        let ctx = egui::Context::default();
+        assert!(!app.window_hidden, "a window this app still owns");
+
+        // #when something asks for the window: the Dock, the tray, or
+        // `fastpotify show`
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            app.apply(Action::ShowWindow, ui.ctx());
+        });
+        output.textures_delta.clear();
+
+        // #then
+        let commands = &output
+            .viewport_output
+            .get(&egui::ViewportId::ROOT)
+            .expect("the root viewport")
+            .commands;
+        assert!(
+            commands.contains(&egui::ViewportCommand::Minimized(false)),
+            "asked to show, but never asked to come out of the Dock: {commands:?}"
+        );
+        assert!(
+            commands.contains(&egui::ViewportCommand::Focus),
+            "restored but left behind whatever is in front of it: {commands:?}"
+        );
+    }
+
+    /// The media controls are handed a downloaded file, never a URL: macOS
+    /// loads cover art itself and dereferences a failed load without
+    /// checking it, so a URL that does not answer aborts the process. The
+    /// sync runs every frame, so the answer is remembered -- which means
+    /// emptying the cache has to forget it, or the path outlives the file.
+    #[test]
+    fn the_media_controls_only_hear_about_artwork_that_exists() {
+        // #given
+        let mut app = headless_app();
+        let ctx = egui::Context::default();
+        let url = "https://i.scdn.co/image/abc";
+        let file = app.dirs.cache.join("art").join("0badc0de");
+        std::fs::create_dir_all(file.parent().expect("a parent")).expect("the art cache");
+        std::fs::write(&file, b"jpeg-ish").expect("a cached file");
+
+        // #then nothing has been downloaded for this song yet
+        assert_eq!(app.media_art_file(url), None);
+
+        // #when the cache holds it, that file is what the controls are told
+        app.media_art = Some((url.to_owned(), file.clone()));
+        assert_eq!(app.media_art_file(url), Some(file.clone()));
+
+        // #then another song is not covered by what is remembered
+        assert_eq!(app.media_art_file("https://i.scdn.co/image/def"), None);
+
+        // #when the artwork cache is emptied, the remembered path goes too
+        app.actions.push(Action::ClearArtCache);
+        app.apply_actions(&ctx);
+        assert_eq!(app.media_art, None, "a path into a deleted cache");
+
+        let _ = std::fs::remove_file(&file);
     }
 
     fn headless_app() -> App {

@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use skrifa::MetadataProvider as _;
+use skrifa::raw::TableProvider as _;
 
 /// Registered font name, file bytes, and face index.
 pub struct Fallback {
@@ -58,9 +59,6 @@ const HAN_REGIONS: &[(&str, &str)] = &[
     ("ja", "jp"),
     ("ko", "kr"),
 ];
-
-/// The regional cuts a pan-CJK family can name itself after.
-const HAN_REGION_NAMES: &[&str] = &["sc", "tc", "hk", "jp", "kr"];
 
 /// How deep to walk each font directory. Distributions nest a level or two
 /// (`/usr/share/fonts/truetype/noto`); nothing legitimate goes deeper, and the
@@ -181,6 +179,12 @@ fn rank_family(path: &Path, wanted: &[&str], best: &mut Option<(usize, PathBuf, 
 
 /// A face that covers a script, and how well it suits the interface.
 struct Candidate {
+    /// Drawn for another Han region than the locale's. A Japanese face draws
+    /// 中 and so passes the coverage probe, but every simplified character it
+    /// lacks would come from whatever fallback follows, at that font's size
+    /// and baseline, so it ranks below any face from the right region and
+    /// serves only when it is all there is.
+    foreign: bool,
     score: u32,
     path: PathBuf,
     index: u32,
@@ -313,25 +317,31 @@ fn probe_file(path: &Path, han: &str, best: &mut BTreeMap<&str, Candidate>) {
             .to_lowercase();
         let charmap = font.charmap();
         let outlines = font.outline_glyphs();
+        // A face must draw the character, not merely map it: a bitmap or
+        // colour-only font passes the charmap and renders nothing.
+        let draws = |character: char| {
+            charmap
+                .map(character)
+                .is_some_and(|glyph| outlines.get(glyph).is_some())
+        };
         for (script, probe, hint) in FALLBACK_SCRIPTS {
-            // A face must draw the character, not merely map it: a bitmap or
-            // colour-only font passes the charmap and renders nothing.
-            let covers = charmap
-                .map(*probe)
-                .is_some_and(|glyph| outlines.get(glyph).is_some());
-            if !covers {
+            if !draws(*probe) {
                 continue;
             }
             let score = face_score(&family, attributes.weight.value(), han, hint);
+            let foreign = *script == "han" && {
+                let code_pages = font.os2().ok().and_then(|os2| os2.ul_code_page_range_1());
+                !covers_han_region(code_pages, han)
+            };
             // Ties break on the path so two machines carrying the same fonts
             // resolve the same face, whatever order their directories list.
-            if best
-                .get(script)
-                .is_none_or(|held| (score, path) < (held.score, held.path.as_path()))
-            {
+            if best.get(script).is_none_or(|held| {
+                (foreign, score, path) < (held.foreign, held.score, held.path.as_path())
+            }) {
                 best.insert(
                     script,
                     Candidate {
+                        foreign,
                         score,
                         path: path.to_path_buf(),
                         index,
@@ -385,12 +395,32 @@ fn face_score(family: &str, weight: f32, han: &str, hint: &str) -> u32 {
     if let Some(region) = family
         .rsplit(' ')
         .next()
-        .filter(|region| HAN_REGION_NAMES.contains(region))
+        .filter(|region| han_code_page(region).is_some())
         && region != han
     {
         score += 40;
     }
     score
+}
+
+/// The OS/2 `ulCodePageRange1` bit a face sets to declare it covers a
+/// region's legacy character set: Shift JIS, GB 2312, Wansung, or Big5.
+fn han_code_page(region: &str) -> Option<u32> {
+    match region {
+        "jp" => Some(17),
+        "sc" => Some(18),
+        "kr" => Some(19),
+        "tc" | "hk" => Some(20),
+        _ => None,
+    }
+}
+
+/// Whether a face's declared code pages include the region's character set.
+/// A face too old to declare any is taken at its word: none.
+fn covers_han_region(code_pages: Option<u32>, han: &str) -> bool {
+    han_code_page(han)
+        .zip(code_pages)
+        .is_some_and(|(bit, pages)| pages & (1 << bit) != 0)
 }
 
 /// The user's locale, lowercased, or an empty string when none is set. A
@@ -471,6 +501,18 @@ mod tests {
         assert_eq!(han_region("ko_kr.utf-8"), "kr");
         assert_eq!(han_region("en_us.utf-8"), "sc", "the default");
         assert_eq!(han_region(""), "sc", "no locale set");
+    }
+
+    #[test]
+    fn a_face_declares_the_regions_it_covers() {
+        // Hiragino Sans covers 中 but declares only Shift JIS.
+        let japanese = Some(1 << 17);
+        assert!(covers_han_region(japanese, "jp"));
+        assert!(!covers_han_region(japanese, "sc"));
+        assert!(!covers_han_region(None, "sc"), "no OS/2 table, no claim");
+        for (_, region) in HAN_REGIONS {
+            assert!(han_code_page(region).is_some(), "{region} has a code page");
+        }
     }
 
     #[test]

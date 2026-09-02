@@ -93,6 +93,13 @@
               cargo = toolchain;
               rustc = toolchain;
             };
+            cmakeWithLibdir = pkgs.writeShellScript "cmake-fastpotify" ''
+              if [[ "$1" == "--build" ]]; then
+                exec ${pkgs.cmake}/bin/cmake "$@"
+              else
+                exec ${pkgs.cmake}/bin/cmake "$@" -DCMAKE_INSTALL_LIBDIR=lib
+              fi
+            '';
             runtimeLibs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux (
               with pkgs;
               [
@@ -110,29 +117,15 @@
             pname = "fastpotify";
             version = (pkgs.lib.importTOML ./Cargo.toml).package.version;
             src = self;
-            cargoLock.lockFile = ./Cargo.lock;
-            # Git dependencies in Cargo.lock need a fixed-output hash per
-            # crate so the vendor directory is reproducible.
-            cargoLock.outputHashes = {
-              "librespot-audio-0.8.0" = "sha256-TkHdN/dugdmK5iWmcvxGhz+0Cynki4/nNpp85F/qF/0=";
-              "librespot-connect-0.8.0" = "sha256-TkHdN/dugdmK5iWmcvxGhz+0Cynki4/nNpp85F/qF/0=";
-              "librespot-core-0.8.0" = "sha256-TkHdN/dugdmK5iWmcvxGhz+0Cynki4/nNpp85F/qF/0=";
-              "librespot-metadata-0.8.0" = "sha256-TkHdN/dugdmK5iWmcvxGhz+0Cynki4/nNpp85F/qF/0=";
-              "librespot-oauth-0.8.0" = "sha256-TkHdN/dugdmK5iWmcvxGhz+0Cynki4/nNpp85F/qF/0=";
-              "librespot-playback-0.8.0" = "sha256-TkHdN/dugdmK5iWmcvxGhz+0Cynki4/nNpp85F/qF/0=";
-              "librespot-protocol-0.8.0" = "sha256-TkHdN/dugdmK5iWmcvxGhz+0Cynki4/nNpp85F/qF/0=";
-              "projectm-sys-1.2.3" = "sha256-sgI6IOCpQUvdc5acQ1wjCM5mhfz2EPZmoeuyNLGB5UI=";
-            };
 
-            # projectm-sys' build.rs links the static library from
-            # $OUT_DIR/lib, but CMake's GNUInstallDirs installs it into
-            # lib64 on x86_64 Linux, so the link step cannot find it.
-            # Force `lib` in the vendored CMakeLists before the build
-            # script runs. (Vendored git crates carry no file checksums.)
-            preBuild = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
-              substituteInPlace "$NIX_BUILD_TOP/cargo-vendor-dir/projectm-sys-1.2.3/libprojectM/CMakeLists.txt" \
-                --replace 'set(PROJECTM_LIB_DIR "''${CMAKE_INSTALL_LIBDIR}" CACHE' 'set(PROJECTM_LIB_DIR "lib" CACHE'
-            '';
+            # The lock file contains git dependencies. fetchCargoVendor includes
+            # them in the fixed-output dependency tree, unlike cargoLock alone.
+            cargoDeps = pkgs.rustPlatform.fetchCargoVendor {
+              pname = "fastpotify";
+              version = (pkgs.lib.importTOML ./Cargo.toml).package.version;
+              src = self;
+              hash = "sha256-rHihEtsOFTlESU5vffMiQWN9l6LWAzI4nrNeaqrux64=";
+            };
 
             nativeBuildInputs =
               with pkgs;
@@ -150,13 +143,18 @@
                 [
                   alsa-lib
                   libpulseaudio
-                  # libprojectM links OpenGL directly.
+                  # libprojectM links OpenGL directly and its GL loader needs
+                  # X11 headers while it is built.
                   libGL
                   # Its vendored glad GLX loader compiles against X11 headers.
                   libx11
                 ]
               )
               ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isDarwin [ pkgs.apple-sdk ];
+
+            # projectm-sys expects CMake to install into lib/, while CMake
+            # defaults to lib64/ on NixOS.
+            env.CMAKE = "${cmakeWithLibdir}";
 
             # The GUI dlopens its Wayland, X11 and GL libraries at run time.
             postFixup = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''

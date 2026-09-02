@@ -81,9 +81,11 @@ A release is not the tag alone. Do these in order:
    page.
 4. For a stable release, only after the GitHub release exists, update
    `docs/_config.yml` `fastpotify_version` and
-   `docs/_data/versions.yml`. The new version becomes `current` and points
-   at `/download/`; the previous version keeps a link to its GitHub release.
-   Never make the download page point at files that do not exist yet.
+   `docs/_data/versions.yml`. The selector carries only the latest stable
+   version: replace its version entry, make it `current`, and point it at
+   `/download/`. Do not retain older version entries; they remain available
+   through the Changelog link. Never make the download page point at files
+   that do not exist yet.
 5. Update the Homebrew cask in the maintainer's tap and the AUR package from
    the release's `checksums.txt`.
 

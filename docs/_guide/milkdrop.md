@@ -9,7 +9,7 @@ the mini player's **V** menu. It uses
 [projectM](https://github.com/projectM-visualizer/projectm) to play `.milk`
 presets in its own window and process.
 
-<video autoplay loop muted playsinline preload="metadata" aria-label="MilkDrop running in Fastpotify" style="width: 100%; height: auto;">
+<video autoplay loop muted playsinline preload="metadata" poster="/assets/images/milkdrop-poster.jpg" aria-label="MilkDrop running in Fastpotify" style="width: 100%; height: auto;">
   <source src="/assets/images/milkdrop.mp4" type="video/mp4">
 </video>
 
@@ -29,9 +29,11 @@ is playing.
 ## Presets
 
 Presets change every ten seconds by default. Change the interval in Settings.
-Presets live in the config directory's `milkdrop` folder. Settings can download
-the 550 MilkDrop 2 presets and the 9,800-preset Cream of the Crop pack. Until a
-preset is installed, projectM shows its idle preset.
+Presets live in the config directory's `milkdrop` folder. The first time
+MilkDrop opens with an empty folder, Fastpotify automatically downloads the
+550 MilkDrop 2 presets and the 9,800-preset Cream of the Crop pack. Settings
+can fetch either pack again. Until the first preset arrives, projectM shows
+its idle preset.
 
 ## Controls
 

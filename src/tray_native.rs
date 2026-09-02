@@ -241,17 +241,28 @@ mod host {
     thread_local! {
         /// The status item, which only the main thread may touch.
         pub static ITEM: RefCell<Option<Item>> = const { RefCell::new(None) };
-        pub(super) static REOPEN: RefCell<Option<Sender<TrayCommand>>> = const { RefCell::new(None) };
+        /// The channel a Dock click asks through, and the wake that makes
+        /// somebody read it.
+        pub(super) static REOPEN: RefCell<Option<(Sender<TrayCommand>, Wake)>> = const { RefCell::new(None) };
     }
 
-    pub(super) fn request_reopen(has_visible_windows: bool) -> Bool {
-        if !has_visible_windows {
-            REOPEN.with(|slot| {
-                if let Some(sender) = slot.borrow().as_ref() {
-                    let _ = sender.send(TrayCommand::Show);
-                }
-            });
-        }
+    /// A Dock click, asking for the app back.
+    ///
+    /// `has_visible_windows` is not the question it sounds like: a window
+    /// sitting in the Dock still counts as visible, which is exactly the
+    /// case that needs help, so the flag is not consulted. Asking for a
+    /// window that is already up costs a focus and nothing else.
+    pub(super) fn request_reopen(_has_visible_windows: bool) -> Bool {
+        REOPEN.with(|slot| {
+            if let Some((sender, wake)) = slot.borrow().as_ref() {
+                let _ = sender.send(TrayCommand::Show);
+                // Ask for a frame as well as leaving a message. A minimized
+                // window is drawn none at all, and every repaint this app
+                // schedules is armed by the frame before it, so the only
+                // reader of that message is a loop that has already stopped.
+                wake();
+            }
+        });
         Bool::YES
     }
 
@@ -302,7 +313,7 @@ mod host {
             log::warn!("the status item can only be made on the main thread");
             return;
         };
-        REOPEN.with(|slot| *slot.borrow_mut() = Some(sender.clone()));
+        REOPEN.with(|slot| *slot.borrow_mut() = Some((sender.clone(), Arc::clone(&wake))));
         install_reopen_handler(&NSApplication::sharedApplication(mtm));
         match build(sender, wake) {
             Ok(item) => {
@@ -419,16 +430,42 @@ pub fn idle(duration: Duration) {
 mod tests {
     use super::*;
 
+    /// A Dock click asks for the window whatever AppKit says about visible
+    /// ones, and asks for a frame as well as leaving a message.
+    ///
+    /// Both halves are load-bearing. A window in the Dock is reported as
+    /// visible, so a handler that trusted that flag did nothing at all for
+    /// the one case that needed it; and a minimized window is drawn no
+    /// frames, so the message alone would wait for a reader that has
+    /// stopped running.
     #[test]
-    fn dock_reopen_requests_a_window_only_when_none_is_visible() {
+    fn a_dock_click_asks_for_the_window_and_for_a_frame() {
         let (sender, commands) = std::sync::mpsc::channel();
-        host::REOPEN.with(|slot| *slot.borrow_mut() = Some(sender));
+        let woken = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = Arc::clone(&woken);
+        let wake: Wake = Arc::new(move || {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        });
+        host::REOPEN.with(|slot| *slot.borrow_mut() = Some((sender, wake)));
 
+        // A minimized window is the reported-visible case, and the one the
+        // bug report is about.
         assert!(host::request_reopen(true).as_bool());
-        assert!(commands.try_recv().is_err());
+        assert_eq!(
+            commands.try_recv(),
+            Ok(TrayCommand::Show),
+            "a window in the Dock reports as visible, and was left there"
+        );
+        assert_eq!(
+            woken.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "the message was left but nobody was asked to read it"
+        );
 
+        // No window at all: the tray case, which already worked.
         assert!(host::request_reopen(false).as_bool());
         assert_eq!(commands.try_recv(), Ok(TrayCommand::Show));
+        assert_eq!(woken.load(std::sync::atomic::Ordering::SeqCst), 2);
         host::REOPEN.with(|slot| *slot.borrow_mut() = None);
     }
 }

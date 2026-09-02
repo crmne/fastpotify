@@ -35,6 +35,12 @@ adds a separate Development Mode quota. See
   ([file locations](/settings-and-files/)).
 - Downloaded audio and artwork, in the cache directory, within the budget
   you set.
+- The first time MilkDrop opens with an empty preset folder, the two projectM
+  preset packs are downloaded from GitHub (about 26 MB) and stored in the
+  config directory.
+- On Windows and macOS, desktop media controls receive artwork from that
+  cache instead of downloading the Spotify image a second time. Linux MPRIS
+  carries the Spotify artwork URL for the desktop to resolve.
 - Lyrics, in the cache directory, for a month.
 - Fastpotify has no telemetry, analytics, or hosted service. When the lyrics
   panel is open and Spotify has no lyrics, it sends the track's artist, title,
@@ -47,6 +53,11 @@ adds a separate Development Mode quota. See
 Each Web API session has separate concurrency and rate limits. A `Retry-After`
 response pauses only that session. Fastpotify routes each request once and
 does not retry it through the other app.
+
+Spotify can also explicitly refuse the key needed to decrypt a track. When
+that happens, Fastpotify stops local playback and leaves the rest of the queue
+alone instead of treating every following track as unavailable. This refusal
+comes from Spotify; trying again later may work.
 
 ## Receivers on the local network
 
