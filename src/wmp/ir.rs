@@ -822,11 +822,11 @@ fn group(node: &Node) -> ButtonGroup {
         mapping_image: text(node.attr("mappingimage")),
         transparency_color: key(node.attr("transparencycolor")),
         radio: flag(node.attr("radio")),
-        // The group's bitmap shows behind its buttons unless the skin
-        // asks for buttons alone.
+        // Only the buttons show unless the skin asks for the whole
+        // bitmap behind them.
         show_background: node
             .attr("showbackground")
-            .is_none_or(|raw| Value::parse(raw).as_bool().unwrap_or(true)),
+            .is_some_and(|raw| Value::parse(raw).as_bool().unwrap_or(false)),
         buttons: node
             .children
             .iter()
@@ -1130,6 +1130,26 @@ mod tests {
             })
             .collect();
         assert_eq!(keys, [Some([0, 255, 0]), None]);
+    }
+
+    #[test]
+    fn a_group_shows_only_its_buttons_unless_asked() {
+        let (_, views) = document(
+            "<theme><view>\
+             <buttongroup mappingImage=\"m.bmp\" image=\"i.bmp\"/>\
+             <buttongroup mappingImage=\"m.bmp\" image=\"i.bmp\" showBackground=\"true\"/>\
+             <buttongroup mappingImage=\"m.bmp\" image=\"i.bmp\" showBackground=\"yes\"/>\
+             </view></theme>",
+        );
+        let backgrounds: Vec<bool> = views[0]
+            .children
+            .iter()
+            .map(|element| match element {
+                Element::ButtonGroup(group) => group.show_background,
+                other => panic!("expected a group, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(backgrounds, [false, true, false]);
     }
 
     #[test]

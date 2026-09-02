@@ -1094,6 +1094,58 @@ fn paint_button(skin: &mut Skin, art: &mut Art, button: &ir::Button, at: (i32, i
     }
 }
 
+/// One state bitmap of a group through one button's region: which
+/// picture, whose colours, and where it goes.
+struct StateBlit<'a> {
+    state: &'a str,
+    mapping: &'a str,
+    region_color: ir::Color,
+    size: (u32, u32),
+    at: (i32, i32),
+    alpha: u8,
+}
+
+/// One state bitmap of a group, seen only through one button's own
+/// region of the mapping bitmap. What no button claims never paints;
+/// a region covering the whole bitmap paints whole.
+fn blit_state_through(
+    skin: &mut Skin,
+    art: &mut Art,
+    group: &ir::ButtonGroup,
+    blit: StateBlit<'_>,
+) {
+    let StateBlit {
+        state,
+        mapping,
+        region_color,
+        size,
+        at,
+        alpha,
+    } = blit;
+    let region = art
+        .render
+        .region(&art.document.assets, mapping, region_color);
+    let Some(texture) = art.render.texture(
+        art.ctx,
+        &art.document.assets,
+        state,
+        group.transparency_color,
+        None,
+    ) else {
+        return;
+    };
+    let painter = skin.ui.painter().clone();
+    match region {
+        Some(region) => {
+            let region = Region { mask: &region, at };
+            skin.blit_through(&painter, texture, size, at, alpha, &region);
+        }
+        None => {
+            skin.blit(&painter, texture, size, at, alpha);
+        }
+    }
+}
+
 /// A group of buttons sharing one bitmap per state, told apart by the
 /// colour under the pointer in the mapping bitmap. The hover and
 /// pressed state bitmaps are painted only through the hovered button's
@@ -1120,9 +1172,6 @@ fn paint_group(skin: &mut Skin, art: &mut Art, group: &ir::ButtonGroup, at: (i32
             .height_i32()
             .map_or(bitmap.height, |h| h.max(0) as u32),
     );
-    if !group.show_background {
-        return;
-    }
     let mut response = skin.interact(at.0, at.1, area.0, area.1, Sense::click());
     let pointer = skin.pointer(&response);
     let hovered = element_at_pointer(
@@ -1133,19 +1182,42 @@ fn paint_group(skin: &mut Skin, art: &mut Art, group: &ir::ButtonGroup, at: (i32
     if let Some(tooltip) = hovered.and_then(|index| group.buttons[index].tooltip.as_deref()) {
         response = response.on_hover_text(tooltip);
     }
-    // The resting bitmap always goes down first.
-    paint_picture(
-        skin,
-        art,
-        Picture {
-            file,
-            key: group.transparency_color,
-            clip: group.common.clipping_color,
-            at: (at.0, at.1, area.0, area.1),
-            tiled: false,
-            alpha,
-        },
-    );
+    if group.show_background {
+        // The resting bitmap goes down whole behind its buttons.
+        paint_picture(
+            skin,
+            art,
+            Picture {
+                file,
+                key: group.transparency_color,
+                clip: group.common.clipping_color,
+                at: (at.0, at.1, area.0, area.1),
+                tiled: false,
+                alpha,
+            },
+        );
+    } else {
+        // Only the buttons show: each button's resting state, seen
+        // through its own region of the mapping bitmap.
+        for button in &group.buttons {
+            let Some(region_color) = button.mapping_color else {
+                continue;
+            };
+            blit_state_through(
+                skin,
+                art,
+                group,
+                StateBlit {
+                    state: file,
+                    mapping,
+                    region_color,
+                    size: (bitmap.width, bitmap.height),
+                    at,
+                    alpha,
+                },
+            );
+        }
+    }
     let pressed = response.is_pointer_button_down_on();
     let state_image = if pressed {
         group.states.down.as_ref()
@@ -1158,27 +1230,19 @@ fn paint_group(skin: &mut Skin, art: &mut Art, group: &ir::ButtonGroup, at: (i32
     ) {
         // The state bitmap, seen only through the hovered button's
         // region of the mapping bitmap.
-        if let Some(region) = art
-            .render
-            .region(&art.document.assets, mapping, region_color)
-            && let Some(texture) = art.render.texture(
-                art.ctx,
-                &art.document.assets,
+        blit_state_through(
+            skin,
+            art,
+            group,
+            StateBlit {
                 state,
-                group.transparency_color,
-                None,
-            )
-        {
-            let region = Region { mask: &region, at };
-            skin.blit_through(
-                skin.ui.painter(),
-                texture,
-                (bitmap.width, bitmap.height),
+                mapping,
+                region_color,
+                size: (bitmap.width, bitmap.height),
                 at,
                 alpha,
-                &region,
-            );
-        }
+            },
+        );
     }
     if response.clicked() {
         let Some(index) = element_at_pointer(
