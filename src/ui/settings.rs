@@ -512,8 +512,6 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
                     let mut zoom = app.settings.zoom;
-                    // The setting row lays controls out right-to-left, so plus
-                    // is added first: visual order is minus, percent, plus.
                     if theme::soft_button(ui, &palette, None, "+", false).clicked() {
                         zoom = (zoom + 0.1).min(2.5);
                     }
