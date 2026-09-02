@@ -447,6 +447,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     });
 
     section(ui, &palette, "Appearance", |ui| {
+        let is_custom = matches!(&app.settings.theme, ThemeChoice::Custom(_));
         widgets::setting_row(ui, &palette, "Theme", "", |ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
@@ -456,7 +457,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                         &palette,
                         None,
                         choice.label(),
-                        app.settings.theme == *choice,
+                        !is_custom && app.settings.theme == *choice,
                     )
                     .clicked()
                         && app.settings.theme != *choice
@@ -465,34 +466,54 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                         changed = true;
                     }
                 }
-                for (stem, scheme) in &app.available_schemes {
-                    let display = if scheme.name.is_empty() {
-                        stem
-                    } else {
-                        &scheme.name
-                    };
-                    let choice = ThemeChoice::Custom(stem.clone());
-                    if theme::soft_button(ui, &palette, None, display, app.settings.theme == choice)
-                        .clicked()
-                        && app.settings.theme != choice
-                    {
-                        app.settings.theme = choice;
-                        changed = true;
-                    }
-                }
             });
         });
-        widgets::setting_row(
-            ui,
-            &palette,
-            "Colour from album art",
-            "Use the current cover's colour on pages and the player bar.",
-            |ui| {
-                if widgets::switch(ui, &palette, &mut app.settings.accent_from_art).changed() {
-                    changed = true;
-                }
-            },
-        );
+        if !app.available_schemes.is_empty() {
+            widgets::setting_row(
+                ui,
+                &palette,
+                "Colour schemes",
+                "Overrides the theme and album-art colour settings above.",
+                |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        for (stem, scheme) in &app.available_schemes {
+                            let display = if scheme.name.is_empty() {
+                                stem
+                            } else {
+                                &scheme.name
+                            };
+                            let choice = ThemeChoice::Custom(stem.clone());
+                            if theme::soft_button(
+                                ui,
+                                &palette,
+                                None,
+                                display,
+                                app.settings.theme == choice,
+                            )
+                            .clicked()
+                            {
+                                app.settings.theme = choice;
+                                changed = true;
+                            }
+                        }
+                    });
+                },
+            );
+        }
+        if !is_custom {
+            widgets::setting_row(
+                ui,
+                &palette,
+                "Colour from album art",
+                "Use the current cover's colour on pages and the player bar.",
+                |ui| {
+                    if widgets::switch(ui, &palette, &mut app.settings.accent_from_art).changed() {
+                        changed = true;
+                    }
+                },
+            );
+        }
         widgets::setting_row(
             ui,
             &palette,
