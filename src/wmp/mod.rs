@@ -127,6 +127,10 @@ pub struct WmpState {
     /// The skins folder's `.wmz` files, as last listed.
     pub choices: Vec<SkinChoice>,
     choices_listed: Option<std::time::Instant>,
+    /// Where the window was, to open it there again.
+    pub restore_pos: Option<[f32; 2]>,
+    /// Where the window is, as last seen.
+    pub last_pos: Option<[f32; 2]>,
 }
 
 /// A worn skin: the definition it draws from, and the caches it draws
@@ -202,6 +206,13 @@ impl WmpState {
     pub fn forget_textures(&mut self) {
         if let Some(skin) = self.skin.as_mut() {
             skin.render.forget_textures();
+        }
+    }
+
+    /// Keeps where the window was, for the next time it opens.
+    pub fn remember_position(&mut self) {
+        if let Some(pos) = self.last_pos {
+            self.restore_pos = Some(pos);
         }
     }
 }

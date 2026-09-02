@@ -401,6 +401,8 @@ pub struct SessionState {
     pub queue_open: Option<bool>,
     /// Last outer position of the Winamp window.
     pub winamp_pos: Option<[f32; 2]>,
+    /// Last outer position of the WMP skin window.
+    pub wmp_pos: Option<[f32; 2]>,
     /// Last outer position of the MilkDrop window.
     pub milkdrop_pos: Option<[f32; 2]>,
 }

@@ -528,7 +528,7 @@ impl MiniWindow {
         {
             return Some(Self {
                 size: fastpotify::ui::wmp::initial_size(&skin.document, &app.settings),
-                position: None,
+                position: app.wmp.restore_pos,
                 on_top: false,
             });
         }

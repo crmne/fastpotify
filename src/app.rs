@@ -568,6 +568,7 @@ impl App {
             restore_watch: RestoreWatch::None,
         };
         app.local.volume = app.settings.volume;
+        app.wmp.restore_pos = session.wmp_pos;
         app
     }
 
@@ -635,6 +636,8 @@ impl App {
         // The Winamp window went with it; it comes back where it was.
         self.winamp.remember_position();
         self.winamp.forget_textures();
+        // The skin window went with it too; it comes back where it was.
+        self.wmp.remember_position();
         self.window_hidden = true;
         self.hide_intent = false;
         self.wants_show = false;
@@ -4913,7 +4916,10 @@ impl App {
             Action::ToggleWmpWindow => {
                 // One window at a time, like the Winamp one: this one
                 // closes and the loop in `main` opens the other kind.
-                if !self.settings.wmp_window {
+                // The skin window comes back where it was.
+                if self.settings.wmp_window {
+                    self.wmp.remember_position();
+                } else {
                     self.session_window_size = self.last_window_size.or(self.session_window_size);
                     self.session_window_pos = self.last_window_pos.or(self.session_window_pos);
                 }
@@ -5334,6 +5340,7 @@ impl App {
                 window_pos: self.last_window_pos.or(self.session_window_pos),
                 queue_open: Some(self.show_queue_panel),
                 winamp_pos: self.winamp.last_pos.or(self.winamp.restore_pos),
+                wmp_pos: self.wmp.last_pos.or(self.wmp.restore_pos),
                 milkdrop_pos: self.milkdrop_pos,
             }
             .save(&self.dirs.session_file());
@@ -6669,6 +6676,23 @@ mod tests {
         // #then
         assert!(!app.settings.wmp_window);
         assert!(app.switch_intent);
+    }
+
+    /// The skin window comes back where it was, like the Winamp one.
+    #[test]
+    fn the_skin_window_remembers_where_it_was() {
+        // #given
+        let mut app = headless_app();
+        app.settings.wmp_window = true;
+        app.wmp.last_pos = Some([120.0, 80.0]);
+
+        // #when
+        app.actions.push(Action::ToggleWmpWindow);
+        app.apply_actions(&egui::Context::default());
+
+        // #then
+        assert!(!app.settings.wmp_window);
+        assert_eq!(app.wmp.restore_pos, Some([120.0, 80.0]));
     }
 
     /// The first skin a window mode wears arrives while the big window is

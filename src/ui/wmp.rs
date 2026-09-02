@@ -358,6 +358,10 @@ pub fn show_window(app: &mut crate::app::App, ui: &mut Ui) {
         app.settings = settings;
         app.mark_settings_dirty();
     }
+    // Where the window is, for the next time it opens.
+    if let Some(rect) = ctx.input(|input| input.viewport().outer_rect) {
+        app.wmp.last_pos = Some([rect.min.x, rect.min.y]);
+    }
     let Some(skin) = app.wmp.skin.as_mut() else {
         return;
     };
