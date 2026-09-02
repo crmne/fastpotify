@@ -632,6 +632,17 @@ fn text(raw: Option<&str>) -> Option<String> {
         .map(str::to_string)
 }
 
+/// The colour an art element keys out of its images: what the skin
+/// wrote, or the magenta every skin of the era treats as transparent
+/// when it writes nothing. A skin that needs another key, or none at
+/// all, writes it; an attribute written empty keys nothing out.
+fn key(raw: Option<&str>) -> Option<Color> {
+    match raw {
+        None => Some([255, 0, 255]),
+        Some(_) => color(raw),
+    }
+}
+
 fn color(raw: Option<&str>) -> Option<Color> {
     let digits = raw?.trim().trim_start_matches('#');
     let channel = |at: usize| u8::from_str_radix(&digits[at..at + 2], 16).ok();
@@ -731,7 +742,7 @@ fn element(node: &Node) -> Element {
         "image" => Element::Image(Image {
             common: common(node),
             image: text(node.attr("image")),
-            transparency_color: color(node.attr("transparencycolor")),
+            transparency_color: key(node.attr("transparencycolor")),
             tiled: flag(node.attr("tiled")),
         }),
         "button" | "imagebutton" => Element::Button(button(node, name)),
@@ -760,7 +771,7 @@ fn button(node: &Node, name: &str) -> Button {
             hover_down: text(node.attr("hoverdownimage")),
             disabled: text(node.attr("disabledimage")),
         },
-        transparency_color: color(node.attr("transparencycolor")),
+        transparency_color: key(node.attr("transparencycolor")),
         sticky: flag(node.attr("sticky")),
         tiled: flag(node.attr("tiled")),
         action: predefined_action(name).unwrap_or_else(|| {
@@ -781,7 +792,7 @@ fn group(node: &Node) -> ButtonGroup {
             disabled: text(node.attr("disabledimage")),
         },
         mapping_image: text(node.attr("mappingimage")),
-        transparency_color: color(node.attr("transparencycolor")),
+        transparency_color: key(node.attr("transparencycolor")),
         radio: flag(node.attr("radio")),
         // The group's bitmap shows behind its buttons unless the skin
         // asks for buttons alone.
@@ -841,7 +852,7 @@ fn slider(node: &Node, name: &str) -> Slider {
             .attr("useforegroundprogress")
             .is_none_or(|raw| Value::parse(raw).as_bool().unwrap_or(true)),
         foreground_progress: node.attr("foregroundprogress").map(Value::parse),
-        transparency_color: color(node.attr("transparencycolor")),
+        transparency_color: key(node.attr("transparencycolor")),
         // An explicit binding wins over the one the element's name
         // promises, since the skin wrote both.
         binding: value
@@ -1055,6 +1066,42 @@ mod tests {
         );
         assert_eq!(others[1].common.id.as_deref(), Some("pl"));
         assert_eq!(others[1].children.len(), 1);
+    }
+
+    #[test]
+    fn art_without_a_written_key_treats_magenta_as_transparent() {
+        let (_, views) = document(
+            "<theme><view><button image=\"b.gif\"/><slider image=\"s.gif\"/></view></theme>",
+        );
+        let keys: Vec<Option<Color>> = views[0]
+            .children
+            .iter()
+            .map(|element| match element {
+                Element::Button(button) => button.transparency_color,
+                Element::Slider(slider) => slider.transparency_color,
+                other => panic!("expected art, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(keys, [Some([255, 0, 255]), Some([255, 0, 255])]);
+    }
+
+    #[test]
+    fn a_written_key_wins_over_magenta_and_an_empty_one_keys_nothing() {
+        let (_, views) = document(
+            "<theme><view>\
+             <button image=\"a.gif\" transparencyColor=\"#00FF00\"/>\
+             <button image=\"b.gif\" transparencyColor=\"\"/>\
+             </view></theme>",
+        );
+        let keys: Vec<Option<Color>> = views[0]
+            .children
+            .iter()
+            .map(|element| match element {
+                Element::Button(button) => button.transparency_color,
+                other => panic!("expected a button, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(keys, [Some([0, 255, 0]), None]);
     }
 
     #[test]
