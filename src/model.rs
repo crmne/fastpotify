@@ -669,6 +669,8 @@ pub enum Action {
     ToggleLyricsPanel,
     ToggleDevicesPopup,
     SettingsChanged,
+    /// Set whether Fastpotify starts when the user signs in.
+    SetAutomaticStartup(crate::settings::StartupMode),
     RestartEngine,
     EnablePlayback,
     ShowWindow,

@@ -5,7 +5,7 @@ use egui::{Align, CornerRadius, Frame, Layout, Margin, Stroke, Vec2};
 use crate::api::models::pick_image;
 use crate::app::App;
 use crate::model::{Action, Dialog};
-use crate::settings::ThemeChoice;
+use crate::settings::{StartupMode, ThemeChoice};
 use crate::theme::{self, Icon, Palette};
 
 use super::widgets;
@@ -324,6 +324,26 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     .changed()
                 {
                     changed = true;
+                }
+            },
+        );
+        widgets::setting_row(
+            ui,
+            &palette,
+            "Automatic startup",
+            "Start Fastpotify when you sign in to your computer.",
+            |ui| {
+                let current = app.settings.automatic_startup;
+                let mut selected = current;
+                egui::ComboBox::from_id_salt("automatic-startup")
+                    .selected_text(current.label())
+                    .show_ui(ui, |ui| {
+                        for mode in StartupMode::ALL {
+                            ui.selectable_value(&mut selected, mode, mode.label());
+                        }
+                    });
+                if selected != current {
+                    app.actions.push(Action::SetAutomaticStartup(selected));
                 }
             },
         );
