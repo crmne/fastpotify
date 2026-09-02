@@ -50,14 +50,16 @@ pub struct View {
     pub children: Vec<Element>,
 }
 
-/// A background layer: the colour behind it, the image on it, and the
-/// colour keyed out of that image. The keyed pixels are outside the
-/// window entirely: not drawn, not clicked.
+/// A background layer: the colour behind it, the image on it, the
+/// colour keyed out of that image, and the colour clipped out of it.
+/// Keyed and clipped pixels alike are outside the window entirely:
+/// not drawn, not clicked.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Background {
     pub color: Option<Color>,
     pub image: Option<String>,
     pub transparency_color: Option<Color>,
+    pub clipping_color: Option<Color>,
     pub tiled: bool,
 }
 
@@ -644,6 +646,31 @@ fn key(raw: Option<&str>) -> Option<Color> {
 }
 
 fn color(raw: Option<&str>) -> Option<Color> {
+    // The names skins write, from the palette the era's browsers knew.
+    if let Some(name) = raw.map(str::trim) {
+        let named: Option<Color> = match name.to_ascii_lowercase().as_str() {
+            "black" => Some([0, 0, 0]),
+            "silver" => Some([192, 192, 192]),
+            "gray" => Some([128, 128, 128]),
+            "white" => Some([255, 255, 255]),
+            "maroon" => Some([128, 0, 0]),
+            "red" => Some([255, 0, 0]),
+            "purple" => Some([128, 0, 128]),
+            "fuchsia" => Some([255, 0, 255]),
+            "green" => Some([0, 128, 0]),
+            "lime" => Some([0, 255, 0]),
+            "olive" => Some([128, 128, 0]),
+            "yellow" => Some([255, 255, 0]),
+            "navy" => Some([0, 0, 128]),
+            "blue" => Some([0, 0, 255]),
+            "teal" => Some([0, 128, 128]),
+            "aqua" => Some([0, 255, 255]),
+            _ => None,
+        };
+        if named.is_some() {
+            return named;
+        }
+    }
     let digits = raw?.trim().trim_start_matches('#');
     let channel = |at: usize| u8::from_str_radix(&digits[at..at + 2], 16).ok();
     match digits.len() {
@@ -692,6 +719,7 @@ fn background(node: &Node) -> Background {
         color: color(node.attr("backgroundcolor")),
         image: text(node.attr("backgroundimage")),
         transparency_color: color(node.attr("transparencycolor")),
+        clipping_color: color(node.attr("clippingcolor")),
         tiled: flag(node.attr("backgroundtiled")),
     }
 }
@@ -1105,6 +1133,19 @@ mod tests {
     }
 
     #[test]
+    fn a_background_keeps_its_clip_and_names_answer() {
+        let (_, views) = document(
+            "<theme><view backgroundImage=\"b.gif\" clippingColor=\"red\" transparencyColor=\"#00FF00\"/></theme>",
+        );
+        let view = &views[0];
+        assert_eq!(view.background.clipping_color, Some([255, 0, 0]));
+        assert_eq!(view.background.transparency_color, Some([0, 255, 0]));
+        assert_eq!(color(Some("Red")), Some([255, 0, 0]));
+        assert_eq!(color(Some("fuchsia")), Some([255, 0, 255]));
+        assert_eq!(color(Some("")), None);
+    }
+
+    #[test]
     fn predefined_controls_carry_their_bindings_and_a_written_one_wins() {
         let (_, views) = document(
             "<theme><view>\
@@ -1220,7 +1261,7 @@ mod tests {
         assert_eq!(color(Some("#F0F")), Some([0xFF, 0, 0xFF]));
         assert_eq!(color(Some("#FFFF3300")), None);
         assert_eq!(color(Some("none")), None);
-        assert_eq!(color(Some("white")), None);
+        assert_eq!(color(Some("white")), Some([0xFF, 0xFF, 0xFF]));
         assert_eq!(color(None), None);
     }
 

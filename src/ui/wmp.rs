@@ -698,7 +698,7 @@ fn background_layers(render: &mut Render, view: &View) -> Vec<Layer> {
             at: (0, 0),
             file: file.clone(),
             key: view.background.transparency_color,
-            clip: None,
+            clip: view.background.clipping_color,
         });
     }
     for child in &view.children {
@@ -733,7 +733,7 @@ fn collect_layers(render: &mut Render, element: &Element, at: (i32, i32), layers
                 at: (left, top),
                 file: file.clone(),
                 key: subview.background.transparency_color,
-                clip: common.clipping_color,
+                clip: subview.background.clipping_color,
             });
         }
         for child in &subview.children {
@@ -1284,7 +1284,7 @@ fn paint_background(
         Picture {
             file,
             key: background.transparency_color,
-            clip: common.clipping_color,
+            clip: background.clipping_color,
             at: (at.0, at.1, area.0, area.1),
             tiled: background.tiled,
             alpha,
