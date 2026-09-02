@@ -46,6 +46,28 @@ impl ThemeChoice {
     }
 }
 
+/// Whether Fastpotify starts when the user signs in.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StartupMode {
+    #[default]
+    No,
+    Minimized,
+    Yes,
+}
+
+impl StartupMode {
+    pub const ALL: [StartupMode; 3] = [Self::No, Self::Minimized, Self::Yes];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::No => "No",
+            Self::Minimized => "Minimized",
+            Self::Yes => "Yes",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -92,6 +114,8 @@ pub struct Settings {
     pub playback_authorized: bool,
     /// Closing the window hides to the tray and keeps the music playing.
     pub keep_playing_in_background: bool,
+    /// Start when the user signs in, optionally minimized.
+    pub automatic_startup: StartupMode,
     /// Ask GitHub once a day whether a newer release exists.
     pub check_for_updates: bool,
     /// Context URIs pinned to the top of the sidebar, in pin order.
@@ -179,6 +203,7 @@ impl Default for Settings {
             web_client_id: None,
             playback_authorized: false,
             keep_playing_in_background: true,
+            automatic_startup: StartupMode::No,
             check_for_updates: true,
             pinned_contexts: Vec::new(),
             sidebar_order: Vec::new(),
@@ -273,6 +298,25 @@ mod tests {
     fn older_settings_keep_the_sidebar_visible() {
         let settings: Settings = serde_json::from_str("{}").unwrap();
         assert!(settings.sidebar_visible);
+    }
+
+    #[test]
+    fn older_settings_do_not_start_automatically() {
+        let settings: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(settings.automatic_startup, super::StartupMode::No);
+    }
+
+    #[test]
+    fn startup_modes_round_trip() {
+        for mode in super::StartupMode::ALL {
+            let settings = Settings {
+                automatic_startup: mode,
+                ..Settings::default()
+            };
+            let json = serde_json::to_string(&settings).unwrap();
+            let restored: Settings = serde_json::from_str(&json).unwrap();
+            assert_eq!(restored.automatic_startup, mode);
+        }
     }
 
     #[test]

@@ -24,6 +24,7 @@ Fastpotify follows each platform's conventions. On Linux:
 | Account-scoped playlist cache | `~/.cache/fastpotify/playlists/<account-id>/` | Always |
 | Last run's log | `~/.local/state/fastpotify/fastpotify.log` | Always |
 | Crash log | `~/.local/state/fastpotify/panic.log` | Always |
+| Automatic startup | `~/.config/autostart/fastpotify.desktop` | Turn it off in Settings first |
 
 Clearing caches never signs you out; credentials live in *state*, not
 *cache*. Web API token files are written with owner-only permissions.
@@ -32,10 +33,12 @@ playback credential.
 
 On macOS, settings, state, and the logs are in
 `~/Library/Application Support/me.paolino.fastpotify` and the caches in
-`~/Library/Caches/me.paolino.fastpotify`. On Windows, settings are in
+`~/Library/Caches/me.paolino.fastpotify`. Automatic startup uses
+`~/Library/LaunchAgents/me.paolino.fastpotify.plist`. On Windows, settings are in
 `%APPDATA%\paolino\fastpotify\config`, state and the logs in
 `%LOCALAPPDATA%\paolino\fastpotify\data`, and the caches in
 `%LOCALAPPDATA%\paolino\fastpotify\cache`.
+Automatic startup on Windows uses the current user's Run registry key.
 
 ## settings.json
 
@@ -77,6 +80,7 @@ main fields are:
 | `milkdrop_fullscreen` | `false` | The MilkDrop window fills the screen |
 | `milkdrop_size` | `640, 480` | The MilkDrop window's size in points |
 | `keep_playing_in_background` | `true` | Close to tray |
+| `automatic_startup` | `no` | Start at sign-in: `no`, `minimized`, or `yes` |
 | `check_for_updates` | `true` | Ask GitHub once a day for a newer release |
 | `web_client_id` | none | Optional personal Spotify app id used alongside shared coverage |
 

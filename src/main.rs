@@ -2,7 +2,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use fastpotify::{app, backend, paths, settings, single_instance, util};
+use fastpotify::{app, backend, paths, settings, single_instance, startup, util};
 
 use clap::Parser;
 
@@ -21,6 +21,10 @@ struct Cli {
     /// Log more from librespot and the Web API client.
     #[arg(short, long)]
     verbose: bool,
+
+    /// Start the window minimized (used by automatic startup).
+    #[arg(long, hide = true)]
+    start_minimized: bool,
 
     /// Start with sample data and no Spotify connection (for screenshots).
     #[cfg(feature = "demo")]
@@ -275,6 +279,8 @@ fn main() -> eframe::Result<()> {
     }
 
     let cli = Cli::parse();
+    #[cfg(feature = "demo")]
+    let demo = cli.demo || cli.demo_shot.is_some();
     // A control launch is a client, not a second app: talk to the running
     // instance and exit before touching the log file it is writing to.
     if let Some(control) = cli.control {
@@ -306,6 +312,14 @@ fn main() -> eframe::Result<()> {
     if let Some(name) = cli.device_name {
         settings.device_name = name;
     }
+    #[cfg(feature = "demo")]
+    if !demo && let Err(error) = startup::configure(settings.automatic_startup) {
+        log::warn!("unable to configure automatic startup: {error}");
+    }
+    #[cfg(not(feature = "demo"))]
+    if let Err(error) = startup::configure(settings.automatic_startup) {
+        log::warn!("unable to configure automatic startup: {error}");
+    }
 
     // The application (audio engine, Web API, MPRIS, tray) outlives any
     // window. Closing to the tray destroys the window and this loop creates
@@ -315,8 +329,6 @@ fn main() -> eframe::Result<()> {
 
     // A second launch surfaces the instance already running instead of
     // starting a rival one. Held for the lifetime of the process.
-    #[cfg(feature = "demo")]
-    let demo = cli.demo || cli.demo_shot.is_some();
     #[cfg(feature = "demo")]
     let guarded = !demo;
     #[cfg(not(feature = "demo"))]
@@ -361,6 +373,7 @@ fn main() -> eframe::Result<()> {
         asked: false,
     });
     let slot = std::sync::Arc::new(std::sync::Mutex::new(Some(app)));
+    let mut start_minimized = cli.start_minimized;
 
     loop {
         let creator_slot = std::sync::Arc::clone(&slot);
@@ -371,6 +384,8 @@ fn main() -> eframe::Result<()> {
             let guard = slot.lock().unwrap_or_else(|p| p.into_inner());
             MiniWindow::wanted(guard.as_ref().expect("application state present"))
         };
+        let creator_start_minimized = start_minimized;
+        start_minimized = false;
         #[cfg(feature = "demo")]
         let options = native_options(shot.is_some() && mini.is_none(), mini);
         #[cfg(not(feature = "demo"))]
@@ -400,6 +415,7 @@ fn main() -> eframe::Result<()> {
                     slot: std::sync::Arc::clone(&creator_slot),
                     #[cfg(feature = "demo")]
                     shot: creator_shot.clone(),
+                    start_minimized: creator_start_minimized,
                 }))
             }),
         )?;
@@ -585,6 +601,7 @@ fn native_options(fullscreen: bool, mini: Option<MiniWindow>) -> eframe::NativeO
 struct Shell {
     app: Option<app::App>,
     slot: std::sync::Arc<std::sync::Mutex<Option<app::App>>>,
+    start_minimized: bool,
     /// A pending `--demo-shot` capture, if this is a screenshot run.
     #[cfg(feature = "demo")]
     shot: Option<Shot>,
@@ -649,6 +666,10 @@ impl Shell {
 
 impl eframe::App for Shell {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if self.start_minimized {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+            self.start_minimized = false;
+        }
         if let Some(app) = self.app.as_mut() {
             #[cfg(target_os = "macos")]
             for command in fastpotify::mac_menu::drain_commands() {

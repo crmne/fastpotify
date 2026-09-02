@@ -4873,6 +4873,19 @@ impl App {
                     ThemeChoice::System => egui::ThemePreference::System,
                 });
             }
+            Action::SetAutomaticStartup(mode) => {
+                if self.settings.automatic_startup == mode {
+                    return;
+                }
+                if !self.offline
+                    && let Err(error) = crate::startup::configure(mode)
+                {
+                    self.toast_error(format!("Couldn't set automatic startup: {error}"));
+                    return;
+                }
+                self.settings.automatic_startup = mode;
+                self.settings_dirty = true;
+            }
             Action::RestartEngine => {
                 self.save_settings();
                 let config = engine_config(
