@@ -350,10 +350,18 @@ impl Run<'_> {
             self.actions.push(action);
             return;
         }
-        // A call to the view itself: opening and closing a secondary
-        // view is the window going away or coming back; the machine
-        // has no other views to open.
-        if name.starts_with("theme.openview") || name.starts_with("theme.closeview") {
+        // Opening and closing a secondary view is the window going
+        // away or coming back; the renderer stands the named view
+        // where the main one stood.
+        if name == "theme.openview" || name == "theme.closeview" {
+            if let Some(Val::Str(id)) = values.first() {
+                let id = id.clone();
+                self.actions.push(if name == "theme.openview" {
+                    Action::OpenView(id)
+                } else {
+                    Action::CloseView(id)
+                });
+            }
             return;
         }
         let Some(function) = self.script.function(name) else {
@@ -1291,6 +1299,26 @@ function TogglePl()
         assert_eq!(machine.visible("Plbox"), Some(true));
         machine.handler(&script, "TogglePl();");
         assert_eq!(machine.visible("Plbox"), Some(false));
+    }
+
+    #[test]
+    fn opening_and_closing_a_view_comes_back_as_an_action() {
+        let (script, mut machine) = script(
+            r"
+function ShowPl()
+{
+    theme.openView('vPl');
+}
+function HidePl()
+{
+    theme.closeView('vPl');
+}
+",
+        );
+        let actions = machine.handler(&script, "ShowPl();");
+        assert_eq!(actions, vec![Action::OpenView("vPl".into())]);
+        let actions = machine.handler(&script, "HidePl();");
+        assert_eq!(actions, vec![Action::CloseView("vPl".into())]);
     }
 
     #[test]

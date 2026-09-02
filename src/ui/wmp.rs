@@ -53,6 +53,10 @@ pub enum SkinAction {
     /// A handler the skin wrote: the machine runs it and answers with
     /// whatever the player is to do.
     RunScript(String),
+    /// A secondary view standing where the main one stood.
+    OpenView(String),
+    /// A secondary view going away; the main view stands again.
+    CloseView(String),
 }
 
 /// The art of one skin, decoded and on the graphics card, kept between
@@ -84,6 +88,9 @@ pub struct Render {
     pub machine: Option<script::Machine>,
     /// Whether the view's own handlers have run once.
     booted: bool,
+    /// The secondary view standing where the main one stood, by id;
+    /// nothing open means the main view.
+    pub open_view: Option<String>,
 }
 
 /// A bitmap that would not decode, kept so the attempt is not repeated.
@@ -97,6 +104,23 @@ impl Render {
     /// The window is gone (or about to be), and with it the textures.
     pub fn forget_textures(&mut self) {
         self.textures.clear();
+    }
+
+    /// Stands another view where the main one stood: its geometry,
+    /// machine and handlers start over with it. Nothing known stays
+    /// open, and the main view is what stands then.
+    pub fn show_view(&mut self, open: Option<String>) {
+        if self.open_view != open {
+            self.open_view = open;
+            self.layout = None;
+            self.machine = None;
+            self.booted = false;
+        }
+    }
+
+    /// Whether the view by id stands where the main one stood.
+    pub fn is_open(&self, id: &str) -> bool {
+        self.open_view.as_deref() == Some(id)
     }
 
     /// A file decoded, once. The name is matched the way skins name
@@ -195,7 +219,7 @@ pub fn show(
     unit: f32,
     media: Option<&NowPlaying>,
 ) -> Vec<SkinAction> {
-    let Some(view) = document.main_view() else {
+    let Some(view) = document.current_view(render.open_view.as_deref()) else {
         return Vec::new();
     };
     let ctx = ui.ctx().clone();
@@ -287,16 +311,19 @@ pub fn skin_size(document: &SkinDocument) -> (u32, u32) {
 }
 
 /// The window's size on screen for a unit of screen pixels to the skin
-/// pixel.
-pub fn window_size(document: &SkinDocument, unit: f32) -> Vec2 {
-    let (width, height) = skin_size(document);
+/// pixel, for the view standing where the main one stood.
+pub fn window_size(render: &mut Render, document: &SkinDocument, view: &View, unit: f32) -> Vec2 {
+    let (width, height) = view_size(render, document, view);
     Vec2::new(width as f32, height as f32) * unit
 }
 
 /// A first guess at the window's size, before the display's scale is
-/// known; the first frame corrects it.
+/// known; the first frame corrects it. The window always opens on the
+/// main view; a secondary view takes over once it stands.
 pub fn initial_size(document: &SkinDocument, settings: &crate::settings::Settings) -> Vec2 {
-    window_size(document, device_scale(settings, 1.0) as f32)
+    let (width, height) = skin_size(document);
+    let unit = device_scale(settings, 1.0) as f32;
+    Vec2::new(width as f32, height as f32) * unit
 }
 
 /// Screen pixels per skin pixel: the setting, or else double size on
@@ -317,8 +344,14 @@ fn unit(settings: &crate::settings::Settings, ctx: &egui::Context) -> f32 {
 /// Keeps the window exactly the skin's size. The size it was made with
 /// is a guess, since the display's scale is only known once the window
 /// exists.
-fn fit_window(ctx: &egui::Context, document: &SkinDocument, unit: f32) {
-    let wanted = window_size(document, unit);
+fn fit_window(
+    ctx: &egui::Context,
+    render: &mut Render,
+    document: &SkinDocument,
+    view: &View,
+    unit: f32,
+) {
+    let wanted = window_size(render, document, view, unit);
     let current = ctx.input(|input| {
         input
             .viewport()
@@ -366,8 +399,13 @@ pub fn show_window(app: &mut crate::app::App, ui: &mut Ui) {
         return;
     };
     let document = &skin.document;
+    // The standing view, read before the drawing state is borrowed.
+    let open = skin.render.open_view.clone();
     let render = &mut skin.render;
-    fit_window(&ctx, document, scale);
+    let Some(view) = document.current_view(open.as_deref()) else {
+        return;
+    };
+    fit_window(&ctx, render, document, view, scale);
 
     if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
         app.quit_requested = true;
@@ -387,6 +425,25 @@ pub fn show_window(app: &mut crate::app::App, ui: &mut Ui) {
             }
             SkinAction::Close => app.quit_requested = true,
             SkinAction::ReturnToMediaCenter => app.actions.push(Action::ToggleWmpWindow),
+            SkinAction::OpenView(id) => {
+                // A secondary view stands where the main one stood; one
+                // that names nothing stays shut. The window takes the
+                // new view's size on the next frame.
+                let known = document
+                    .views
+                    .iter()
+                    .any(|view| view.id.as_deref() == Some(id.as_str()));
+                if known {
+                    render.show_view(Some(id.clone()));
+                    ctx.request_repaint();
+                }
+            }
+            SkinAction::CloseView(id) => {
+                if render.is_open(id.as_str()) {
+                    render.show_view(None);
+                    ctx.request_repaint();
+                }
+            }
             SkinAction::RunScript(handler) => {
                 // The skin's own handler: the machine runs it, and the
                 // player does whatever it asked. The panes it turned
@@ -417,7 +474,7 @@ pub fn show_window(app: &mut crate::app::App, ui: &mut Ui) {
     // decides.
     if ui.input(|input| input.pointer.primary_pressed()) && !render.pointer_taken {
         let pos = ui.input(|input| input.pointer.interact_pos());
-        let size = window_size(document, scale);
+        let size = window_size(render, document, view, scale);
         let inside = pos.map(|pos| {
             (
                 Rect::from_min_size(origin, size).contains(pos),
@@ -486,10 +543,11 @@ fn player_action(action: SkinAction, media: Option<&NowPlaying>) -> Option<crate
         SkinAction::ToggleMute => Action::ToggleMute,
         SkinAction::ToggleShuffle => Action::ToggleShuffle,
         SkinAction::CycleRepeat => Action::CycleRepeat,
-        // The skin's own handler and the window's verbs are not the
-        // player's to answer, and are carried out by the caller.
+        // The skin's own handler, the views it opens, and the
+        // window's verbs are not the player's to answer, and are
+        // carried out by the caller.
         SkinAction::Minimize | SkinAction::Close | SkinAction::ReturnToMediaCenter => None?,
-        SkinAction::RunScript(_) => None?,
+        SkinAction::RunScript(_) | SkinAction::OpenView(_) | SkinAction::CloseView(_) => None?,
     })
 }
 
@@ -1521,11 +1579,13 @@ fn button_action(action: &ir::Action) -> Option<SkinAction> {
         // A handler the skin wrote: the machine runs it when the click
         // lands, and whatever the player is to do comes back.
         ir::Action::Unhandled(handler) => SkinAction::RunScript(handler.clone()),
+        // A secondary view standing where the main one stood, or going
+        // away again.
+        ir::Action::OpenView(id) => SkinAction::OpenView(id.clone()),
+        ir::Action::CloseView(id) => SkinAction::CloseView(id.clone()),
         ir::Action::None
         | ir::Action::FastForward
         | ir::Action::Rewind
-        | ir::Action::OpenView(_)
-        | ir::Action::CloseView(_)
         | ir::Action::ResetEq
         | ir::Action::EffectsNext
         | ir::Action::EffectsPrevious => return None,
@@ -1667,6 +1727,32 @@ mod tests {
             document(br#"<theme><view backgroundImage="base.bmp"/></theme>"#);
         let view = document.main_view().unwrap();
         assert_eq!(view_size(&mut render, &document, view), (10, 8));
+    }
+
+    #[test]
+    fn a_secondary_view_stands_where_the_main_one_stood() {
+        let (document, mut render) = document(
+            br#"<theme><view id="vMain" width="100" height="50"/><view id="vPl" width="60" height="40"/></theme>"#,
+        );
+        // The main view stands first.
+        let view = document.current_view(render.open_view.as_deref()).unwrap();
+        assert_eq!(view.id.as_deref(), Some("vMain"));
+        // One that names nothing stays shut.
+        render.show_view(Some("vNowhere".into()));
+        let view = document.current_view(render.open_view.as_deref()).unwrap();
+        assert_eq!(view.id.as_deref(), Some("vMain"));
+        // The named one stands, with its own size.
+        render.show_view(Some("vPl".into()));
+        assert!(render.is_open("vPl"));
+        let view = document.current_view(render.open_view.as_deref()).unwrap();
+        assert_eq!(view.id.as_deref(), Some("vPl"));
+        let size = view_size(&mut render, &document, view);
+        assert_eq!(size, (60, 40));
+        // Closing it stands the main view again.
+        render.show_view(None);
+        assert!(!render.is_open("vPl"));
+        let view = document.current_view(render.open_view.as_deref()).unwrap();
+        assert_eq!(view.id.as_deref(), Some("vMain"));
     }
 
     #[test]
@@ -1827,6 +1913,16 @@ mod tests {
         assert_eq!(
             button_action(&ir::Action::Unhandled("TogglePl();".into())),
             Some(SkinAction::RunScript("TogglePl();".into()))
+        );
+        // A secondary view stands where the main one stood, or goes
+        // away again.
+        assert_eq!(
+            button_action(&ir::Action::OpenView("vPl".into())),
+            Some(SkinAction::OpenView("vPl".into()))
+        );
+        assert_eq!(
+            button_action(&ir::Action::CloseView("vPl".into())),
+            Some(SkinAction::CloseView("vPl".into()))
         );
         assert_eq!(button_action(&ir::Action::ResetEq), None);
     }

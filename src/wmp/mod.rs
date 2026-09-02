@@ -333,6 +333,17 @@ impl SkinDocument {
             .find(|view| id.is_some_and(|id| view.id.as_deref() == Some(id)))
             .or_else(|| self.views.first())
     }
+
+    /// A view by the id a skin opens, or the main view when nothing is
+    /// open or the id names nothing.
+    pub fn current_view(&self, open: Option<&str>) -> Option<&View> {
+        open.and_then(|id| {
+            self.views
+                .iter()
+                .find(|view| view.id.as_deref() == Some(id))
+        })
+        .or_else(|| self.main_view())
+    }
 }
 
 #[cfg(test)]
