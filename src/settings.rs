@@ -4,13 +4,15 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ThemeChoice {
     #[default]
     Dark,
     Light,
     System,
+    /// A custom colour scheme loaded from a JSON file in the schemes directory.
+    Custom(String),
 }
 
 /// Mini-player visualizer mode.
@@ -35,13 +37,14 @@ impl VisMode {
 }
 
 impl ThemeChoice {
-    pub const ALL: [ThemeChoice; 3] = [Self::Dark, Self::Light, Self::System];
+    pub const BUILTINS: [ThemeChoice; 3] = [Self::Dark, Self::Light, Self::System];
 
-    pub fn label(self) -> &'static str {
+    pub fn label(&self) -> &str {
         match self {
             Self::Dark => "Dark",
             Self::Light => "Light",
             Self::System => "Follow system",
+            Self::Custom(name) => name,
         }
     }
 }

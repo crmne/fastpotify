@@ -450,15 +450,30 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         widgets::setting_row(ui, &palette, "Theme", "", |ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
-                for choice in ThemeChoice::ALL {
+                for choice in &ThemeChoice::BUILTINS {
                     if theme::soft_button(
                         ui,
                         &palette,
                         None,
                         choice.label(),
-                        app.settings.theme == choice,
+                        app.settings.theme == *choice,
                     )
                     .clicked()
+                        && app.settings.theme != *choice
+                    {
+                        app.settings.theme = choice.clone();
+                        changed = true;
+                    }
+                }
+                for (stem, scheme) in &app.available_schemes {
+                    let display = if scheme.name.is_empty() {
+                        stem
+                    } else {
+                        &scheme.name
+                    };
+                    let choice = ThemeChoice::Custom(stem.clone());
+                    if theme::soft_button(ui, &palette, None, display, app.settings.theme == choice)
+                        .clicked()
                         && app.settings.theme != choice
                     {
                         app.settings.theme = choice;

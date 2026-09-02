@@ -50,7 +50,10 @@ everyday use, and connection details.
   starts.
 - **Album-art colour.** Pages and the player bar take a tint from the cover
   of what you are looking at or listening to. Turn it off in Settings.
-- **Light and dark**, or follow the system.
+- **Light and dark**, or follow the system. Custom colour schemes are
+  supported: drop a JSON file into `~/.config/fastpotify/schemes/` and select
+  it in Settings. Press `Ctrl+Shift+R` / `Cmd+Shift+R` to reload a scheme
+  after editing.
 - **Winamp mini player.** `Ctrl+M` opens a small player for classic `.wsz`
   skins, drawn at 1x to 4x scale. It includes a spectrum analyser, playlist,
   and equalizer. Drop a skin from the
@@ -245,6 +248,15 @@ autoplay, gapless playback, the audio backend (PulseAudio/PipeWire or ALSA on
 Linux), audio cache size, theme, sidebar state, whether pages take colour
 from artwork, and the mini player's skin and size.
 Playback settings apply when you press **Apply and restart playback**.
+
+### Custom colour schemes
+
+Place `.json` files in `~/.config/fastpotify/schemes/`. Each file defines a
+colour scheme with hex values (e.g. `"#1ed760"`). Missing fields fall back to
+the built-in dark palette, so partial overrides work. The scheme's `name`
+field sets the button label in Settings; the filename stem is used when `name`
+is empty. Press `Ctrl+Shift+R` / `Cmd+Shift+R` to reload the active scheme
+after editing.
 
 Caches (audio, artwork) live under the cache directory and can be deleted at
 any time without signing you out.

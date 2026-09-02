@@ -48,6 +48,11 @@ impl AppDirs {
         self.config.join("skins")
     }
 
+    /// Custom colour schemes, as `.json` files.
+    pub fn schemes_dir(&self) -> PathBuf {
+        self.config.join("schemes")
+    }
+
     /// MilkDrop presets, as `.milk` files, in folders or not, with any
     /// textures they use in a `textures` folder inside.
     pub fn milkdrop_dir(&self) -> PathBuf {

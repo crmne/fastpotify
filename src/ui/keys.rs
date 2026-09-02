@@ -13,6 +13,7 @@ pub(super) const SIDEBAR_SHORTCUT: &str = platform_shortcut("Ctrl+B", "Cmd+B");
 pub(super) const QUIT_SHORTCUT: &str = platform_shortcut("Ctrl+Q", "Cmd+Q");
 pub(super) const WINAMP_SHORTCUT: &str = platform_shortcut("Ctrl+M", "Cmd+Shift+M");
 pub(super) const MILKDROP_SHORTCUT: &str = platform_shortcut("Ctrl+Shift+K", "Cmd+Shift+K");
+pub(super) const RELOAD_THEME_SHORTCUT: &str = platform_shortcut("Ctrl+Shift+R", "Cmd+Shift+R");
 
 pub fn handle(app: &mut App, ctx: &egui::Context) {
     let typing = ctx.memory(|memory| memory.focused().is_some());
@@ -58,6 +59,11 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
             Modifiers::COMMAND | Modifiers::SHIFT,
             Key::K,
             Action::ToggleWinampMilkdrop,
+        );
+        key(
+            Modifiers::COMMAND | Modifiers::SHIFT,
+            Key::R,
+            Action::ReloadTheme,
         );
         key(
             Modifiers::COMMAND,
@@ -188,6 +194,7 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ),
     (WINAMP_SHORTCUT, "Winamp mini player"),
     (MILKDROP_SHORTCUT, "MilkDrop, under the mini player"),
+    (RELOAD_THEME_SHORTCUT, "Reload colour scheme"),
     ("F  or  double-click", "MilkDrop: fill the screen"),
     ("→  /  N", "MilkDrop: next preset"),
     ("←  /  P", "MilkDrop: previous preset"),

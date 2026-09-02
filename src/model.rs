@@ -765,5 +765,7 @@ pub enum Action {
     /// Fetch one of projectM's preset packs into the folder, by its place
     /// in the list.
     DownloadMilkdropPack(usize),
+    /// Reload custom colour schemes from disk and re-apply the active one.
+    ReloadTheme,
     Quit,
 }

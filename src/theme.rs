@@ -5,6 +5,7 @@
 //! consistent.
 
 use egui::{Color32, CornerRadius, Response, Sense, Stroke, Vec2};
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Palette {
@@ -90,6 +91,144 @@ impl Palette {
             )
         };
         Color32::from_rgb((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8)
+    }
+}
+
+/// A serializable colour scheme that can be saved to and loaded from a JSON
+/// file.  Hex strings like `"#1ed760"` are accepted for each colour; missing
+/// fields fall back to the built-in dark palette so partial overrides work.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ColorScheme {
+    /// Human-readable name (stored in the file, not derived from the filename).
+    pub name: String,
+    pub dark: bool,
+    pub window: String,
+    pub panel: String,
+    pub surface: String,
+    pub surface_hover: String,
+    pub surface_active: String,
+    pub outline: String,
+    pub text: String,
+    pub secondary: String,
+    pub dim: String,
+    pub accent: String,
+    pub accent_hover: String,
+    pub on_accent: String,
+    pub danger: String,
+    pub warning: String,
+    pub overlay: String,
+    pub shadow: String,
+}
+
+impl Default for ColorScheme {
+    fn default() -> Self {
+        let p = Palette::dark();
+        Self {
+            name: String::new(),
+            dark: true,
+            window: hex(p.window),
+            panel: hex(p.panel),
+            surface: hex(p.surface),
+            surface_hover: hex(p.surface_hover),
+            surface_active: hex(p.surface_active),
+            outline: hex(p.outline),
+            text: hex(p.text),
+            secondary: hex(p.secondary),
+            dim: hex(p.dim),
+            accent: hex(p.accent),
+            accent_hover: hex(p.accent_hover),
+            on_accent: hex(p.on_accent),
+            danger: hex(p.danger),
+            warning: hex(p.warning),
+            overlay: hex(p.overlay),
+            shadow: hex_shadow(p.shadow),
+        }
+    }
+}
+
+impl ColorScheme {
+    /// Build a [`Palette`] from this scheme.
+    pub fn to_palette(&self) -> Palette {
+        Palette {
+            dark: self.dark,
+            window: parse_color(&self.window),
+            panel: parse_color(&self.panel),
+            surface: parse_color(&self.surface),
+            surface_hover: parse_color(&self.surface_hover),
+            surface_active: parse_color(&self.surface_active),
+            outline: parse_color(&self.outline),
+            text: parse_color(&self.text),
+            secondary: parse_color(&self.secondary),
+            dim: parse_color(&self.dim),
+            accent: parse_color(&self.accent),
+            accent_hover: parse_color(&self.accent_hover),
+            on_accent: parse_color(&self.on_accent),
+            danger: parse_color(&self.danger),
+            warning: parse_color(&self.warning),
+            overlay: parse_color(&self.overlay),
+            shadow: parse_color_alpha(&self.shadow),
+        }
+    }
+
+    /// Create a scheme from an existing palette and a name.
+    pub fn from_palette(name: impl Into<String>, p: &Palette) -> Self {
+        Self {
+            name: name.into(),
+            dark: p.dark,
+            window: hex(p.window),
+            panel: hex(p.panel),
+            surface: hex(p.surface),
+            surface_hover: hex(p.surface_hover),
+            surface_active: hex(p.surface_active),
+            outline: hex(p.outline),
+            text: hex(p.text),
+            secondary: hex(p.secondary),
+            dim: hex(p.dim),
+            accent: hex(p.accent),
+            accent_hover: hex(p.accent_hover),
+            on_accent: hex(p.on_accent),
+            danger: hex(p.danger),
+            warning: hex(p.warning),
+            overlay: hex(p.overlay),
+            shadow: hex_shadow(p.shadow),
+        }
+    }
+}
+
+fn hex(c: Color32) -> String {
+    format!("#{:02x}{:02x}{:02x}", c.r(), c.g(), c.b())
+}
+
+fn hex_shadow(c: Color32) -> String {
+    format!("#{:02x}{:02x}{:02x}{:02x}", c.r(), c.g(), c.b(), c.a())
+}
+
+fn parse_color(s: &str) -> Color32 {
+    let s = s.trim_start_matches('#');
+    match s.len() {
+        6 => {
+            let r = u8::from_str_radix(&s[0..2], 16).unwrap_or(0);
+            let g = u8::from_str_radix(&s[2..4], 16).unwrap_or(0);
+            let b = u8::from_str_radix(&s[4..6], 16).unwrap_or(0);
+            Color32::from_rgb(r, g, b)
+        }
+        _ => parse_color_alpha(s),
+    }
+}
+
+fn parse_color_alpha(s: &str) -> Color32 {
+    let s = s.trim_start_matches('#');
+    match s.len() {
+        8 => {
+            let r = u8::from_str_radix(&s[0..2], 16).unwrap_or(0);
+            let g = u8::from_str_radix(&s[2..4], 16).unwrap_or(0);
+            let b = u8::from_str_radix(&s[4..6], 16).unwrap_or(0);
+            let a = u8::from_str_radix(&s[6..8], 16).unwrap_or(255);
+            Color32::from_rgba_premultiplied(r, g, b, a)
+        }
+        6 => parse_color(s),
+        _ => Color32::BLACK,
     }
 }
 
@@ -853,5 +992,52 @@ mod tests {
             assert!(galley.rows[0].glyphs.len() >= 5);
         });
         output.textures_delta.clear();
+    }
+
+    #[test]
+    fn color_scheme_default_matches_dark_palette() {
+        let scheme = ColorScheme::default();
+        let palette = scheme.to_palette();
+        assert_eq!(palette, Palette::dark());
+    }
+
+    #[test]
+    fn color_scheme_from_palette_round_trip() {
+        let original = Palette::light();
+        let scheme = ColorScheme::from_palette("test", &original);
+        assert_eq!(scheme.name, "test");
+        assert!(!scheme.dark);
+        let restored = scheme.to_palette();
+        assert_eq!(restored, original);
+    }
+
+    #[test]
+    fn color_scheme_partial_json_uses_defaults() {
+        let json = r##"{"name":"partial","accent":"#ff0000"}"##;
+        let scheme: ColorScheme = serde_json::from_str(json).unwrap();
+        assert_eq!(scheme.name, "partial");
+        assert_eq!(scheme.accent, "#ff0000");
+        // Other fields fall back to defaults
+        assert_eq!(scheme.window, hex(Palette::dark().window));
+    }
+
+    #[test]
+    fn color_scheme_parse_hex_6() {
+        let c = parse_color("#1ed760");
+        assert_eq!(c, Color32::from_rgb(0x1e, 0xd7, 0x60));
+    }
+
+    #[test]
+    fn color_scheme_parse_hex_8() {
+        let c = parse_color_alpha("#0000008c");
+        assert_eq!(c, Color32::from_rgba_premultiplied(0, 0, 0, 0x8c));
+    }
+
+    #[test]
+    fn color_scheme_serde_round_trip() {
+        let scheme = ColorScheme::default();
+        let json = serde_json::to_string(&scheme).unwrap();
+        let restored: ColorScheme = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.to_palette(), scheme.to_palette());
     }
 }

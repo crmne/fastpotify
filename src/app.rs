@@ -22,7 +22,7 @@ use crate::paths::AppDirs;
 use crate::player::{EngineConfig, LoadSpec, LocalState, Playback, PlayerCommand, RepeatMode};
 use crate::settings::{SessionState, Settings, ThemeChoice};
 use crate::single_instance::ControlCommand;
-use crate::theme::{self, Palette};
+use crate::theme::{self, ColorScheme, Palette};
 use crate::tray::{TrayCommand, TrayService};
 use crate::util;
 
@@ -170,6 +170,8 @@ pub struct App {
     pub offline: bool,
     pub palette: Palette,
     applied_dark: Option<bool>,
+    /// Available custom colour schemes scanned from the schemes directory.
+    pub available_schemes: Vec<(String, theme::ColorScheme)>,
 
     pub auth: AuthStatus,
     pub user: Option<User>,
@@ -472,6 +474,7 @@ impl App {
             offline: false,
             palette: Palette::dark(),
             applied_dark: None,
+            available_schemes: Vec::new(),
             auth: AuthStatus::Starting,
             user: None,
             local_device_id: None,
@@ -608,6 +611,7 @@ impl App {
             winamp: crate::winamp::WinampState::new(session.winamp_pos, tap, eq),
         };
         app.local.volume = app.settings.volume;
+        app.available_schemes = app.load_schemes();
         // What was played here is on disk and needs nothing from the
         // network, so the tab has rows before Spotify has answered.
         app.rebuild_recents();
@@ -627,10 +631,22 @@ impl App {
     pub fn attach(&mut self, ctx: &egui::Context) {
         theme::install(ctx);
         ctx.add_bytes_loader(std::sync::Arc::new(self.backend.art().clone()));
-        ctx.set_theme(match self.settings.theme {
+        ctx.set_theme(match &self.settings.theme {
             ThemeChoice::Dark => egui::ThemePreference::Dark,
             ThemeChoice::Light => egui::ThemePreference::Light,
             ThemeChoice::System => egui::ThemePreference::System,
+            ThemeChoice::Custom(name) => {
+                let dark = self
+                    .available_schemes
+                    .iter()
+                    .find(|(n, _)| n == name)
+                    .is_none_or(|(_, s)| s.dark);
+                if dark {
+                    egui::ThemePreference::Dark
+                } else {
+                    egui::ThemePreference::Light
+                }
+            }
         });
         self.applied_dark = None;
         self.winamp.forget_textures();
@@ -1861,17 +1877,70 @@ impl App {
 
     fn apply_theme(&mut self, ctx: &egui::Context) {
         let dark = ctx.theme() == egui::Theme::Dark;
-        if self.applied_dark != Some(dark) {
-            self.palette = if dark {
-                Palette::dark()
-            } else {
-                Palette::light()
-            };
+        let new_palette = match &self.settings.theme {
+            ThemeChoice::Dark => Some(Palette::dark()),
+            ThemeChoice::Light => Some(Palette::light()),
+            ThemeChoice::System => {
+                if self.applied_dark != Some(dark) {
+                    Some(if dark {
+                        Palette::dark()
+                    } else {
+                        Palette::light()
+                    })
+                } else {
+                    None
+                }
+            }
+            ThemeChoice::Custom(name) => self
+                .available_schemes
+                .iter()
+                .find(|(n, _)| n == name)
+                .map(|(_, scheme)| scheme.to_palette()),
+        };
+        if let Some(palette) = new_palette
+            && (self.applied_dark != Some(dark)
+                || matches!(&self.settings.theme, ThemeChoice::Custom(_)))
+        {
+            self.palette = palette;
             theme::apply(ctx, &self.palette);
             self.applied_dark = Some(dark);
             self.accents.clear();
             self.accent_pending.clear();
         }
+    }
+
+    /// Scan the schemes directory and return all parseable colour schemes,
+    /// keyed by file stem, sorted by name.
+    fn load_schemes(&self) -> Vec<(String, ColorScheme)> {
+        let dir = self.dirs.schemes_dir();
+        let mut schemes = Vec::new();
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            return schemes;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            let stem = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or_default()
+                .to_string();
+            match std::fs::read_to_string(&path) {
+                Ok(text) => match serde_json::from_str::<ColorScheme>(&text) {
+                    Ok(scheme) => schemes.push((stem, scheme)),
+                    Err(error) => {
+                        log::warn!("scheme {}: {error}", path.display());
+                    }
+                },
+                Err(error) => {
+                    log::warn!("scheme {}: {error}", path.display());
+                }
+            }
+        }
+        schemes.sort_by(|a, b| a.1.name.cmp(&b.1.name).then(a.0.cmp(&b.0)));
+        schemes
     }
 
     fn handle_tray(&mut self) {
@@ -5142,11 +5211,24 @@ impl App {
             }
             Action::SettingsChanged => {
                 self.settings_dirty = true;
-                ctx.set_theme(match self.settings.theme {
+                ctx.set_theme(match &self.settings.theme {
                     ThemeChoice::Dark => egui::ThemePreference::Dark,
                     ThemeChoice::Light => egui::ThemePreference::Light,
                     ThemeChoice::System => egui::ThemePreference::System,
+                    ThemeChoice::Custom(name) => {
+                        let dark = self
+                            .available_schemes
+                            .iter()
+                            .find(|(n, _)| n == name)
+                            .is_none_or(|(_, s)| s.dark);
+                        if dark {
+                            egui::ThemePreference::Dark
+                        } else {
+                            egui::ThemePreference::Light
+                        }
+                    }
                 });
+                self.available_schemes = self.load_schemes();
             }
             Action::RestartEngine => {
                 self.save_settings();
@@ -5381,6 +5463,11 @@ impl App {
                         .download(pack, self.dirs.milkdrop_dir(), ctx.clone());
                     self.toast(format!("Downloading {} presets", pack.name));
                 }
+            }
+            Action::ReloadTheme => {
+                self.available_schemes = self.load_schemes();
+                self.applied_dark = None;
+                self.toast("Colour scheme reloaded");
             }
             Action::Quit => {
                 self.quit_requested = true;
