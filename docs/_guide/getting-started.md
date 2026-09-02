@@ -15,6 +15,7 @@ Or build from source with [Rust](https://rustup.rs) 1.95 or newer:
 git clone https://github.com/crmne/fastpotify
 cd fastpotify
 cargo install --path .
+fastpotify install-desktop  # on Linux
 ```
 
 On Linux, install the GUI and audio development packages. On Arch:
@@ -37,7 +38,9 @@ install `noto-fonts` and `noto-fonts-cjk` (Arch) or `fonts-noto` and
 
 ![Japanese, Chinese, and Korean titles in a playlist](/assets/images/scripts.png)
 
-A desktop entry ships in `packaging/applications/fastpotify.desktop`.
+On Linux, `fastpotify install-desktop` installs the desktop entry, application
+icon, and `~/.local/bin` launcher. The raw files also ship in
+`packaging/applications/fastpotify.desktop` and `packaging/icons/fastpotify.svg`.
 
 ## Sign in
 

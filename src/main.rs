@@ -117,6 +117,9 @@ enum Control {
     },
     /// Bring the window of the running instance forward
     Show,
+    /// Install the desktop entry, icon, and binary link for Linux desktop integration
+    #[cfg(target_os = "linux")]
+    InstallDesktop,
 }
 
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
@@ -205,12 +208,121 @@ fn run_control(control: Control) -> i32 {
 }
 
 #[cfg(target_os = "linux")]
-fn run_control(_control: Control) -> i32 {
-    eprintln!(
-        "On Linux the running instance speaks MPRIS instead; use e.g. \
-         `playerctl --player=fastpotify play-pause`."
-    );
-    2
+fn run_control(control: Control) -> i32 {
+    match control {
+        Control::InstallDesktop => install_desktop(),
+        _ => {
+            eprintln!(
+                "On Linux the running instance speaks MPRIS instead; use e.g. \
+                 `playerctl --player=fastpotify play-pause`."
+            );
+            2
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn install_desktop() -> i32 {
+    const DESKTOP_TEMPLATE: &str = include_str!("../packaging/applications/fastpotify.desktop");
+    const ICON_SVG: &str = include_str!("../packaging/icons/fastpotify.svg");
+
+    let Some(base_dirs) = directories::BaseDirs::new() else {
+        eprintln!("Could not determine user directories (HOME not set).");
+        return 1;
+    };
+
+    let data_dir = base_dirs.data_dir();
+    let home_dir = base_dirs.home_dir();
+
+    let applications_dir = data_dir.join("applications");
+    let hicolor_icon_dir = data_dir.join("icons/hicolor/scalable/apps");
+    let user_icon_dir = data_dir.join("icons");
+    let bin_dir = home_dir.join(".local/bin");
+
+    if let Err(err) = std::fs::create_dir_all(&applications_dir) {
+        eprintln!("Failed to create {}: {err}", applications_dir.display());
+        return 1;
+    }
+    if let Err(err) = std::fs::create_dir_all(&hicolor_icon_dir) {
+        eprintln!("Failed to create {}: {err}", hicolor_icon_dir.display());
+        return 1;
+    }
+    if let Err(err) = std::fs::create_dir_all(&user_icon_dir) {
+        eprintln!("Failed to create {}: {err}", user_icon_dir.display());
+        return 1;
+    }
+    if let Err(err) = std::fs::create_dir_all(&bin_dir) {
+        eprintln!("Failed to create {}: {err}", bin_dir.display());
+        return 1;
+    }
+
+    let hicolor_icon_path = hicolor_icon_dir.join("fastpotify.svg");
+    if let Err(err) = std::fs::write(&hicolor_icon_path, ICON_SVG) {
+        eprintln!("Failed to write {}: {err}", hicolor_icon_path.display());
+        return 1;
+    }
+    let user_icon_path = user_icon_dir.join("fastpotify.svg");
+    let _ = std::fs::write(&user_icon_path, ICON_SVG);
+
+    let cargo_bin = home_dir.join(".cargo/bin/fastpotify");
+    let target_bin = if cargo_bin.is_file() {
+        cargo_bin
+    } else {
+        std::env::current_exe().unwrap_or_else(|_| cargo_bin.clone())
+    };
+
+    let symlink_path = bin_dir.join("fastpotify");
+    let mut exec_target = symlink_path.clone();
+
+    if target_bin != symlink_path {
+        let _ = std::fs::remove_file(&symlink_path);
+        if let Err(err) = std::os::unix::fs::symlink(&target_bin, &symlink_path) {
+            eprintln!(
+                "Warning: could not create symlink {} -> {}: {err}",
+                symlink_path.display(),
+                target_bin.display()
+            );
+            exec_target = target_bin.clone();
+        }
+    }
+
+    let desktop_file_path = applications_dir.join("fastpotify.desktop");
+    let desktop_content = format_desktop_file(DESKTOP_TEMPLATE, &exec_target.to_string_lossy());
+    if let Err(err) = std::fs::write(&desktop_file_path, desktop_content) {
+        eprintln!("Failed to write {}: {err}", desktop_file_path.display());
+        return 1;
+    }
+
+    println!("Installed Fastpotify desktop integration:");
+    println!("  Desktop entry: {}", desktop_file_path.display());
+    println!("  Icon:          {}", hicolor_icon_path.display());
+    if target_bin != symlink_path && symlink_path.exists() {
+        println!(
+            "  Symlink:       {} -> {}",
+            symlink_path.display(),
+            target_bin.display()
+        );
+    } else {
+        println!("  Executable:    {}", exec_target.display());
+    }
+
+    0
+}
+
+fn format_desktop_file(template: &str, exec_path: &str) -> String {
+    let mut output = Vec::new();
+    for line in template.lines() {
+        if line.starts_with("Exec=") {
+            output.push(format!("Exec={exec_path}"));
+        } else {
+            output.push(line.to_string());
+        }
+    }
+    let mut s = output.join("\n");
+    if template.ends_with('\n') {
+        s.push('\n');
+    }
+    s
 }
 
 /// The `nowplaying` snapshot as one human-readable line.
@@ -755,5 +867,28 @@ fn app_icon() -> egui::IconData {
         rgba: util::app_icon_rgba(SIZE),
         width: SIZE as u32,
         height: SIZE as u32,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn formats_desktop_file_exec_path() {
+        let template = "[Desktop Entry]\nName=Fastpotify\nExec=fastpotify\nIcon=fastpotify\n";
+        let formatted = format_desktop_file(template, "/home/user/.local/bin/fastpotify");
+        assert_eq!(
+            formatted,
+            "[Desktop Entry]\nName=Fastpotify\nExec=/home/user/.local/bin/fastpotify\nIcon=fastpotify\n"
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn parses_install_desktop_cli() {
+        let cli = Cli::try_parse_from(["fastpotify", "install-desktop"]).expect("CLI parses");
+        assert!(matches!(cli.control, Some(Control::InstallDesktop)));
     }
 }

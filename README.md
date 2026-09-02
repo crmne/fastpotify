@@ -95,6 +95,12 @@ Everywhere else, build the single binary with Rust 1.95 or newer:
 cargo install --path . --locked
 ```
 
+On Linux, install the desktop entry, application icon, and `~/.local/bin` symlink:
+
+```bash
+fastpotify install-desktop
+```
+
 MilkDrop uses libprojectM, which is built from source. This needs CMake, a C++
 compiler, and libclang. To build without MilkDrop or those tools, run
 `cargo install --path . --locked --no-default-features`. On Linux, you also need the
@@ -132,7 +138,8 @@ macOS and Windows include common fonts. On Linux, install `noto-fonts` and
 `noto-fonts-cjk` (Arch) or `fonts-noto` and `fonts-noto-cjk` (Debian or
 Ubuntu) if titles appear as empty boxes.
 
-A desktop entry is provided in `packaging/applications/fastpotify.desktop`.
+Desktop files and icons also ship in `packaging/applications/fastpotify.desktop`
+and `packaging/icons/fastpotify.svg`.
 
 ## Sign in
 
