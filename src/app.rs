@@ -169,7 +169,8 @@ pub struct App {
     /// Sample data is loaded; Spotify requests are disabled.
     pub offline: bool,
     pub palette: Palette,
-    applied_dark: Option<bool>,
+    /// The last theme choice that was applied, to detect when it changes.
+    applied_theme: Option<ThemeChoice>,
     /// Available custom colour schemes scanned from the schemes directory.
     pub available_schemes: Vec<(String, theme::ColorScheme)>,
 
@@ -473,7 +474,7 @@ impl App {
             control_devices_stale: true,
             offline: false,
             palette: Palette::dark(),
-            applied_dark: None,
+            applied_theme: None,
             available_schemes: Vec::new(),
             auth: AuthStatus::Starting,
             user: None,
@@ -648,7 +649,7 @@ impl App {
                 }
             }
         });
-        self.applied_dark = None;
+        self.applied_theme = None;
         self.winamp.forget_textures();
         self.window_hidden = false;
         self.hide_intent = false;
@@ -1880,17 +1881,11 @@ impl App {
         let new_palette = match &self.settings.theme {
             ThemeChoice::Dark => Some(Palette::dark()),
             ThemeChoice::Light => Some(Palette::light()),
-            ThemeChoice::System => {
-                if self.applied_dark != Some(dark) {
-                    Some(if dark {
-                        Palette::dark()
-                    } else {
-                        Palette::light()
-                    })
-                } else {
-                    None
-                }
-            }
+            ThemeChoice::System => Some(if dark {
+                Palette::dark()
+            } else {
+                Palette::light()
+            }),
             ThemeChoice::Custom(name) => self
                 .available_schemes
                 .iter()
@@ -1898,12 +1893,11 @@ impl App {
                 .map(|(_, scheme)| scheme.to_palette()),
         };
         if let Some(palette) = new_palette
-            && (self.applied_dark != Some(dark)
-                || matches!(&self.settings.theme, ThemeChoice::Custom(_)))
+            && self.applied_theme.as_ref() != Some(&self.settings.theme)
         {
             self.palette = palette;
             theme::apply(ctx, &self.palette);
-            self.applied_dark = Some(dark);
+            self.applied_theme = Some(self.settings.theme.clone());
             self.accents.clear();
             self.accent_pending.clear();
         }
@@ -5466,7 +5460,7 @@ impl App {
             }
             Action::ReloadTheme => {
                 self.available_schemes = self.load_schemes();
-                self.applied_dark = None;
+                self.applied_theme = None;
                 self.toast("Colour scheme reloaded");
             }
             Action::Quit => {
