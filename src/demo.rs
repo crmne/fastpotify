@@ -703,6 +703,30 @@ pub fn apply_flags(app: &mut App, page: Option<&str>, show: Option<&str>) {
                     },
                 );
             }
+            "podcast" => {
+                app.remote = None;
+                for device in &mut app.devices {
+                    device.is_active = device.id.as_deref() == Some("local-demo");
+                }
+                let episode = episode(3, 0);
+                let show_name = episode
+                    .show
+                    .as_ref()
+                    .map_or(String::new(), |show| show.name.clone());
+                app.local.track = Some(crate::player::LocalTrack {
+                    uri: episode.uri.clone(),
+                    title: episode.name.clone(),
+                    artists: vec![show_name.clone()],
+                    album: show_name,
+                    art_url: episode.images.first().map(|image| image.url.clone()),
+                    art_small_url: episode.images.last().map(|image| image.url.clone()),
+                    duration_ms: episode.duration_ms,
+                    is_episode: true,
+                });
+                app.local.playback = crate::player::Playback::Playing;
+                app.local.position_ms = 1_263_000;
+                app.local.speed = 1.5;
+            }
             "lyrics" => {
                 app.lyrics_uri = app.now_playing().map(|now| now.uri);
                 app.lyrics = Loadable::Loaded(Some(sample_lyrics()));

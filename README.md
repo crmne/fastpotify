@@ -29,6 +29,9 @@ everyday use, and connection details.
   Spotify Connect devices.
 - **Library.** Browse playlists, Liked Songs, saved albums, followed artists,
   podcasts, and saved episodes. Filter, pin, and reorder sidebar items.
+- **Podcast speed.** Episodes played on this computer can run from 0.5× to
+  3.5× without changing the voice's pitch. The control sits beside the
+  transport buttons and remembers your choice.
 - **Search** across songs, artists, albums, playlists, podcasts, and episodes,
   with a top result and per-type views.
 - **Home** with Made for you, Recently played, your top artists and songs, and
@@ -220,7 +223,7 @@ plugin uses the same interface.
 
 Settings live in one readable JSON file (`~/.config/fastpotify/settings.json`
 on Linux). They include the Connect device name, bitrate, normalisation,
-autoplay, gapless playback, the audio backend (PulseAudio/PipeWire or ALSA on
+autoplay, gapless playback, podcast speed, the audio backend (PulseAudio/PipeWire or ALSA on
 Linux), audio cache size, theme, sidebar state, whether pages take colour
 from artwork, and the mini player's skin and size.
 Playback settings apply when you press **Apply and restart playback**.

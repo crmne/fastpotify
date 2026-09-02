@@ -53,6 +53,7 @@ main fields are:
 | `audio_cache_mb` | `1024` | On-disk audio cache budget |
 | `theme` | `dark` | `dark`, `light`, or `system` |
 | `accent_from_art` | `true` | Tint pages with album art |
+| `podcast_speed` | `1` | Speed for podcast episodes played here, 0.5 to 3.5; songs always play at 1 |
 | `sidebar_compact` | `false` | Names only in the library sidebar, no covers |
 | `tracklist_compact` | `false` | One-line track rows without covers |
 | `winamp_window` | `false` | The window is the Winamp mini player |
@@ -102,7 +103,7 @@ settings.
 `--demo-page` opens a page, such as `home`, `playlist:pl1`, or `artist:art0`,
 and `--demo-show` adds surfaces on top of it: a comma separated list of
 `queue`, `devices`, `shortcuts`, `premium`, `create`, `light`, `focus`, `winamp`,
-`playlist`, `eq`, `eq-shade`, and `compact`.
+`playlist`, `eq`, `eq-shade`, `compact`, and `podcast`.
 
 `--demo-shot <PATH>` writes the window to a PNG and exits, which is how the
 screenshots in these pages are made:

@@ -32,6 +32,8 @@ cannot play music through Fastpotify on this computer or another device.
   pause, skip, seek, shuffle, repeat, volume.
 - **Library.** Browse playlists, Liked Songs, saved albums, followed artists,
   podcasts, and saved episodes. Create, edit, and reorder your playlists.
+- **Podcast speed.** Episodes played on this computer can run from 0.5× to
+  3.5× without changing the voice's pitch.
 - **Search** across songs, artists, albums, playlists, podcasts, and
   episodes, with artist pages, discographies, and related artists.
 - **Background playback.** Closing the window keeps the music playing from

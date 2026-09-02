@@ -92,6 +92,7 @@ pub struct NowPlaying {
     pub volume_percent: u8,
     pub can_control: bool,
     pub is_episode: bool,
+    pub speed: f32,
     /// The remembered song from the last session, shown paused before a
     /// first press. Nothing is playing yet.
     pub resuming: bool,
@@ -357,6 +358,8 @@ pub struct App {
     last_update_check: Option<Instant>,
     /// Winamp window state and active skin.
     pub winamp: crate::winamp::WinampState,
+    pub speed: crate::timescale::SharedSpeed,
+    pub podcast_speed: crate::timescale::SharedSpeed,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -393,11 +396,16 @@ impl App {
         if let Ok(mut shared) = eq.lock() {
             *shared = eq_settings(&settings);
         }
+        let speed = crate::timescale::shared_speed();
+        let podcast_speed = crate::timescale::shared_speed();
+        crate::timescale::store_speed(&podcast_speed, settings.podcast_speed);
         let engine_config = engine_config(
             &dirs,
             &settings,
             std::sync::Arc::clone(&tap),
             std::sync::Arc::clone(&eq),
+            std::sync::Arc::clone(&speed),
+            std::sync::Arc::clone(&podcast_speed),
         );
         let backend = Backend::spawn(
             dirs.clone(),
@@ -583,6 +591,8 @@ impl App {
             update: None,
             last_update_check: None,
             winamp: crate::winamp::WinampState::new(session.winamp_pos, tap, eq),
+            speed,
+            podcast_speed,
         };
         app.local.volume = app.settings.volume;
         // What was played here is on disk and needs nothing from the
@@ -837,6 +847,7 @@ impl App {
                 volume_percent: volume_to_percent(self.local.volume),
                 can_control: true,
                 is_episode: track.is_episode,
+                speed: self.local.speed,
                 resuming: false,
             });
         }
@@ -923,6 +934,7 @@ impl App {
             volume_percent: volume,
             can_control: device.is_none_or(|device| !device.is_restricted),
             is_episode,
+            speed: 1.0,
             resuming: false,
         })
     }
@@ -957,6 +969,7 @@ impl App {
             volume_percent: volume_to_percent(self.local.volume),
             can_control: true,
             is_episode: false,
+            speed: 1.0,
             resuming: true,
         })
     }
@@ -4850,6 +4863,8 @@ impl App {
                     &self.settings,
                     std::sync::Arc::clone(&self.winamp.tap),
                     std::sync::Arc::clone(&self.winamp.eq),
+                    std::sync::Arc::clone(&self.speed),
+                    std::sync::Arc::clone(&self.podcast_speed),
                 );
                 self.backend.send(Command::RestartEngine(config));
                 if self.local_ready {
@@ -4991,6 +5006,18 @@ impl App {
             Action::ToggleMono => {
                 self.settings.mono = !self.settings.mono;
                 self.push_eq();
+            }
+            Action::SetPodcastSpeed(speed) => {
+                let speed = speed.clamp(crate::timescale::MIN_SPEED, crate::timescale::MAX_SPEED);
+                self.settings.podcast_speed = speed;
+                crate::timescale::store_speed(&self.podcast_speed, speed);
+                if self
+                    .now_playing()
+                    .is_some_and(|now| now.local && now.is_episode)
+                {
+                    self.backend.player(PlayerCommand::SetSpeed(speed));
+                }
+                self.settings_dirty = true;
             }
             Action::ToggleWinampShade => {
                 self.settings.winamp_shaded = !self.settings.winamp_shaded;
@@ -5475,10 +5502,14 @@ pub fn engine_config(
     settings: &Settings,
     tap: std::sync::Arc<crate::vis::AudioTap>,
     eq: crate::eq::SharedEq,
+    speed: crate::timescale::SharedSpeed,
+    podcast_speed: crate::timescale::SharedSpeed,
 ) -> EngineConfig {
     EngineConfig {
         tap,
         eq,
+        speed,
+        podcast_speed,
         device_name: settings.device_name.trim().to_string(),
         bitrate_kbps: settings.bitrate,
         normalisation: settings.normalisation,
@@ -6736,6 +6767,16 @@ mod tests {
         );
         app.local_ready = true;
         app
+    }
+
+    #[cfg(feature = "demo")]
+    #[test]
+    fn the_podcast_demo_surface_plays_an_episode_here_at_its_speed() {
+        let mut app = headless_app();
+        crate::demo::apply_flags(&mut app, None, Some("podcast"));
+        let now = app.now_playing().expect("an episode is playing");
+        assert!(now.local && now.is_episode && now.playing);
+        assert_eq!(now.speed, 1.5);
     }
 
     /// Shuffle picks a random loaded track or Web API offset. Local librespot

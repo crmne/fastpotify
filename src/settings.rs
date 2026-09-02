@@ -69,6 +69,8 @@ pub struct Settings {
     pub theme: ThemeChoice,
     /// Tint the interface with the colour of the playing album's art.
     pub accent_from_art: bool,
+    #[serde(default = "default_podcast_speed")]
+    pub podcast_speed: f32,
     /// Last local volume, 0..=65535.
     pub volume: u16,
     /// Whether the library sidebar is visible.
@@ -166,6 +168,7 @@ impl Default for Settings {
             audio_cache_mb: 1024,
             theme: ThemeChoice::Dark,
             accent_from_art: true,
+            podcast_speed: default_podcast_speed(),
             volume: (u16::MAX as u32 * 70 / 100) as u16,
             sidebar_visible: true,
             art_expanded: false,
@@ -212,6 +215,10 @@ impl Default for Settings {
 
 fn default_buffer_ms() -> u32 {
     crate::sink::DEFAULT_BUFFER_MS
+}
+
+fn default_podcast_speed() -> f32 {
+    1.0
 }
 
 impl Settings {
@@ -349,6 +356,23 @@ mod tests {
     fn older_settings_default_to_standard_tracklist() {
         let settings: Settings = serde_json::from_str("{}").unwrap();
         assert!(!settings.tracklist_compact);
+    }
+
+    #[test]
+    fn older_settings_play_podcasts_at_normal_speed() {
+        let settings: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(settings.podcast_speed, 1.0);
+    }
+
+    #[test]
+    fn a_podcast_speed_round_trips() {
+        let settings = Settings {
+            podcast_speed: 1.5,
+            ..Settings::default()
+        };
+        let json = serde_json::to_string(&settings).unwrap();
+        let restored: Settings = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.podcast_speed, 1.5);
     }
 
     #[test]

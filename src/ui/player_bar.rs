@@ -368,6 +368,52 @@ fn transport(app: &mut App, ui: &mut egui::Ui, now: Option<&NowPlaying>, region:
         app.actions.push(Action::CycleRepeat);
     }
 
+    if now.is_some_and(|now| now.is_episode && now.local) {
+        let speed = now.map_or(1.0, |now| now.speed);
+        let label = speed_label(speed);
+        let font = theme::medium(12.0);
+        let galley = ui
+            .painter()
+            .layout_no_wrap(label.clone(), font.clone(), palette.text);
+        let pill_width = galley.size().x + 16.0;
+        let pill_left = region.center().x + total / 2.0 + gap;
+        let pill = Rect::from_center_size(
+            pos2(pill_left + pill_width / 2.0, cy),
+            vec2(pill_width, 22.0),
+        );
+        let response = ui
+            .interact(pill, egui::Id::new("podcast-speed"), Sense::click())
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .on_hover_text("Playback speed");
+        let active = (speed - 1.0).abs() > 1e-3;
+        if response.hovered() {
+            ui.painter()
+                .rect_filled(pill, 11.0, palette.text.gamma_multiply(0.08));
+        }
+        let color = if active {
+            if response.hovered() {
+                palette.accent_hover
+            } else {
+                palette.accent
+            }
+        } else if response.hovered() {
+            palette.text
+        } else {
+            dim
+        };
+        ui.painter().text(
+            pill.center(),
+            egui::Align2::CENTER_CENTER,
+            &label,
+            font,
+            color,
+        );
+        if response.clicked() {
+            app.actions
+                .push(Action::SetPodcastSpeed(crate::timescale::next_speed(speed)));
+        }
+    }
+
     // Progress row, just below the buttons (disc bottom + 6px gap + half of
     // the time text's line height).
     let row_cy = cy + 31.0;
@@ -430,6 +476,14 @@ fn transport(app: &mut App, ui: &mut egui::Ui, now: Option<&NowPlaying>, region:
         theme::regular(11.5),
         time_color,
     );
+}
+
+fn speed_label(speed: f32) -> String {
+    if (speed - speed.round()).abs() < 0.05 {
+        format!("{}×", speed.round() as i32)
+    } else {
+        format!("{speed}×")
+    }
 }
 
 fn extras(app: &mut App, ui: &mut egui::Ui, now: Option<&NowPlaying>) {
@@ -536,5 +590,20 @@ fn extras(app: &mut App, ui: &mut egui::Ui, now: Option<&NowPlaying>) {
     .clicked()
     {
         app.actions.push(Action::ToggleLyricsPanel);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::speed_label;
+
+    #[test]
+    fn speed_labels_read_the_way_spotify_shows_them() {
+        assert_eq!(speed_label(1.0), "1×");
+        assert_eq!(speed_label(2.0), "2×");
+        assert_eq!(speed_label(3.5), "3.5×");
+        assert_eq!(speed_label(1.5), "1.5×");
+        assert_eq!(speed_label(0.5), "0.5×");
+        assert_eq!(speed_label(0.8), "0.8×");
     }
 }

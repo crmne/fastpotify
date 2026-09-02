@@ -145,6 +145,10 @@ pub struct Tapped {
     inner: Box<dyn Sink>,
     tap: Arc<AudioTap>,
     eq: crate::eq::Processor,
+    speed: crate::timescale::SharedSpeed,
+    stretch: crate::timescale::Stretch,
+    reset_epoch: Arc<std::sync::atomic::AtomicU64>,
+    seen_epoch: u64,
     /// Player volume, used to calculate the limiter ceiling.
     volume: Box<dyn VolumeGetter + Send>,
     /// Whether this wrapper applies volume after the tap. Otherwise the inner
@@ -158,18 +162,26 @@ pub struct Tapped {
 }
 
 impl Tapped {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         inner: Box<dyn Sink>,
         tap: Arc<AudioTap>,
         volume: Box<dyn VolumeGetter + Send>,
         applies_volume: bool,
         eq: crate::eq::SharedEq,
+        speed: crate::timescale::SharedSpeed,
+        reset_epoch: Arc<std::sync::atomic::AtomicU64>,
         normalisation: Arc<std::sync::atomic::AtomicU64>,
     ) -> Self {
+        let seen_epoch = reset_epoch.load(std::sync::atomic::Ordering::Relaxed);
         Self {
             inner,
             tap,
             eq: crate::eq::Processor::new(eq),
+            speed,
+            stretch: crate::timescale::Stretch::new(NUM_CHANNELS as usize),
+            reset_epoch,
+            seen_epoch,
             volume,
             applies_volume,
             limiter: crate::limiter::Limiter::new(f64::from(SAMPLE_RATE)),
@@ -200,6 +212,7 @@ impl Sink for Tapped {
 
     fn stop(&mut self) -> SinkResult<()> {
         self.tap.clear();
+        self.stretch.reset();
         self.inner.stop()
     }
 
@@ -207,6 +220,21 @@ impl Sink for Tapped {
         let packet = match packet {
             AudioPacket::Samples(mut samples) => {
                 self.eq.process(&mut samples);
+                self.stretch
+                    .set_ratio(crate::timescale::load_speed(&self.speed));
+                let epoch = self.reset_epoch.load(std::sync::atomic::Ordering::Relaxed);
+                if epoch != self.seen_epoch {
+                    self.seen_epoch = epoch;
+                    self.stretch.reset();
+                }
+                if self.stretch.bypassed() {
+                    self.stretch.reset();
+                } else {
+                    samples = self.stretch.process(&samples);
+                    if samples.is_empty() {
+                        return Ok(());
+                    }
+                }
                 // Post-EQ, pre-volume, pre-normalisation: the equalizer
                 // shapes what the bars show; the volume knob and the
                 // loudness housekeeping never move them.

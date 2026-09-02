@@ -55,6 +55,8 @@ pub struct EngineConfig {
     pub tap: Arc<AudioTap>,
     /// The equalizer's settings, shared with the window that sets them.
     pub eq: crate::eq::SharedEq,
+    pub speed: crate::timescale::SharedSpeed,
+    pub podcast_speed: crate::timescale::SharedSpeed,
 }
 
 impl EngineConfig {
@@ -153,7 +155,7 @@ impl LocalTrack {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct LocalState {
     pub playback: Playback,
     pub track: Option<LocalTrack>,
@@ -168,6 +170,27 @@ pub struct LocalState {
     pub active_client: String,
     pub error: Option<String>,
     pub seek_sequence: u64,
+    pub speed: f32,
+}
+
+impl Default for LocalState {
+    fn default() -> Self {
+        Self {
+            playback: Playback::default(),
+            track: None,
+            position_ms: 0,
+            position_at: None,
+            volume: 0,
+            shuffle: false,
+            repeat: RepeatMode::default(),
+            connected: false,
+            username: String::new(),
+            active_client: String::new(),
+            error: None,
+            seek_sequence: 0,
+            speed: 1.0,
+        }
+    }
 }
 
 /// What local playback was doing when its session ended, so the engine
@@ -198,7 +221,8 @@ impl LocalState {
     pub fn position_now(&self) -> u32 {
         match (self.playback, self.position_at) {
             (Playback::Playing, Some(at)) => {
-                let elapsed = at.elapsed().as_millis() as u32;
+                let speed = if self.speed > 0.0 { self.speed } else { 1.0 };
+                let elapsed = (at.elapsed().as_millis() as f32 * speed) as u32;
                 let limit = self
                     .track
                     .as_ref()
@@ -246,6 +270,7 @@ pub enum PlayerCommand {
     VolumePreview(u16),
     Shuffle(bool),
     Repeat(RepeatMode),
+    SetSpeed(f32),
     Load(LoadSpec),
     Activate,
 }
@@ -265,6 +290,8 @@ pub struct Engine {
     mixer: Arc<dyn Mixer>,
     device_id: String,
     state: Arc<Mutex<LocalState>>,
+    speed: crate::timescale::SharedSpeed,
+    notify: Notify,
     /// What was playing when the session ended on its own.
     interrupted: Arc<Mutex<Option<Interrupted>>>,
     shutting_down: Arc<std::sync::atomic::AtomicBool>,
@@ -285,6 +312,7 @@ impl Engine {
             ..SessionConfig::default()
         };
         let normalisation_factor = Arc::new(std::sync::atomic::AtomicU64::new(1.0f64.to_bits()));
+        let reset_epoch = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let player_config = PlayerConfig {
             bitrate: config.bitrate(),
             gapless: config.gapless,
@@ -320,11 +348,19 @@ impl Engine {
             Arc::clone(&state),
             Arc::clone(&notify),
             &mixer,
+            Arc::clone(&reset_epoch),
             Arc::clone(&normalisation_factor),
         );
         let player = Player::new(player_config, session.clone(), volume, sink_builder);
         let events = player.get_player_event_channel();
-        tokio::spawn(run_events(events, Arc::clone(&state), Arc::clone(&notify)));
+        tokio::spawn(run_events(
+            events,
+            Arc::clone(&state),
+            Arc::clone(&notify),
+            Arc::clone(&config.speed),
+            Arc::clone(&config.podcast_speed),
+            Arc::clone(&reset_epoch),
+        ));
 
         let connect_config = ConnectConfig {
             name: config.device_name.clone(),
@@ -382,6 +418,8 @@ impl Engine {
             mixer,
             device_id,
             state,
+            speed: Arc::clone(&config.speed),
+            notify,
             interrupted,
             shutting_down,
         })
@@ -504,6 +542,16 @@ impl Engine {
                     spirc.repeat_track(true)?;
                 }
             },
+            PlayerCommand::SetSpeed(speed) => {
+                let speed = speed.clamp(crate::timescale::MIN_SPEED, crate::timescale::MAX_SPEED);
+                crate::timescale::store_speed(&self.speed, speed);
+                let snapshot = {
+                    let mut current = self.state.lock().unwrap_or_else(|p| p.into_inner());
+                    current.speed = speed;
+                    current.clone()
+                };
+                (self.notify)(EngineEvent::State(snapshot));
+            }
             PlayerCommand::Activate => spirc.activate()?,
             PlayerCommand::Load(spec) => {
                 let playing_track = spec
@@ -557,12 +605,14 @@ fn sink_builder(
     state: Arc<Mutex<LocalState>>,
     notify: Notify,
     mixer: &Arc<dyn Mixer>,
+    reset_epoch: Arc<std::sync::atomic::AtomicU64>,
     normalisation: Arc<std::sync::atomic::AtomicU64>,
 ) -> SinkAndVolume {
     let device = config.audio_device.clone();
     let buffer_ms = config.buffer_ms;
     let tap = Arc::clone(&config.tap);
     let eq = Arc::clone(&config.eq);
+    let speed = Arc::clone(&config.speed);
     let report: ErrorHook = Arc::new(move |message: String| {
         let snapshot = {
             let mut current = state.lock().unwrap_or_else(|p| p.into_inner());
@@ -582,11 +632,20 @@ fn sink_builder(
                 // volume, including at zero.
                 let applied = mixer.get_soft_volume();
                 let normalisation = Arc::clone(&normalisation);
+                let reset_epoch = Arc::clone(&reset_epoch);
                 return (
                     Box::new(move || {
                         let sink = builder(device, AudioFormat::S16);
-                        Box::new(Tapped::new(sink, tap, applied, true, eq, normalisation))
-                            as Box<dyn Sink>
+                        Box::new(Tapped::new(
+                            sink,
+                            tap,
+                            applied,
+                            true,
+                            eq,
+                            speed,
+                            reset_epoch,
+                            normalisation,
+                        )) as Box<dyn Sink>
                     }),
                     Box::new(NoOpVolume),
                 );
@@ -601,7 +660,16 @@ fn sink_builder(
     (
         Box::new(move || {
             let sink = Box::new(RodioSink::new(device, report, volume, buffer_ms));
-            Box::new(Tapped::new(sink, tap, ceiling, false, eq, normalisation)) as Box<dyn Sink>
+            Box::new(Tapped::new(
+                sink,
+                tap,
+                ceiling,
+                false,
+                eq,
+                speed,
+                reset_epoch,
+                normalisation,
+            )) as Box<dyn Sink>
         }),
         Box::new(NoOpVolume),
     )
@@ -611,6 +679,9 @@ async fn run_events(
     mut events: tokio::sync::mpsc::UnboundedReceiver<PlayerEvent>,
     state: Arc<Mutex<LocalState>>,
     notify: Notify,
+    speed: crate::timescale::SharedSpeed,
+    podcast_speed: crate::timescale::SharedSpeed,
+    reset_epoch: Arc<std::sync::atomic::AtomicU64>,
 ) {
     let mut play_request_id = None;
     while let Some(event) = events.recv().await {
@@ -626,9 +697,15 @@ async fn run_events(
         {
             continue;
         }
+        let track_changed = matches!(&event, PlayerEvent::TrackChanged { .. });
+        let wanted = crate::timescale::load_speed(&podcast_speed);
         let snapshot = {
             let mut current = state.lock().unwrap_or_else(|p| p.into_inner());
-            if apply_event(&mut current, event) {
+            if apply_event(&mut current, event, wanted) {
+                crate::timescale::store_speed(&speed, current.speed);
+                if track_changed {
+                    reset_epoch.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
                 Some(current.clone())
             } else {
                 None
@@ -649,7 +726,7 @@ fn set<T: PartialEq>(target: &mut T, value: T) -> bool {
     }
 }
 
-fn apply_event(state: &mut LocalState, event: PlayerEvent) -> bool {
+fn apply_event(state: &mut LocalState, event: PlayerEvent, podcast_speed: f32) -> bool {
     match event {
         PlayerEvent::Stopped { .. } => {
             let mut changed = set(&mut state.playback, Playback::Stopped);
@@ -697,7 +774,10 @@ fn apply_event(state: &mut LocalState, event: PlayerEvent) -> bool {
             true
         }
         PlayerEvent::TrackChanged { audio_item } => {
-            let mut changed = set(&mut state.track, Some(local_track(&audio_item)));
+            let track = local_track(&audio_item);
+            let speed = if track.is_episode { podcast_speed } else { 1.0 };
+            let mut changed = set(&mut state.track, Some(track));
+            changed |= set(&mut state.speed, speed);
             changed |= set(&mut state.error, None);
             changed
         }
@@ -906,6 +986,29 @@ mod tests {
     }
 
     #[test]
+    fn a_fast_episode_advances_its_clock_faster() {
+        assert_eq!(LocalState::default().speed, 1.0);
+        let base = LocalState {
+            playback: Playback::Playing,
+            position_ms: 10_000,
+            position_at: Some(Instant::now() - Duration::from_secs(2)),
+            track: Some(LocalTrack {
+                duration_ms: 600_000,
+                ..LocalTrack::default()
+            }),
+            ..LocalState::default()
+        };
+        let real = base.position_now();
+        let fast = LocalState {
+            speed: 2.0,
+            ..base.clone()
+        }
+        .position_now();
+        assert!((real as i64 - 12_000).abs() < 500, "{real} ms at 1x");
+        assert!((fast as i64 - 14_000).abs() < 500, "{fast} ms at 2x");
+    }
+
+    #[test]
     fn loading_keeps_a_playing_state_visible() {
         let mut state = LocalState {
             playback: Playback::Playing,
@@ -918,6 +1021,7 @@ mod tests {
                 track_id: uri(),
                 position_ms: 0,
             },
+            1.0,
         );
         assert_eq!(state.playback, Playback::Playing);
     }
@@ -936,6 +1040,8 @@ mod tests {
             buffer_ms: crate::sink::DEFAULT_BUFFER_MS,
             tap: AudioTap::new(),
             eq: crate::eq::shared(),
+            speed: crate::timescale::shared_speed(),
+            podcast_speed: crate::timescale::shared_speed(),
             device_name: "Fastpotify".into(),
             bitrate_kbps: 320,
             normalisation: false,

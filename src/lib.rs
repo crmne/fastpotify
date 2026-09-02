@@ -33,6 +33,7 @@ pub mod sink;
 pub mod skin;
 pub mod system_fonts;
 pub mod theme;
+pub mod timescale;
 #[cfg(target_os = "linux")]
 pub mod tray;
 #[cfg(not(target_os = "linux"))]

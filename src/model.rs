@@ -705,6 +705,7 @@ pub enum Action {
     /// The balance, -1 all left to 1 all right.
     SetBalance(f32),
     ToggleMono,
+    SetPodcastSpeed(f32),
     /// Roll the playlist window up to its title bar, or down again.
     ToggleWinampPlaylistShade,
     /// Roll the equalizer window up to its title bar, or down again.
