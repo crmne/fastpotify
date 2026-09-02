@@ -533,11 +533,7 @@ fn native_options(fullscreen: bool, mini: Option<MiniWindow>) -> eframe::NativeO
         .with_icon(icon);
     let viewport = match mini {
         Some(mini) => {
-            let level = if mini.on_top {
-                egui::WindowLevel::AlwaysOnTop
-            } else {
-                egui::WindowLevel::Normal
-            };
+            let level = app::on_top_window_level(mini.on_top);
             // See-through, for skins that are not rectangles; the skin
             // paints every pixel that is the window. MilkDrop runs in its own
             // process, so nothing else shares this window's surface.

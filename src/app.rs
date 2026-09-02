@@ -189,6 +189,11 @@ pub struct App {
     last_session_save: Instant,
     /// The saved zoom has been applied to the context once.
     zoom_applied: bool,
+    /// Frames left to re-send the Winamp window's always-on-top level after the
+    /// window opens. X11 window managers drop `_NET_WM_STATE_ABOVE` set before
+    /// the window is mapped, so the creation-time level does not stick; a level
+    /// pushed on the first frames after mapping does.
+    winamp_level_reassert: u8,
     pub devices: Vec<Device>,
     /// Receivers seen on the local network. Spotify lists a receiver only
     /// once it has an account, so these are the ones it cannot see yet.
@@ -473,6 +478,7 @@ impl App {
             session_dirty: false,
             last_session_save: Instant::now(),
             zoom_applied: false,
+            winamp_level_reassert: 0,
             devices: Vec::new(),
             receivers: Vec::new(),
             activating_receiver: None,
@@ -628,7 +634,12 @@ impl App {
         }
         if self.settings.winamp_window {
             // The mini player sizes itself; the big window's geometry
-            // waits here for its return.
+            // waits here for its return. Re-assert the on-top level over the
+            // first frames, once the window is mapped, because the level set
+            // at creation does not stick on X11.
+            if self.settings.winamp_on_top {
+                self.winamp_level_reassert = 3;
+            }
             return;
         }
         if let Some(size) = self.session_window_size.take() {
@@ -1514,8 +1525,26 @@ impl App {
         })));
     }
 
+    /// Pushes the Winamp window's always-on-top level to the live window.
+    fn push_winamp_level(&self, ctx: &egui::Context) {
+        if let Some(level) =
+            winamp_on_top_level(self.settings.winamp_window, self.settings.winamp_on_top)
+        {
+            ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(level));
+        }
+    }
+
     fn tick(&mut self, ctx: &egui::Context) {
         let now = Instant::now();
+        if self.winamp_level_reassert > 0 {
+            self.winamp_level_reassert -= 1;
+            self.push_winamp_level(ctx);
+            // The window can be idle right after opening, so drive the next
+            // frame to make sure the re-assert actually runs.
+            if self.winamp_level_reassert > 0 {
+                ctx.request_repaint();
+            }
+        }
         if !self.zoom_applied {
             self.zoom_applied = true;
             let zoom = self.settings.zoom.clamp(0.5, 2.5);
@@ -4982,6 +5011,9 @@ impl App {
             Action::ToggleWinampOnTop => {
                 self.settings.winamp_on_top = !self.settings.winamp_on_top;
                 self.settings_dirty = true;
+                // The window level is set at creation, so push the new level to
+                // the live window.
+                self.push_winamp_level(ctx);
             }
             Action::ToggleWinampPlaylist => {
                 self.settings.playlist_open = !self.settings.playlist_open;
@@ -5557,6 +5589,24 @@ pub fn percent_to_volume(percent: u8) -> u16 {
     ((u32::from(percent.min(100)) * u32::from(u16::MAX)) / 100) as u16
 }
 
+/// The window level for the Winamp window's always-on-top setting. Shared by
+/// window creation and the live window, so the mapping is owned in one place.
+pub fn on_top_window_level(on_top: bool) -> egui::WindowLevel {
+    if on_top {
+        egui::WindowLevel::AlwaysOnTop
+    } else {
+        egui::WindowLevel::Normal
+    }
+}
+
+/// The window level to push to the live window, or `None` when there is no
+/// Winamp window to change. The big window (where Settings lives) keeps its
+/// normal level, so toggling the setting there only takes effect once the
+/// Winamp window opens.
+fn winamp_on_top_level(winamp_window: bool, on_top: bool) -> Option<egui::WindowLevel> {
+    winamp_window.then_some(on_top_window_level(on_top))
+}
+
 fn page_related_needs_load(pages: &HashMap<String, ArtistPage>, id: &str) -> bool {
     pages.get(id).is_some_and(|page| page.related.needs_load())
 }
@@ -5713,6 +5763,51 @@ mod tests {
         assert_eq!(volume_to_percent(0), 0);
         assert_eq!(volume_to_percent(percent_to_volume(70)), 70);
         assert_eq!(percent_to_volume(200), u16::MAX);
+    }
+
+    /// Toggling always-on-top pushes the matching level to the live Winamp
+    /// window, so the change takes effect without recreating the window.
+    #[test]
+    fn the_winamp_window_follows_the_on_top_toggle_live() {
+        assert_eq!(
+            winamp_on_top_level(true, true),
+            Some(egui::WindowLevel::AlwaysOnTop)
+        );
+        assert_eq!(
+            winamp_on_top_level(true, false),
+            Some(egui::WindowLevel::Normal)
+        );
+    }
+
+    /// The setting lives in the big window's Settings page. Toggling it there
+    /// must never force the big window on top, so no level command is sent.
+    #[test]
+    fn the_big_window_never_follows_the_on_top_toggle() {
+        assert_eq!(winamp_on_top_level(false, true), None);
+        assert_eq!(winamp_on_top_level(false, false), None);
+    }
+
+    /// The level set at window creation does not stick on X11, so opening the
+    /// Winamp window with always-on-top saved must schedule a re-assert.
+    #[test]
+    fn opening_the_winamp_window_on_top_schedules_a_reassert() {
+        let ctx = egui::Context::default();
+        let mut app = headless_app();
+        app.settings.winamp_window = true;
+        app.settings.winamp_on_top = true;
+        app.attach(&ctx);
+        assert_eq!(app.winamp_level_reassert, 3);
+    }
+
+    /// Opening the Winamp window without always-on-top re-asserts nothing.
+    #[test]
+    fn opening_the_winamp_window_without_on_top_schedules_no_reassert() {
+        let ctx = egui::Context::default();
+        let mut app = headless_app();
+        app.settings.winamp_window = true;
+        app.settings.winamp_on_top = false;
+        app.attach(&ctx);
+        assert_eq!(app.winamp_level_reassert, 0);
     }
 
     /// The song the last session ended on is shown, paused, at the position
