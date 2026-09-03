@@ -123,7 +123,7 @@
               pname = "fastpotify";
               version = (pkgs.lib.importTOML ./Cargo.toml).package.version;
               src = self;
-              hash = "sha256-l2pWMz/X2RpWaAHMjOZrmQ8v1Ux+JECdh+/aQn/pzjM=";
+              hash = "sha256-rTG8cfy3tHeNL9VS558i5ugEMRhQqPSBaJBjtWAV6kQ=";
             };
 
             nativeBuildInputs =
@@ -153,6 +153,14 @@
             # projectm-sys expects CMake to install into lib/, while CMake
             # defaults to lib64/ on NixOS.
             env.CMAKE = "${cmakeWithLibdir}";
+
+            # Nix's Rust check hook deliberately points SSL_CERT_FILE at a
+            # missing path. The librespot proxy regression test constructs a
+            # TLS connector before asserting its CONNECT request, so give the
+            # test an explicit, sandboxed trust store.
+            preCheck = ''
+              export SSL_CERT_FILE="${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
+            '';
 
             # The GUI dlopens its Wayland, X11 and GL libraries at run time.
             postFixup = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''

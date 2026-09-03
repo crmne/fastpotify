@@ -710,6 +710,9 @@ pub enum Action {
     ToggleDevicesPopup,
     SettingsChanged,
     RestartEngine,
+    /// Rebuild the HTTP client with the proxy in settings. Local playback
+    /// restarts only when its HTTP proxy changed.
+    ApplyProxy,
     EnablePlayback,
     ShowWindow,
     HideWindow,

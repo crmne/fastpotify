@@ -16,6 +16,7 @@ Fastpotify follows each platform's conventions. On Linux:
 | Shared Web API sign-in | `~/.local/state/fastpotify/shared_web_api_token.json` | Yes, you sign in again |
 | Personal Web API sign-in | `~/.local/state/fastpotify/personal_web_api_token.json` | Yes, the personal app is disabled |
 | Playback credential | `~/.local/state/fastpotify/credentials/` | Yes, you approve playback again |
+| Proxy password | `~/.local/state/fastpotify/proxy_password` | Yes, you type it again |
 | Last session | `~/.local/state/fastpotify/session.json` | Yes |
 | Play history | `~/.local/state/fastpotify/history.json` | Yes |
 | Audio cache | `~/.cache/fastpotify/audio/` | Always |
@@ -26,9 +27,9 @@ Fastpotify follows each platform's conventions. On Linux:
 | Crash log | `~/.local/state/fastpotify/panic.log` | Always |
 
 Clearing caches never signs you out; credentials live in *state*, not
-*cache*. Web API token files are written with owner-only permissions.
-Signing out from Settings deletes both Web API grants and the separate
-playback credential.
+*cache*. Web API token files and the proxy password are written with
+owner-only permissions. Signing out from Settings deletes both Web API
+grants and the separate playback credential; the proxy password stays.
 
 Progress through a playlist is periodically cached as a contiguous prefix.
 When the playlist has not changed on Spotify, reopening it resumes from that
@@ -89,6 +90,10 @@ main fields are:
 | `keep_playing_in_background` | `true` | Close to tray |
 | `check_for_updates` | `true` | Ask GitHub once a day for a newer release |
 | `web_client_id` | none | Optional personal Spotify app id used alongside shared coverage |
+| `proxy_mode` | `system` | `off`, `system`, `http`, or `socks`. Older files without this field stay on `system` |
+| `proxy_host` | none | Host of a manual HTTP or SOCKS5 proxy. Ignored when the mode is `off` or `system` |
+| `proxy_port` | none | Port of a manual HTTP or SOCKS5 proxy |
+| `proxy_username` | none | Optional proxy login for Web requests; authenticated local playback proxying is not supported |
 
 ## Command line
 

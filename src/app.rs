@@ -136,6 +136,10 @@ struct Listening {
 pub struct App {
     pub dirs: AppDirs,
     pub settings: Settings,
+    /// Proxy policy actually handed to network workers. Manual form edits are
+    /// drafts until Apply (or Sign in), so unrelated downloads and engine
+    /// restarts must not observe them early.
+    applied_proxy: crate::settings::ProxyConfig,
     settings_dirty: bool,
     last_settings_save: Instant,
     pub backend: Backend,
@@ -412,9 +416,17 @@ impl App {
         if let Ok(mut shared) = eq.lock() {
             *shared = eq_settings(&settings);
         }
+        let applied_proxy = match settings.proxy_config() {
+            Ok(proxy) => proxy,
+            Err(error) => {
+                log::warn!("proxy setting ignored: {error}");
+                crate::settings::ProxyConfig::Off
+            }
+        };
         let engine_config = engine_config(
             &dirs,
             &settings,
+            applied_proxy.clone(),
             std::sync::Arc::clone(&tap),
             std::sync::Arc::clone(&eq),
         );
@@ -455,6 +467,7 @@ impl App {
         let mut app = Self {
             dirs,
             settings,
+            applied_proxy,
             settings_dirty: false,
             last_settings_save: Instant::now(),
             backend,
@@ -1857,6 +1870,8 @@ impl App {
             return;
         }
         self.settings.save(&self.dirs.settings_file());
+        self.settings
+            .save_proxy_secret(&self.dirs.proxy_secret_file());
     }
 
     fn apply_theme(&mut self, ctx: &egui::Context) {
@@ -5095,7 +5110,36 @@ impl App {
                 }
             }
             Action::Reload(page) => self.reload(page),
-            Action::SignIn => self.backend.send(Command::SignIn),
+            Action::SignIn => match self.settings.proxy_config() {
+                Ok(config) => {
+                    self.save_settings();
+                    self.applied_proxy = config.clone();
+                    self.backend.send(Command::RestartEngine(engine_config(
+                        &self.dirs,
+                        &self.settings,
+                        config,
+                        std::sync::Arc::clone(&self.winamp.tap),
+                        std::sync::Arc::clone(&self.winamp.eq),
+                    )));
+                    self.backend.send(Command::SignIn);
+                }
+                Err(error) => self.toast_error(error),
+            },
+            Action::ApplyProxy => match self.settings.proxy_config() {
+                Ok(config) => {
+                    self.save_settings();
+                    let restart_playback =
+                        self.applied_proxy.restarts_local_playback(&config) && self.local_ready;
+                    self.applied_proxy = config.clone();
+                    self.backend.send(Command::ApplyProxy(config));
+                    if restart_playback {
+                        self.toast("Applying proxy and restarting local playback");
+                    } else {
+                        self.toast("Settings Applied");
+                    }
+                }
+                Err(error) => self.toast_error(error),
+            },
             Action::CancelSignIn => {
                 self.backend.send(Command::CancelSignIn);
                 self.sign_in_url = None;
@@ -5153,6 +5197,7 @@ impl App {
                 let config = engine_config(
                     &self.dirs,
                     &self.settings,
+                    self.applied_proxy.clone(),
                     std::sync::Arc::clone(&self.winamp.tap),
                     std::sync::Arc::clone(&self.winamp.eq),
                 );
@@ -5349,7 +5394,11 @@ impl App {
                     if self.winamp.presets.count() == 0
                         && self.winamp.presets.downloading().is_none()
                     {
-                        self.winamp.presets.download_missing(folder, ctx.clone());
+                        self.winamp.presets.download_missing(
+                            folder,
+                            ctx.clone(),
+                            self.applied_proxy.clone(),
+                        );
                         self.toast("Downloading MilkDrop preset packs");
                     }
                 }
@@ -5376,9 +5425,12 @@ impl App {
             Action::OpenMilkdropFolder => self.open_folder(self.dirs.milkdrop_dir()),
             Action::DownloadMilkdropPack(index) => {
                 if let Some(pack) = crate::milkdrop::PACKS.get(index) {
-                    self.winamp
-                        .presets
-                        .download(pack, self.dirs.milkdrop_dir(), ctx.clone());
+                    self.winamp.presets.download(
+                        pack,
+                        self.dirs.milkdrop_dir(),
+                        ctx.clone(),
+                        self.applied_proxy.clone(),
+                    );
                     self.toast(format!("Downloading {} presets", pack.name));
                 }
             }
@@ -5799,6 +5851,7 @@ impl App {
 pub fn engine_config(
     dirs: &AppDirs,
     settings: &Settings,
+    proxy: crate::settings::ProxyConfig,
     tap: std::sync::Arc<crate::vis::AudioTap>,
     eq: crate::eq::SharedEq,
 ) -> EngineConfig {
@@ -5821,6 +5874,7 @@ pub fn engine_config(
         volume_dir: dirs.volume_dir(),
         audio_cache_dir: settings.audio_cache.then(|| dirs.audio_cache_dir()),
         audio_cache_limit: Some(settings.audio_cache_mb.max(64) * 1024 * 1024),
+        proxy,
     }
 }
 
@@ -7583,6 +7637,27 @@ mod tests {
             page.items.items[0].playable().map(PlayableItem::uri),
             Some("spotify:track:new")
         );
+    }
+
+    #[test]
+    fn manual_proxy_edits_remain_drafts_until_apply() {
+        let mut app = test_app("proxy-draft");
+        app.backend.set_offline(true);
+        let original = app.applied_proxy.clone();
+        app.settings.proxy_mode = crate::settings::ProxyMode::Http;
+        app.settings.proxy_host = "127.0.0.1".into();
+        app.settings.proxy_port = "8080".into();
+
+        app.actions.push(Action::RestartEngine);
+        app.apply_actions(&egui::Context::default());
+        assert_eq!(app.applied_proxy, original);
+
+        app.actions.push(Action::ApplyProxy);
+        app.apply_actions(&egui::Context::default());
+        assert!(matches!(
+            app.applied_proxy,
+            crate::settings::ProxyConfig::Http(_)
+        ));
     }
 
     /// Shuffle picks a random loaded track or Web API offset. Local librespot

@@ -1,0 +1,50 @@
+[package]
+name = "hyper-proxy2"
+version = "0.1.0"
+authors = ["Natsuki Ikeguchi <me@s6n.jp>"]
+description = "A proxy connector for Hyper-based applications"
+documentation = "https://docs.rs/hyper-proxy2"
+repository = "https://github.com/siketyan/hyper-proxy2"
+readme = "README.md"
+keywords = ["hyper", "proxy", "tokio", "ssl"]
+categories = ["web-programming::http-client", "asynchronous", "authentication"]
+license = "MIT"
+edition = "2021"
+rust-version = "1.70.0"
+
+[dependencies]
+tokio = { version = "1.35", features = ["io-std", "io-util"] }
+hyper = { version = "1.0", features = ["client"] }
+hyper-util = { version = "0.1.2", features = ["client", "client-legacy", "tokio"] }
+
+tower-service = "0.3.2"
+http = "1.0"
+futures-util = { version = "0.3.30", default-features = false }
+bytes = "1.5"
+pin-project-lite = "0.2.13"
+hyper-tls = { version = "0.6.0", optional = true }
+tokio-native-tls = { version = "0.3.1", optional = true }
+native-tls = { version = "0.2.11", optional = true }
+openssl = { version = "0.10.62", optional = true }
+tokio-openssl = { version = "0.6.4", optional = true }
+# rustls 0.23 / hyper-rustls 0.27: the crates.io 0.1.0 release pins rustls 0.22
+# and rustls-webpki 0.102, which carry RUSTSEC-2026-0049/0098/0099/0104.
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring"], optional = true }
+hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "ring"], optional = true }
+
+headers = "0.4"
+
+[dev-dependencies]
+tokio = { version = "1.35", features = ["full"] }
+hyper = { version = "1.0", features = ["client", "http1"] }
+hyper-util = { version = "0.1.2", features = ["client", "client-legacy", "http1", "tokio"] }
+http-body-util = "0.1.0"
+futures = "0.3.30"
+
+[features]
+openssl-tls = ["openssl", "tokio-openssl"]
+tls = ["tokio-native-tls", "hyper-tls", "native-tls"]
+rustls-base = ["tokio-rustls", "hyper-rustls"]
+rustls = ["rustls-base", "hyper-rustls/native-tokio"]
+rustls-webpki = ["rustls-base", "hyper-rustls/webpki-tokio"]
+default = ["tls"]

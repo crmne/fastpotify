@@ -1,10 +1,11 @@
 //! The sign-in screen.
 
-use egui::{Align, CornerRadius, Frame, Layout, Margin, Stroke, Vec2};
+use egui::{Align, CornerRadius, Frame, Layout, Margin, Rect, Stroke, Vec2, pos2};
 
 use crate::app::App;
 use crate::backend::AuthStatus;
 use crate::model::Action;
+use crate::settings::ProxyMode;
 use crate::theme;
 
 pub fn show(app: &mut App, ui: &mut egui::Ui, connecting: bool) {
@@ -18,8 +19,22 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, connecting: bool) {
             let top = super::blend(palette.window, palette.accent, 0.10);
             super::widgets::paint_vertical_gradient(ui, rect, top, palette.window);
             let card_width = 440.0;
-            let card_height = 380.0;
-            let card = egui::Rect::from_center_size(rect.center() - Vec2::new(0.0, 20.0), Vec2::new(card_width, card_height));
+            let proxy_id = egui::Id::new("login-proxy-open");
+            let proxy_open = ui
+                .ctx()
+                .data(|data| data.get_temp::<bool>(proxy_id))
+                .unwrap_or(false);
+            let card_height = if !proxy_open {
+                400.0
+            } else if app.settings.proxy_mode.is_manual() {
+                680.0
+            } else {
+                500.0
+            };
+            let card = Rect::from_center_size(
+                rect.center() - Vec2::new(0.0, 20.0),
+                Vec2::new(card_width, card_height),
+            );
             let mut card_ui = ui.new_child(egui::UiBuilder::new().max_rect(card).layout(Layout::top_down(Align::Center)));
             Frame::new()
                 .fill(palette.panel)
@@ -126,15 +141,101 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, connecting: bool) {
                             }
                         }
                     }
+                    let mut proxy_open = ui.data(|data| data.get_temp::<bool>(proxy_id)).unwrap_or(false);
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if theme::link(
+                                ui,
+                                "Proxy Settings",
+                                theme::regular(13.0),
+                                palette.secondary,
+                            )
+                            .clicked()
+                            {
+                                proxy_open = !proxy_open;
+                            }
+                        });
+                    });
+                    ui.add_space(4.0);
+                    if proxy_open {
+                        proxy_fields(ui, app);
+                    }
+                    ui.data_mut(|data| data.insert_temp(proxy_id, proxy_open));
                 });
             ui.painter().text(
-                egui::pos2(rect.center().x, rect.bottom() - 24.0),
+                pos2(rect.center().x, rect.bottom() - 24.0),
                 egui::Align2::CENTER_BOTTOM,
                 format!("Fastpotify {} • not affiliated with Spotify", env!("CARGO_PKG_VERSION")),
                 theme::regular(11.5),
                 palette.dim,
             );
         });
+}
+
+fn proxy_fields(ui: &mut egui::Ui, app: &mut App) {
+    let palette = app.palette;
+    let mut changed = false;
+    let mut apply = false;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 6.0;
+        let row_width: f32 = ProxyMode::ALL
+            .iter()
+            .map(|choice| {
+                let galley = ui.painter().layout_no_wrap(
+                    choice.label().to_string(),
+                    theme::medium(13.0),
+                    palette.text,
+                );
+                galley.size().x + 24.0
+            })
+            .sum::<f32>()
+            + 6.0 * (ProxyMode::ALL.len() - 1) as f32;
+        ui.add_space((ui.available_width() - row_width).max(0.0) / 2.0);
+        for choice in ProxyMode::ALL {
+            if theme::soft_button(
+                ui,
+                &palette,
+                None,
+                choice.label(),
+                app.settings.proxy_mode == choice,
+            )
+            .clicked()
+                && app.settings.proxy_mode != choice
+            {
+                app.settings.proxy_mode = choice;
+                changed = true;
+                apply = !choice.is_manual();
+            }
+        }
+    });
+    if app.settings.proxy_mode.is_manual() {
+        ui.add_space(10.0);
+        if super::widgets::proxy_manual_form(
+            ui,
+            &palette,
+            &mut app.settings.proxy_host,
+            &mut app.settings.proxy_port,
+            &mut app.settings.proxy_username,
+            &mut app.settings.proxy_password,
+        ) {
+            changed = true;
+        }
+        ui.add_space(6.0);
+        super::widgets::proxy_scope_note(ui, &palette, app.settings.proxy_mode);
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            if theme::pill_button(ui, &palette, "Apply settings", true).clicked() {
+                apply = true;
+            }
+        });
+    }
+    if changed {
+        app.mark_settings_dirty();
+    }
+    if apply {
+        app.actions.push(Action::ApplyProxy);
+    }
 }
 
 fn big_button(ui: &mut egui::Ui, app: &App, label: &str) -> bool {

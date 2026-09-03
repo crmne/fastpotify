@@ -321,6 +321,7 @@ fn main() -> eframe::Result<()> {
     }
     log_panics(dirs.panic_log());
     let mut settings = settings::Settings::load(&dirs.settings_file());
+    settings.load_proxy_secret(&dirs.proxy_secret_file());
     if let Some(name) = cli.device_name {
         settings.device_name = name;
     }

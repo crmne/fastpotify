@@ -90,6 +90,11 @@ impl AppDirs {
         self.state.join("credentials")
     }
 
+    /// Optional proxy password, owner-only, never written to settings.json.
+    pub fn proxy_secret_file(&self) -> PathBuf {
+        self.state.join("proxy_password")
+    }
+
     pub fn volume_dir(&self) -> PathBuf {
         self.state.join("volume")
     }

@@ -135,7 +135,7 @@ struct Session {
 }
 
 impl Session {
-    fn new(http: reqwest::Client, activity: Arc<NetActivity>, profile: ApiProfile) -> Self {
+    fn new(http: crate::http::Http, activity: Arc<NetActivity>, profile: ApiProfile) -> Self {
         Self {
             state: RwLock::new(SessionState::Unavailable),
             client: Arc::new(ApiClient::new(
@@ -167,7 +167,8 @@ pub struct ApiGateway {
 }
 
 impl ApiGateway {
-    pub fn new(http: reqwest::Client, activity: Arc<NetActivity>) -> Self {
+    pub fn new(http: impl Into<crate::http::Http>, activity: Arc<NetActivity>) -> Self {
+        let http = http.into();
         Self {
             shared: Session::new(http.clone(), activity.clone(), ApiProfile::SHARED),
             personal: Session::new(http, activity, ApiProfile::PERSONAL),
