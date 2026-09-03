@@ -17,8 +17,23 @@ use std::sync::{Arc, LazyLock};
 
 use thiserror::Error;
 
+use crate::theme::Palette;
+
 pub use config::{Mask, PlaylistStyle, Regions, Rgb, VisColors};
 pub use sprites::{Sheet, Sprite};
+
+const BUILTIN_WINDOW: Rgb = [0x0f, 0x11, 0x14];
+const BUILTIN_PANEL: Rgb = [0x15, 0x18, 0x1c];
+const BUILTIN_SURFACE: Rgb = [0x1d, 0x21, 0x27];
+const BUILTIN_SURFACE_HOVER: Rgb = [0x26, 0x2b, 0x33];
+const BUILTIN_SURFACE_ACTIVE: Rgb = [0x2f, 0x35, 0x3f];
+const BUILTIN_OUTLINE: Rgb = [0x2a, 0x30, 0x38];
+const BUILTIN_TEXT: Rgb = [0xf2, 0xf4, 0xf6];
+const BUILTIN_SECONDARY: Rgb = [0xa9, 0xb1, 0xbc];
+const BUILTIN_DIM: Rgb = [0x6e, 0x77, 0x84];
+const BUILTIN_ACCENT: Rgb = [0x1e, 0xd7, 0x60];
+const BUILTIN_ON_ACCENT: Rgb = [0x0a, 0x14, 0x0e];
+const BUILTIN_ACCENT_FADED: Rgb = [0x14, 0x4a, 0x2a];
 
 #[derive(Debug, Error)]
 pub enum SkinError {
@@ -200,6 +215,94 @@ impl Skin {
         BUILTIN.clone()
     }
 
+    /// The built-in skin recoloured to the active application palette.
+    /// Classic skins supplied by the listener remain exactly as authored.
+    pub fn builtin_for(palette: &Palette) -> Arc<Skin> {
+        if *palette == Palette::dark() {
+            return Self::builtin();
+        }
+
+        let target_window = rgb(palette.window);
+        let target_panel = rgb(palette.panel);
+        let target_surface = rgb(palette.surface);
+        let target_surface_hover = rgb(palette.surface_hover);
+        let target_surface_active = rgb(palette.surface_active);
+        let target_outline = rgb(palette.outline);
+        let target_text = rgb(palette.text);
+        let target_secondary = rgb(palette.secondary);
+        let target_dim = rgb(palette.dim);
+        let target_accent = rgb(palette.accent);
+        let target_on_accent = rgb(palette.on_accent);
+        let target_accent_faded = mix_rgb(target_window, target_accent, 0.3);
+        let mut replacements: HashMap<Rgb, Rgb> = [
+            (BUILTIN_WINDOW, target_window),
+            (BUILTIN_PANEL, target_panel),
+            (BUILTIN_SURFACE, target_surface),
+            (BUILTIN_SURFACE_HOVER, target_surface_hover),
+            (BUILTIN_SURFACE_ACTIVE, target_surface_active),
+            (BUILTIN_OUTLINE, target_outline),
+            (BUILTIN_TEXT, target_text),
+            (BUILTIN_SECONDARY, target_secondary),
+            (BUILTIN_DIM, target_dim),
+            (BUILTIN_ACCENT, target_accent),
+            (BUILTIN_ON_ACCENT, target_on_accent),
+            (BUILTIN_ACCENT_FADED, target_accent_faded),
+        ]
+        .into_iter()
+        .collect();
+        // The equalizer curve carries a nineteen-step accent gradient in its
+        // bitmap, so include every generated shade in the substitution map.
+        for step in 0..=18 {
+            let amount = step as f32 / 18.0;
+            replacements.insert(
+                mix_rgb(BUILTIN_ACCENT, BUILTIN_ACCENT_FADED, amount),
+                mix_rgb(target_accent, target_accent_faded, amount),
+            );
+        }
+
+        let sheets = BUILTIN
+            .sheets
+            .iter()
+            .map(|(sheet, bitmap)| {
+                let mut bitmap = bitmap.clone();
+                for pixel in bitmap.rgba.as_chunks_mut::<4>().0 {
+                    let color = [pixel[0], pixel[1], pixel[2]];
+                    if let Some(replacement) = replacements.get(&color) {
+                        pixel[..3].copy_from_slice(replacement);
+                    }
+                }
+                (*sheet, bitmap)
+            })
+            .collect();
+        let mut playlist = BUILTIN.playlist.clone();
+        playlist.normal = target_secondary;
+        playlist.current = target_accent;
+        playlist.normal_background = target_window;
+        playlist.selected_background = target_surface_active;
+        let mut vis_colors = BUILTIN.vis_colors;
+        vis_colors[0] = target_window;
+        vis_colors[1] = target_outline;
+        for (step, color) in vis_colors[2..18].iter_mut().enumerate() {
+            *color = mix_rgb(target_accent, target_accent_faded, step as f32 / 15.0);
+        }
+        vis_colors[18..23].copy_from_slice(&[
+            target_text,
+            target_secondary,
+            target_secondary,
+            target_dim,
+            target_dim,
+        ]);
+        vis_colors[23] = target_text;
+
+        Arc::new(Self {
+            name: BUILTIN.name.clone(),
+            sheets,
+            playlist,
+            vis_colors,
+            regions: BUILTIN.regions.clone(),
+        })
+    }
+
     /// Whether the skin brought this sheet itself.
     pub fn has(&self, sheet: Sheet) -> bool {
         self.sheets.contains_key(&sheet)
@@ -240,6 +343,17 @@ impl Skin {
         let clipped = sprite.clipped_to(bitmap.width, bitmap.height)?;
         Some((bitmap, clipped))
     }
+}
+
+fn rgb(color: egui::Color32) -> Rgb {
+    [color.r(), color.g(), color.b()]
+}
+
+fn mix_rgb(from: Rgb, to: Rgb, amount: f32) -> Rgb {
+    std::array::from_fn(|channel| {
+        (f32::from(from[channel]) + (f32::from(to[channel]) - f32::from(from[channel])) * amount)
+            .round() as u8
+    })
 }
 
 /// Whether a file inside a skin is one this reader looks at, so cursors,
@@ -325,6 +439,70 @@ mod tests {
         let a = text.crop(font::glyph('A')).unwrap();
         let blank = text.crop(font::glyph(' ')).unwrap();
         assert_ne!(a, blank);
+    }
+
+    #[test]
+    fn the_built_in_skin_follows_the_application_palette() {
+        let mut source_colors: std::collections::HashSet<Rgb> = [
+            BUILTIN_WINDOW,
+            BUILTIN_PANEL,
+            BUILTIN_SURFACE,
+            BUILTIN_SURFACE_HOVER,
+            BUILTIN_SURFACE_ACTIVE,
+            BUILTIN_OUTLINE,
+            BUILTIN_TEXT,
+            BUILTIN_SECONDARY,
+            BUILTIN_DIM,
+            BUILTIN_ACCENT,
+            BUILTIN_ON_ACCENT,
+            BUILTIN_ACCENT_FADED,
+        ]
+        .into_iter()
+        .collect();
+        for step in 0..=18 {
+            source_colors.insert(mix_rgb(
+                BUILTIN_ACCENT,
+                BUILTIN_ACCENT_FADED,
+                step as f32 / 18.0,
+            ));
+        }
+        for sheet in Sheet::ALL {
+            for pixel in Skin::builtin().sheet(sheet).rgba.as_chunks::<4>().0 {
+                assert!(
+                    source_colors.contains(&[pixel[0], pixel[1], pixel[2]]),
+                    "{} has an unmapped colour {pixel:?}",
+                    sheet.file_stem()
+                );
+            }
+        }
+
+        let palette = Palette::light();
+        let skin = Skin::builtin_for(&palette);
+        let color = |color: egui::Color32| [color.r(), color.g(), color.b()];
+
+        assert_eq!(
+            skin.sheet(Sheet::Main).pixel(1, 1),
+            Some([palette.panel.r(), palette.panel.g(), palette.panel.b(), 255])
+        );
+        assert_eq!(skin.playlist.normal, color(palette.secondary));
+        assert_eq!(skin.playlist.current, color(palette.accent));
+        assert_eq!(skin.playlist.normal_background, color(palette.window));
+        assert_eq!(
+            skin.playlist.selected_background,
+            color(palette.surface_active)
+        );
+        assert_eq!(skin.vis_colors[0], color(palette.window));
+        assert_eq!(skin.vis_colors[2], color(palette.accent));
+        assert_eq!(skin.vis_colors[23], color(palette.text));
+        for sheet in Sheet::ALL {
+            assert_eq!(
+                (skin.sheet(sheet).width, skin.sheet(sheet).height),
+                (
+                    Skin::builtin().sheet(sheet).width,
+                    Skin::builtin().sheet(sheet).height
+                )
+            );
+        }
     }
 
     #[test]

@@ -26,6 +26,11 @@ pub mod media_controls;
 pub mod media_controls;
 pub mod milkdrop;
 pub mod model;
+#[cfg(target_os = "linux")]
+pub mod omarchy;
+#[cfg(not(target_os = "linux"))]
+#[path = "omarchy_stub.rs"]
+pub mod omarchy;
 pub mod opener;
 pub mod paths;
 pub mod player;

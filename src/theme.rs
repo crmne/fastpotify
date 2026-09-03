@@ -1,10 +1,24 @@
 //! Shared palette, typography, icons, and base widgets.
 //!
-//! Inter provides real font weights, and Lucide provides a consistent icon set.
-//! All colors use [`Palette`] so light, dark, and album-art-tinted themes stay
-//! consistent.
+//! Bundled Inter provides the default font and fallback, while Omarchy can
+//! supply the active interface font on Linux. Lucide provides a consistent
+//! icon set. All colors use [`Palette`] so light, dark, and album-art-tinted
+//! themes stay consistent.
 
 use egui::{Color32, CornerRadius, Response, Sense, Stroke, Vec2};
+
+pub(crate) struct FontFace {
+    pub(crate) bytes: std::sync::Arc<[u8]>,
+    pub(crate) index: u32,
+}
+
+pub(crate) struct InterfaceFont {
+    pub(crate) family: String,
+    pub(crate) regular: FontFace,
+    pub(crate) medium: FontFace,
+    pub(crate) semibold: FontFace,
+    pub(crate) bold: FontFace,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Palette {
@@ -141,9 +155,17 @@ pub fn bold(size: f32) -> egui::FontId {
 
 /// Install fonts, icons, and the base style once.
 pub fn install(ctx: &egui::Context) {
-    install_fonts(ctx);
+    install_with_font(ctx, None);
+}
+
+pub(crate) fn install_with_font(ctx: &egui::Context, font: Option<&InterfaceFont>) {
+    install_fonts(ctx, font);
     register_icons(ctx);
     egui_extras::install_image_loaders(ctx);
+}
+
+pub(crate) fn apply_interface_font(ctx: &egui::Context, font: Option<&InterfaceFont>) {
+    install_fonts(ctx, font);
 }
 
 /// Applies the palette to egui's own widgets so dialogs, menus, and text
@@ -248,7 +270,7 @@ pub fn apply(ctx: &egui::Context, palette: &Palette) {
     ctx.set_global_style(style);
 }
 
-fn install_fonts(ctx: &egui::Context) {
+fn install_fonts(ctx: &egui::Context, interface_font: Option<&InterfaceFont>) {
     use egui::epaint::text::VariationCoords;
     use egui::{FontData, FontDefinitions, FontFamily};
     use std::sync::Arc;
@@ -271,6 +293,38 @@ fn install_fonts(ctx: &egui::Context) {
         .font_data
         .insert(INTER_BOLD.to_owned(), weighted(700.0));
 
+    let omarchy_face = |face: &FontFace, weight: f32| {
+        let mut data = FontData::from_owned(face.bytes.to_vec());
+        data.index = face.index;
+        data.tweak.coords = VariationCoords::new([(b"wght", weight)]);
+        Arc::new(data)
+    };
+    let (regular, medium, semibold, bold) = if let Some(font) = interface_font {
+        fonts.font_data.insert(
+            "omarchy-regular".to_owned(),
+            omarchy_face(&font.regular, 400.0),
+        );
+        fonts.font_data.insert(
+            "omarchy-medium".to_owned(),
+            omarchy_face(&font.medium, 500.0),
+        );
+        fonts.font_data.insert(
+            "omarchy-semibold".to_owned(),
+            omarchy_face(&font.semibold, 600.0),
+        );
+        fonts
+            .font_data
+            .insert("omarchy-bold".to_owned(), omarchy_face(&font.bold, 700.0));
+        (
+            "omarchy-regular",
+            "omarchy-medium",
+            "omarchy-semibold",
+            "omarchy-bold",
+        )
+    } else {
+        ("inter", INTER_MEDIUM, INTER_SEMIBOLD, INTER_BOLD)
+    };
+
     let noto_emoji = include_bytes!("../assets/fonts/NotoEmoji.ttf");
     fonts.font_data.insert(
         "noto_emoji".to_owned(),
@@ -281,27 +335,50 @@ fn install_fonts(ctx: &egui::Context) {
         .families
         .entry(FontFamily::Proportional)
         .or_default()
-        .insert(0, "inter".to_owned());
-    // Right behind the text face, ahead of the emoji subset and the icon
-    // font egui bundles, so every emoji comes from the one full face and
-    // wears the same style; egui's pair still serves what Noto lacks.
+        .insert(0, regular.to_owned());
+    if interface_font.is_some() {
+        fonts
+            .families
+            .entry(FontFamily::Proportional)
+            .or_default()
+            .insert(1, "inter".to_owned());
+        fonts
+            .families
+            .entry(FontFamily::Monospace)
+            .or_default()
+            .insert(0, regular.to_owned());
+    }
+    // Behind the interface and bundled fallback faces, ahead of the icon font
+    // egui bundles, so every emoji comes from the one full face and wears the
+    // same style; egui's pair still serves what Noto lacks.
     fonts
         .families
         .entry(FontFamily::Proportional)
         .or_default()
-        .insert(1, "noto_emoji".to_owned());
+        .insert(
+            if interface_font.is_some() { 2 } else { 1 },
+            "noto_emoji".to_owned(),
+        );
     fonts
         .families
         .entry(FontFamily::Monospace)
         .or_default()
         .insert(1, "noto_emoji".to_owned());
+    let fallback_offset = if interface_font.is_some() { 2 } else { 1 };
     let fallbacks: Vec<String> = fonts.families[&FontFamily::Proportional]
         .iter()
-        .skip(1)
+        .skip(fallback_offset)
         .cloned()
         .collect();
-    for name in [INTER_MEDIUM, INTER_SEMIBOLD, INTER_BOLD] {
-        let mut family = vec![name.to_owned()];
+    for (name, face, inter_fallback) in [
+        (INTER_MEDIUM, medium, INTER_MEDIUM),
+        (INTER_SEMIBOLD, semibold, INTER_SEMIBOLD),
+        (INTER_BOLD, bold, INTER_BOLD),
+    ] {
+        let mut family = vec![face.to_owned()];
+        if interface_font.is_some() {
+            family.push(inter_fallback.to_owned());
+        }
         family.extend(fallbacks.iter().cloned());
         fonts.families.insert(FontFamily::Name(name.into()), family);
     }

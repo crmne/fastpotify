@@ -61,12 +61,12 @@ main fields are:
 | `gapless` | `true` | Gapless playback |
 | `audio_backend` | platform | `pulseaudio` or `rodio` on Linux |
 | `audio_cache_mb` | `1024` | On-disk audio cache budget |
-| `theme` | `dark` | `dark`, `light`, or `system` |
+| `theme` | `dark` | `dark`, `light`, `system`, or `omarchy` |
 | `accent_from_art` | `true` | Tint pages with album art |
 | `sidebar_compact` | `false` | Names only in the library sidebar, no covers |
 | `tracklist_compact` | `false` | One-line track rows without covers |
 | `winamp_window` | `false` | The window is the Winamp mini player |
-| `skin` | none | File or folder name in the skins folder; blank uses the built-in skin |
+| `skin` | none | File or folder name in the skins folder; blank uses the palette-aware built-in skin |
 | `skin_scale` | by display | Screen pixels per skin pixel, 1 to 4 |
 | `winamp_on_top` | `false` | Keep the mini player above other windows |
 | `vis` | `bars` | The mini player's visualiser: `bars`, `scope`, or `off` |
@@ -90,6 +90,17 @@ main fields are:
 | `check_for_updates` | `true` | Ask GitHub once a day for a newer release |
 | `web_client_id` | none | Optional personal Spotify app id used alongside shared coverage |
 | `personal_app_nudge_at` | none | Last slow-Spotify personal-app reminder, so it appears at most once a day |
+
+On Linux, the **Omarchy** choice appears when Fastpotify finds Omarchy's
+resolved palette at `~/.local/state/omarchy/current/theme/colors.toml`.
+Fastpotify only reads this file and follows changes to it while the window is
+open. Older themes whose generated palette does not declare light or dark mode
+are classified from their background color. Fastpotify also reads the font
+selected in Omarchy's user Fontconfig file, resolves its closest installed
+medium, semibold, and bold faces, and follows
+`omarchy font set` changes. Bundled Inter remains the fallback if that font
+cannot be resolved. Fastpotify does not install a theme hook or change
+Omarchy's configuration.
 
 ## Command line
 

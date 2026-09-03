@@ -16,7 +16,9 @@ the shortcut again, to return to the main window.
 ## Skins and window size
 
 Drop a `.wsz` file on either window to install and use it. Settings lists the
-installed skins and can open the skins folder.
+installed skins and can open the skins folder. The built-in Fastpotify skin
+follows the selected app palette, including Omarchy theme changes while the
+mini player is open. Installed classic skins retain their original artwork.
 
 The mini player uses whole-number scaling to keep pixels sharp. Right-click
 the title bar, or click **O**, to choose 1x to 4x and set always-on-top. **D**
