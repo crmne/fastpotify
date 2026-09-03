@@ -643,21 +643,23 @@ pub fn track_row(ui: &mut Ui, app: &mut App, row: TrackRow<'_>) -> Option<RowPic
     }
     // Start a sidebar drag only after egui's drag threshold.
     if row.item.is_track() && response.drag_started_by(egui::PointerButton::Primary) {
+        let items = dragged_items(row.item, row.picked, row.picked_songs);
         // Keep the source index for moves within an editable playlist.
-        let from = match row.context {
-            RowContext::Context {
-                editable_playlist: Some((id, _)),
-                ..
-            } => Some((id.clone(), row.index as u32)),
-            _ => None,
-        };
+        let from = (items.len() == 1)
+            .then(|| match row.context {
+                RowContext::Context {
+                    editable_playlist: Some((id, _)),
+                    ..
+                } => Some((id.clone(), row.index as u32)),
+                _ => None,
+            })
+            .flatten();
         egui::DragAndDrop::set_payload(
             ui.ctx(),
             DragTrack {
-                uri: row.item.uri().to_string(),
                 title: row.item.name().to_string(),
                 image: row.item.image(64).map(str::to_string),
-                item: row.item.clone(),
+                items,
                 from,
             },
         );
@@ -1175,6 +1177,42 @@ pub fn track_row(ui: &mut Ui, app: &mut App, row: TrackRow<'_>) -> Option<RowPic
             }
         });
     pick
+}
+
+fn dragged_items(
+    item: &PlayableItem,
+    picked: bool,
+    picked_songs: &[PlayableItem],
+) -> Vec<PlayableItem> {
+    if picked && !picked_songs.is_empty() {
+        picked_songs.to_vec()
+    } else {
+        vec![item.clone()]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn song(uri: &str) -> PlayableItem {
+        PlayableItem::Track(Track {
+            uri: uri.to_string(),
+            ..Default::default()
+        })
+    }
+
+    #[test]
+    fn dragging_a_picked_row_carries_the_whole_selection() {
+        let first = song("spotify:track:first");
+        let second = song("spotify:track:second");
+        let dragged = dragged_items(&second, true, &[first.clone(), second.clone()]);
+        assert_eq!(
+            dragged.iter().map(PlayableItem::uri).collect::<Vec<_>>(),
+            [first.uri(), second.uri()],
+            "the sidebar receives every selected row in table order"
+        );
+    }
 }
 
 /// The chip that rides the pointer while a song is being dragged.

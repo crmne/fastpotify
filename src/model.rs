@@ -542,12 +542,12 @@ pub enum RowContext {
 /// Track data held during a drag.
 #[derive(Clone, Debug)]
 pub struct DragTrack {
-    pub uri: String,
     pub title: String,
     /// Cover art for the drag preview.
     pub image: Option<String>,
     /// Full row data, so dropping can update an open playlist immediately.
-    pub item: PlayableItem,
+    /// A picked table row carries the whole selection in table order.
+    pub items: Vec<PlayableItem>,
     /// Source playlist ID and row index for moves within an editable playlist.
     pub from: Option<(String, u32)>,
 }

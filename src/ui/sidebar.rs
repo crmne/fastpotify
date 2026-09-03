@@ -970,16 +970,21 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
                     && let Some(track) = response.dnd_release_payload::<DragTrack>()
                 {
                     if entry.liked {
-                        // Dropping on Liked Songs saves; a song already
-                        // saved is left alone.
-                        if app.is_saved(&track.uri) != Some(true) {
-                            app.actions.push(Action::ToggleSaved(track.uri.clone()));
-                        }
+                        // Dropping on Liked Songs saves every dragged song;
+                        // songs already saved stay saved.
+                        app.actions.push(Action::SetSavedMany {
+                            uris: track
+                                .items
+                                .iter()
+                                .map(|item| item.uri().to_string())
+                                .collect(),
+                            saved: true,
+                        });
                     } else if let Page::Playlist(id) = &entry.page {
                         app.actions.push(Action::AddToPlaylist {
                             playlist_id: id.clone(),
                             playlist_name: entry.name.clone(),
-                            items: vec![track.item.clone()],
+                            items: track.items.clone(),
                         });
                     }
                 }
