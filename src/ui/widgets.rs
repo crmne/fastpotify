@@ -277,6 +277,88 @@ pub fn menu_item_enabled(
     clicked
 }
 
+/// One entry in a popup menu that opens a child submenu.
+pub fn menu_submenu(
+    ui: &mut Ui,
+    palette: &Palette,
+    icon: Option<Icon>,
+    label: &str,
+    add_contents: impl FnOnce(&mut Ui),
+) {
+    let width = ui.available_width();
+    let (rect, response) = ui.allocate_exact_size(vec2(width, 28.0), Sense::click());
+    let submenu_id = egui::menu::SubMenu::id_from_widget_id(response.id);
+    let is_open =
+        egui::menu::MenuState::from_ui(ui, |state, _| state.open_item == Some(submenu_id));
+
+    if ui.is_rect_visible(rect) {
+        if response.hovered() || is_open {
+            ui.painter()
+                .rect_filled(rect, CornerRadius::same(6), palette.surface_hover);
+        }
+        let color = palette.text;
+        let mut x = rect.left() + 10.0;
+        if let Some(icon) = icon {
+            let icon_rect =
+                Rect::from_center_size(pos2(x + 8.0, rect.center().y), Vec2::splat(16.0));
+            icon.image(palette.secondary, 16.0).paint_at(ui, icon_rect);
+            x += 26.0;
+        }
+
+        let arrow_galley = crate::bidi::layout(
+            ui.painter(),
+            egui::menu::SubMenuButton::RIGHT_ARROW,
+            theme::regular(11.0),
+            palette.secondary,
+            16.0,
+            1,
+            None,
+        );
+        let arrow_width = arrow_galley.size().x;
+        let arrow_rect = Rect::from_min_max(
+            pos2(
+                rect.right() - 10.0 - arrow_width,
+                rect.center().y - arrow_galley.size().y / 2.0,
+            ),
+            pos2(
+                rect.right() - 10.0,
+                rect.center().y + arrow_galley.size().y / 2.0,
+            ),
+        );
+        ui.painter().galley(
+            crate::bidi::galley_pos(arrow_rect, &arrow_galley),
+            arrow_galley,
+            palette.secondary,
+        );
+
+        let max_text_width = (rect.right() - 10.0 - arrow_width - 6.0 - x).max(0.0);
+        let galley = crate::bidi::layout(
+            ui.painter(),
+            label,
+            theme::regular(13.5),
+            color,
+            max_text_width,
+            1,
+            Some(crate::bidi::ELLIPSIS),
+        );
+        let text_rect = Rect::from_min_max(
+            pos2(x, rect.center().y - galley.size().y / 2.0),
+            pos2(
+                rect.right() - 10.0 - arrow_width - 6.0,
+                rect.center().y + galley.size().y / 2.0,
+            ),
+        );
+        ui.painter()
+            .galley(crate::bidi::galley_pos(text_rect, &galley), galley, color);
+    }
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)
+    });
+    theme::focus_ring(ui, &response);
+    let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+    egui::menu::SubMenu::new().show(ui, &response, add_contents);
+}
+
 pub fn menu_separator(ui: &mut Ui, palette: &Palette) {
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 9.0), Sense::hover());
     ui.painter().hline(
@@ -343,33 +425,39 @@ pub fn picked_menu(ui: &mut Ui, app: &mut App, songs: &[PlayableItem]) {
         });
     }
     let playlists = app.editable_playlists();
-    ui.menu_button("Add to playlist", |ui| {
-        ui.set_min_width(220.0);
-        ui.set_max_width(300.0);
-        if menu_item(ui, &palette, Some(Icon::Plus), "New playlist") {
-            app.actions.push(Action::ShowDialog(Dialog::CreatePlaylist {
-                name: String::new(),
-                public: false,
-                add_uris: uris.clone(),
-            }));
-        }
-        if !playlists.is_empty() {
-            menu_separator(ui, &palette);
-        }
-        egui::ScrollArea::vertical()
-            .max_height(320.0)
-            .show(ui, |ui| {
-                for (id, name) in &playlists {
-                    if menu_item(ui, &palette, Some(Icon::ListMusic), name) {
-                        app.actions.push(Action::AddToPlaylist {
-                            playlist_id: id.clone(),
-                            playlist_name: name.clone(),
-                            items: songs.to_vec(),
-                        });
+    menu_submenu(
+        ui,
+        &palette,
+        Some(Icon::ListPlus),
+        "Add to playlist",
+        |ui| {
+            ui.set_min_width(220.0);
+            ui.set_max_width(300.0);
+            if menu_item(ui, &palette, Some(Icon::Plus), "New playlist") {
+                app.actions.push(Action::ShowDialog(Dialog::CreatePlaylist {
+                    name: String::new(),
+                    public: false,
+                    add_uris: uris.clone(),
+                }));
+            }
+            if !playlists.is_empty() {
+                menu_separator(ui, &palette);
+            }
+            egui::ScrollArea::vertical()
+                .max_height(320.0)
+                .show(ui, |ui| {
+                    for (id, name) in &playlists {
+                        if menu_item(ui, &palette, Some(Icon::ListMusic), name) {
+                            app.actions.push(Action::AddToPlaylist {
+                                playlist_id: id.clone(),
+                                playlist_name: name.clone(),
+                                items: songs.to_vec(),
+                            });
+                        }
                     }
-                }
-            });
-    });
+                });
+        },
+    );
 }
 
 pub fn item_menu(
@@ -401,33 +489,39 @@ pub fn item_menu(
             app.actions.push(Action::ToggleSaved(uri.clone()));
         }
         let playlists = app.editable_playlists();
-        ui.menu_button("Add to playlist", |ui| {
-            ui.set_min_width(220.0);
-            ui.set_max_width(300.0);
-            if menu_item(ui, &palette, Some(Icon::Plus), "New playlist") {
-                app.actions.push(Action::ShowDialog(Dialog::CreatePlaylist {
-                    name: String::new(),
-                    public: false,
-                    add_uris: vec![uri.clone()],
-                }));
-            }
-            if !playlists.is_empty() {
-                menu_separator(ui, &palette);
-            }
-            egui::ScrollArea::vertical()
-                .max_height(320.0)
-                .show(ui, |ui| {
-                    for (id, name) in &playlists {
-                        if menu_item(ui, &palette, Some(Icon::ListMusic), name) {
-                            app.actions.push(Action::AddToPlaylist {
-                                playlist_id: id.clone(),
-                                playlist_name: name.clone(),
-                                items: vec![item.clone()],
-                            });
+        menu_submenu(
+            ui,
+            &palette,
+            Some(Icon::ListPlus),
+            "Add to playlist",
+            |ui| {
+                ui.set_min_width(220.0);
+                ui.set_max_width(300.0);
+                if menu_item(ui, &palette, Some(Icon::Plus), "New playlist") {
+                    app.actions.push(Action::ShowDialog(Dialog::CreatePlaylist {
+                        name: String::new(),
+                        public: false,
+                        add_uris: vec![uri.clone()],
+                    }));
+                }
+                if !playlists.is_empty() {
+                    menu_separator(ui, &palette);
+                }
+                egui::ScrollArea::vertical()
+                    .max_height(320.0)
+                    .show(ui, |ui| {
+                        for (id, name) in &playlists {
+                            if menu_item(ui, &palette, Some(Icon::ListMusic), name) {
+                                app.actions.push(Action::AddToPlaylist {
+                                    playlist_id: id.clone(),
+                                    playlist_name: name.clone(),
+                                    items: vec![item.clone()],
+                                });
+                            }
                         }
-                    }
-                });
-        });
+                    });
+            },
+        );
     } else if menu_item(ui, &palette, Some(Icon::Bookmark), "Save episode") {
         app.actions.push(Action::ToggleSaved(uri.clone()));
     }
@@ -477,7 +571,7 @@ pub fn item_menu(
                     )));
                 }
             } else if artists.len() > 1 {
-                ui.menu_button("Go to artist", |ui| {
+                menu_submenu(ui, &palette, Some(Icon::User), "Go to artist", |ui| {
                     ui.set_min_width(200.0);
                     for artist in &artists {
                         if menu_item(ui, &palette, Some(Icon::User), &artist.name) {
@@ -2419,5 +2513,128 @@ mod tests {
         );
         assert!(!painted.is_empty());
         assert_eq!(painted[0], 0);
+    }
+
+    #[test]
+    fn menu_submenu_registers_focus_and_opens_from_keyboard() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let palette = Palette::dark();
+        let mut child_rendered = false;
+        let mut target_id = None;
+
+        // Frame 1: secondary click to open context menu
+        let input1 = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 400.0))),
+            events: vec![egui::Event::PointerButton {
+                pos: pos2(50.0, 50.0),
+                button: egui::PointerButton::Secondary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        };
+        let mut output1 = ctx.run_ui(input1, |ui| {
+            let res = ui.allocate_response(vec2(100.0, 100.0), Sense::click());
+            egui::Popup::menu(&res).open(true).show(|ui| {
+                let prev_id = ui.next_auto_id();
+                target_id = Some(prev_id);
+                menu_submenu(ui, &palette, None, "Submenu", |ui| {
+                    child_rendered = true;
+                    ui.label("Child content");
+                });
+            });
+        });
+        output1.textures_delta.clear();
+
+        let target_id = target_id.expect("context menu must be opened and render submenu button");
+        assert!(!child_rendered, "submenu child must be closed initially");
+
+        // Request keyboard focus onto the submenu button
+        ctx.memory_mut(|mem| mem.request_focus(target_id));
+
+        // Frame 2: trigger activation via Space key
+        let input2 = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 400.0))),
+            events: vec![egui::Event::Key {
+                key: egui::Key::Space,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        };
+        let mut output2 = ctx.run_ui(input2, |ui| {
+            let res = ui.allocate_response(vec2(100.0, 100.0), Sense::click());
+            egui::Popup::menu(&res).open(true).show(|ui| {
+                menu_submenu(ui, &palette, None, "Submenu", |ui| {
+                    child_rendered = true;
+                    ui.label("Child content");
+                });
+            });
+        });
+        output2.textures_delta.clear();
+
+        assert!(
+            child_rendered,
+            "menu_submenu must open child contents when Space is pressed while focused"
+        );
+
+        // Frame 3: toggle closed with Space, then reopen with Enter
+        let input3 = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 400.0))),
+            events: vec![egui::Event::Key {
+                key: egui::Key::Space,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        };
+        child_rendered = false;
+        let mut output3 = ctx.run_ui(input3, |ui| {
+            let res = ui.allocate_response(vec2(100.0, 100.0), Sense::click());
+            egui::Popup::menu(&res).open(true).show(|ui| {
+                menu_submenu(ui, &palette, None, "Submenu", |ui| {
+                    child_rendered = true;
+                    ui.label("Child content");
+                });
+            });
+        });
+        output3.textures_delta.clear();
+        assert!(
+            !child_rendered,
+            "menu_submenu must close child contents when Space is pressed again"
+        );
+
+        // Frame 4: reopen with Enter
+        let input4 = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 400.0))),
+            events: vec![egui::Event::Key {
+                key: egui::Key::Enter,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        };
+        child_rendered = false;
+        let mut output4 = ctx.run_ui(input4, |ui| {
+            let res = ui.allocate_response(vec2(100.0, 100.0), Sense::click());
+            egui::Popup::menu(&res).open(true).show(|ui| {
+                menu_submenu(ui, &palette, None, "Submenu", |ui| {
+                    child_rendered = true;
+                    ui.label("Child content");
+                });
+            });
+        });
+        output4.textures_delta.clear();
+        assert!(
+            child_rendered,
+            "menu_submenu must open child contents when Enter is pressed while focused"
+        );
     }
 }
