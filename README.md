@@ -133,6 +133,13 @@ vcpkg (`vcpkg install glew:x64-windows-static`, with
 With [Nix](https://nixos.org), `nix develop` provides all of it, along with
 the exact toolchain `rust-toolchain.toml` pins.
 
+On macOS, the flake also exposes `packages.<system>.fastpotify-app`, an
+ad-hoc signed `Fastpotify.app` bundle for the Dock, Launch Services, and
+`spotify:` links. With nix-darwin, add it to `environment.systemPackages`
+and link `"/Applications"` through `environment.pathsToLink`; with Home
+Manager, `home.packages` is enough, as its darwin support links the bundle
+into `~/Applications`.
+
 Fastpotify uses system fonts for scripts not covered by its interface font,
 including Chinese, Japanese, Korean, Arabic, Hebrew, Thai, and Indic scripts.
 macOS and Windows include common fonts. On Linux, install `noto-fonts` and
