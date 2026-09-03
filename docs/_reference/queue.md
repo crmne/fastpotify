@@ -43,6 +43,8 @@ check every one of them.
 
 8. **Changes appear immediately.** Fastpotify updates the queue before Spotify
    confirms the change. For local playback, it updates its own player directly.
+   Toggling shuffle rechecks the queue so the new playback order appears
+   promptly without waiting for the song to finish.
 
 9. **Closing the app keeps the queue.** Fastpotify saves it locally. When you
    resume the last song, it restores your queued songs and playlist position.
