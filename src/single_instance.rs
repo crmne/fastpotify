@@ -573,8 +573,8 @@ fn open_in_running_instance(
 /// the method was accepted, or an error string on failure or timeout.
 #[cfg(target_os = "linux")]
 pub fn reload_theme_in_running_instance() -> Result<(), String> {
-    let connection = mpris_server::zbus::blocking::Connection::session()
-        .map_err(|error| error.to_string())?;
+    let connection =
+        mpris_server::zbus::blocking::Connection::session().map_err(|error| error.to_string())?;
     let (answer_tx, answer_rx) = std::sync::mpsc::channel();
     let spawned = std::thread::Builder::new()
         .name("fastpotify-reload-theme".to_owned())
