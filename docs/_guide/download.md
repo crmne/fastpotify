@@ -63,8 +63,8 @@ app instead of the download above. On macOS,
 signed and assembled like the release bundle. Nix builds it locally, so it
 is never quarantined and the first-open steps above do not apply.
 
-With nix-darwin, add the flake to your inputs and put the bundle in
-`/Applications`:
+With nix-darwin, add the flake to your inputs and the bundle appears in
+`/Applications/Nix Apps`:
 
 ```nix
 inputs.fastpotify.url = "github:crmne/fastpotify";
