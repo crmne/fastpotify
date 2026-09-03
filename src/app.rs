@@ -7987,7 +7987,10 @@ mod tests {
         assert_eq!(app.media_art_file(&ctx, url), Some(file.clone()));
 
         // #then another song is not covered by what is remembered
-        assert_eq!(app.media_art_file(&ctx, "https://i.scdn.co/image/def"), None);
+        assert_eq!(
+            app.media_art_file(&ctx, "https://i.scdn.co/image/def"),
+            None
+        );
 
         // #when the artwork cache is emptied, the remembered path goes too
         app.actions.push(Action::ClearArtCache);

@@ -98,7 +98,7 @@ impl ArtLoader {
             .is_ok_and(|meta| meta.is_file() && meta.len() > 0)
             .then_some(path)
     }
-    
+
     pub fn prefetch(&self, ctx: &egui::Context, url: &str) -> bool {
         let mut entries = self.inner.entries.lock().unwrap_or_else(|p| p.into_inner());
         if entries.contains_key(url) {
@@ -361,10 +361,7 @@ mod tests {
 
     #[test]
     fn prefetching_starts_one_download_and_not_another() {
-        let dir = std::env::temp_dir().join(format!(
-            "fastpotify-prefetch-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("fastpotify-prefetch-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let runtime = tokio::runtime::Builder::new_current_thread()
             .build()
