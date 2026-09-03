@@ -52,7 +52,8 @@ everyday use, and connection details.
   of what you are looking at or listening to. Turn it off in Settings.
 - **Light and dark**, or follow the system. Custom colour schemes are
   supported: drop a JSON file into `~/.config/fastpotify/schemes/` and select
-  it in Settings. Press `Ctrl+Shift+R` / `Cmd+Shift+R` to reload a scheme
+  it in Settings. Press `Ctrl+Shift+R` / `Cmd+Shift+R` or run
+  `fastpotify scheme reload` to reload a scheme
   after editing.
 - **Winamp mini player.** `Ctrl+M` opens a small player for classic `.wsz`
   skins, drawn at 1x to 4x scale. It includes a spectrum analyser, playlist,
@@ -217,7 +218,13 @@ fastpotify seek -- -15         fastpotify like
 fastpotify seek-to 90          fastpotify play-uri spotify:playlist:37i9…
 fastpotify show                fastpotify transfer <device-id>
 fastpotify now-playing [--raw] fastpotify devices [--raw]
+fastpotify scheme reload
 ```
+
+On all platforms, `fastpotify scheme reload` reloads colour schemes from disk
+and updates the active scheme immediately without needing window focus,
+making it suitable for post-hook scripts from desktop theming tools such as
+Noctalia.
 
 `shuffle` and `repeat` toggle when used without an argument. Pass a state to
 set it directly. `like` adds or removes the playing track from your library.
@@ -255,8 +262,8 @@ Place `.json` files in `~/.config/fastpotify/schemes/`. Each file defines a
 colour scheme with hex values (e.g. `"#1ed760"`). Missing fields fall back to
 the built-in dark palette, so partial overrides work. The scheme's `name`
 field sets the button label in Settings; the filename stem is used when `name`
-is empty. Press `Ctrl+Shift+R` / `Cmd+Shift+R` to reload the active scheme
-after editing.
+is empty. Press `Ctrl+Shift+R` / `Cmd+Shift+R` or run `fastpotify scheme reload`
+to reload the active scheme after editing.
 
 Caches (audio, artwork) live under the cache directory and can be deleted at
 any time without signing you out.

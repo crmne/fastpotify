@@ -1994,6 +1994,7 @@ impl App {
                 ControlCommand::OpenLink(uri) => Some(Action::OpenLink(uri)),
                 ControlCommand::Transfer(device_id) => Some(Action::Transfer(device_id)),
                 ControlCommand::RefreshDevices => Some(Action::RefreshDevices),
+                ControlCommand::ReloadTheme => Some(Action::ReloadTheme),
             };
             if let Some(action) = action {
                 self.actions.push(action);
@@ -5460,8 +5461,21 @@ impl App {
             }
             Action::ReloadTheme => {
                 self.available_schemes = self.load_schemes();
+                if let ThemeChoice::Custom(name) = &self.settings.theme {
+                    let dark = self
+                        .available_schemes
+                        .iter()
+                        .find(|(n, _)| n == name)
+                        .is_none_or(|(_, s)| s.dark);
+                    ctx.set_theme(if dark {
+                        egui::ThemePreference::Dark
+                    } else {
+                        egui::ThemePreference::Light
+                    });
+                }
                 self.applied_theme = None;
                 self.toast("Colour scheme reloaded");
+                ctx.request_repaint();
             }
             Action::Quit => {
                 self.quit_requested = true;
@@ -8011,6 +8025,26 @@ mod tests {
             "{:?}",
             app.actions
         );
+        assert!(queue.lock().expect("the queue").is_empty());
+    }
+
+    /// Reloading a colour scheme via the control channel produces `Action::ReloadTheme`.
+    #[test]
+    fn a_scheme_reload_control_command_becomes_reload_theme_action() {
+        // #given
+        let mut app = headless_app();
+        let queue: std::sync::Arc<std::sync::Mutex<Vec<ControlCommand>>> = Default::default();
+        app.control_commands = Some(std::sync::Arc::clone(&queue));
+
+        // #when
+        queue
+            .lock()
+            .expect("the queue")
+            .push(ControlCommand::ReloadTheme);
+        app.handle_control_commands();
+
+        // #then
+        assert!(matches!(app.actions.as_slice(), [Action::ReloadTheme]));
         assert!(queue.lock().expect("the queue").is_empty());
     }
 

@@ -123,6 +123,17 @@ enum Control {
     },
     /// Bring the window of the running instance forward
     Show,
+    /// Commands for custom colour schemes
+    Scheme {
+        #[command(subcommand)]
+        action: SchemeAction,
+    },
+}
+
+#[derive(Clone, Copy, Debug, clap::Subcommand)]
+enum SchemeAction {
+    /// Reload colour schemes from disk and reapply the active one
+    Reload,
 }
 
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
@@ -142,7 +153,7 @@ enum Repeat {
 }
 
 /// Sends one control verb to the running instance. Speaks over the
-/// single-instance loopback socket, which Linux does not have.
+/// single-instance loopback socket.
 #[cfg(not(target_os = "linux"))]
 fn run_control(control: Control) -> i32 {
     let raw = matches!(
@@ -184,6 +195,9 @@ fn run_control(control: Control) -> i32 {
         Control::Transfer { device_id } => format!("transfer {device_id}"),
         Control::NowPlaying { .. } => "nowplaying".to_owned(),
         Control::Show => "show".to_owned(),
+        Control::Scheme {
+            action: SchemeAction::Reload,
+        } => "scheme reload".to_owned(),
     };
     match single_instance::send(&verb) {
         Ok(single_instance::Reply::Ok) => 0,
@@ -211,12 +225,26 @@ fn run_control(control: Control) -> i32 {
 }
 
 #[cfg(target_os = "linux")]
-fn run_control(_control: Control) -> i32 {
-    eprintln!(
-        "On Linux the running instance speaks MPRIS instead; use e.g. \
-         `playerctl --player=fastpotify play-pause`."
-    );
-    2
+fn run_control(control: Control) -> i32 {
+    match control {
+        Control::Scheme {
+            action: SchemeAction::Reload,
+        } => match single_instance::send("scheme reload") {
+            Ok(single_instance::Reply::Ok) => 0,
+            Ok(_) => 0,
+            Err(error) => {
+                eprintln!("Fastpotify is not running or does not support remote control: {error}");
+                1
+            }
+        },
+        _ => {
+            eprintln!(
+                "On Linux the running instance speaks MPRIS instead; use e.g. \
+                 `playerctl --player=fastpotify play-pause`."
+            );
+            2
+        }
+    }
 }
 
 /// The `nowplaying` snapshot as one human-readable line.
