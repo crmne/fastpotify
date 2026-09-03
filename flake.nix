@@ -83,10 +83,10 @@
         };
       });
 
-      packages = forAllSystems (pkgs: rec {
-        default = fastpotify;
-        fastpotify =
-          let
+      packages = forAllSystems (
+        pkgs:
+        let
+          fastpotify = let
             toolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
             rustPlatform = pkgs.makeRustPlatform {
               cargo = toolchain;
@@ -174,7 +174,43 @@
               mainProgram = "fastpotify";
             };
           };
-      });
+      
+          fastpotify-app =
+            let
+              version = pkgs.lib.getVersion fastpotify;
+              build = pkgs.lib.head (pkgs.lib.splitString "-" version);
+              icon = pkgs.runCommand "fastpotify-icon" {
+                nativeBuildInputs = [ pkgs.icnsify ];
+              } ''
+                icnsify ${./packaging/macos/icon-1024.png} -o $out
+              '';
+            in
+            pkgs.runCommand "fastpotify-app"
+              {
+                meta = {
+                  description = "Fastpotify as a macOS app bundle";
+                  homepage = "https://fastpotify.rocks";
+                  license = pkgs.lib.licenses.mit;
+                  platforms = pkgs.lib.platforms.darwin;
+                };
+              }
+              ''
+                app="$out/Applications/Fastpotify.app/Contents"
+                mkdir -p "$app/MacOS" "$app/Resources"
+                ln -s ${fastpotify}/bin/fastpotify "$app/MacOS/fastpotify"
+                cp ${icon} "$app/Resources/fastpotify.icns"
+                sed -e "s/__VERSION__/${version}/g" -e "s/__BUILD__/${build}/g" \
+                  ${./packaging/macos/Info.plist} > "$app/Info.plist"
+              '';
+        in
+        {
+          default = fastpotify;
+          inherit fastpotify;
+        }
+        // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin {
+          inherit fastpotify-app;
+        }
+      );
 
       formatter = forAllSystems (pkgs: pkgs.nixfmt-tree);
     };
