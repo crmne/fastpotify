@@ -50,3 +50,8 @@ check every one of them.
 10. **Old answers from Spotify are ignored.** Queue responses can be a few
     seconds late. Fastpotify ignores stale responses and asks again. Your
     changes stay visible while it waits for confirmation.
+
+In the experimental DJ build, **Next** still removes one row. **DJ** skips
+the remaining context songs in the current set and starts the next set with
+its DJ introduction. Your manually queued songs remain next after that
+chosen song; changing the DJ set does not clear them.

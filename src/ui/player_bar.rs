@@ -171,7 +171,20 @@ fn now_playing_block(app: &mut App, ui: &mut egui::Ui, region: Rect, now: Option
         }
     }
     text_ui.horizontal_top(|ui| {
-        if now.artists.is_empty() {
+        if app.dj_change_pending() {
+            theme::text(ui, "Changing DJ set…", theme::regular(12.0), palette.accent);
+        } else if app.dj_mode() && now.local && app.local.narrating {
+            theme::text(
+                ui,
+                if now.playing {
+                    "DJ speaking"
+                } else {
+                    "DJ paused"
+                },
+                theme::regular(12.0),
+                palette.accent,
+            );
+        } else if now.artists.is_empty() {
             if theme::link(ui, &now.subtitle, theme::regular(12.0), palette.secondary).clicked()
                 && let Some(id) = &now.show_id
             {
@@ -272,7 +285,8 @@ fn transport(app: &mut App, ui: &mut egui::Ui, now: Option<&NowPlaying>, region:
     // Button widths: icon buttons occupy icon size + 12; the disc is 36.
     let widths = [29.0, 30.0, 36.0, 30.0, 29.0];
     let gap = 10.0;
-    let total: f32 = widths.iter().sum::<f32>() + gap * 4.0;
+    let dj = app.dj_mode();
+    let total: f32 = widths.iter().sum::<f32>() + gap * 4.0 + if dj { 46.0 } else { 0.0 };
     let mut x = region.center().x - total / 2.0;
     let mut slot = |width: f32| {
         let rect = Rect::from_center_size(pos2(x + width / 2.0, cy), vec2(width, 36.0));
@@ -289,6 +303,12 @@ fn transport(app: &mut App, ui: &mut egui::Ui, now: Option<&NowPlaying>, region:
 
     let shuffle_color = if shuffle { palette.accent } else { dim };
     let mut cell = centered(ui, slot(widths[0]));
+    let shuffle_tooltip = if app.local_dj_mode() {
+        cell.disable();
+        "DJ keeps shuffle off so its sets play in order."
+    } else {
+        "Shuffle"
+    };
     if theme::icon_button(
         &mut cell,
         Icon::Shuffle,
@@ -299,8 +319,9 @@ fn transport(app: &mut App, ui: &mut egui::Ui, now: Option<&NowPlaying>, region:
         } else {
             palette.text
         },
-        "Shuffle",
+        shuffle_tooltip,
     )
+    .on_disabled_hover_text(shuffle_tooltip)
     .clicked()
     {
         app.actions.push(Action::ToggleShuffle);
@@ -390,6 +411,11 @@ fn transport(app: &mut App, ui: &mut egui::Ui, now: Option<&NowPlaying>, region:
         app.actions.push(Action::CycleRepeat);
     }
 
+    if dj {
+        let mut cell = centered(ui, slot(36.0));
+        dj_button(app, &mut cell);
+    }
+
     // Progress row, just below the buttons (disc bottom + 6px gap + half of
     // the time text's line height).
     let row_cy = cy + 31.0;
@@ -452,6 +478,117 @@ fn transport(app: &mut App, ui: &mut egui::Ui, now: Option<&NowPlaying>, region:
         theme::regular(11.5),
         time_color,
     );
+}
+
+fn dj_button(app: &mut App, ui: &mut egui::Ui) -> egui::Response {
+    let palette = app.palette;
+    let pending = app.dj_change_pending();
+    let local = matches!(app.target(), crate::app::Target::Local);
+    let tooltip = if !local {
+        "DJ is playing on another device. Change sets or make requests in Spotify."
+    } else if app.local.shuffle {
+        "DJ is turning shuffle off…"
+    } else if app.local.repeat != RepeatMode::Off {
+        "Turn repeat off to move through DJ sets."
+    } else if pending {
+        "Changing DJ set…"
+    } else if app.local.dj_next_set.is_none() {
+        "DJ mode · The next set is not ready yet."
+    } else {
+        "Next DJ set · Change the mood, with a new DJ introduction. Your queued songs stay."
+    };
+    let response = ui
+        .add_enabled(
+            app.can_change_dj_set(),
+            egui::Button::new(
+                egui::RichText::new(if pending { "…" } else { "DJ" })
+                    .font(theme::semibold(12.0))
+                    .color(palette.accent),
+            )
+            .fill(super::blend(palette.panel, palette.accent, 0.16))
+            .stroke(egui::Stroke::new(1.0, palette.accent.gamma_multiply(0.5)))
+            .corner_radius(14.0)
+            .min_size(vec2(34.0, 28.0)),
+        )
+        .on_hover_text(tooltip)
+        .on_disabled_hover_text(tooltip);
+    if response.clicked() {
+        app.actions.push(Action::DjNextSet);
+    }
+    response.context_menu(|ui| {
+        ui.label("Text and voice requests currently need Spotify.");
+        if ui.button("Open DJ in Spotify…").clicked() {
+            app.actions.push(Action::OpenUrl(
+                "https://open.spotify.com/playlist/37i9dQZF1EYkqdzj48dyYq".into(),
+            ));
+            ui.close();
+        }
+    });
+    response
+}
+
+#[cfg(all(test, feature = "demo"))]
+mod dj_tests {
+    use super::*;
+
+    #[test]
+    fn dj_button_emits_a_distinct_action_and_disables_without_a_boundary() {
+        let root =
+            std::env::temp_dir().join(format!("fastpotify-dj-ui-test-{}", std::process::id()));
+        let mut app = App::new(
+            &crate::backend::Waker::default(),
+            crate::paths::AppDirs {
+                config: root.join("config"),
+                state: root.join("state"),
+                cache: root.join("cache"),
+            },
+            crate::settings::Settings::default(),
+            crate::app::AppOptions {
+                media_controls: false,
+                tray: false,
+            },
+        );
+        crate::demo::populate(&mut app);
+        crate::demo::apply_flags(&mut app, None, Some("dj-speaking"));
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        app.actions.clear();
+        let mut center = egui::Pos2::ZERO;
+        for pressed in [None, Some(true), Some(false)] {
+            let events = pressed
+                .map(|pressed| {
+                    vec![
+                        egui::Event::PointerMoved(center),
+                        egui::Event::PointerButton {
+                            pos: center,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ]
+                })
+                .unwrap_or_default();
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    center = dj_button(&mut app, ui).rect.center();
+                },
+            );
+            output.textures_delta.clear();
+        }
+        assert!(matches!(app.actions.as_slice(), [Action::DjNextSet]));
+        app.actions.clear();
+        app.local.dj_next_set = None;
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            assert!(!dj_button(&mut app, ui).enabled());
+        });
+        output.textures_delta.clear();
+        assert!(app.actions.is_empty());
+        app.backend.shutdown();
+    }
 }
 
 fn extras(app: &mut App, ui: &mut egui::Ui, now: Option<&NowPlaying>) {

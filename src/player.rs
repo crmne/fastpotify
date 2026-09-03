@@ -36,6 +36,9 @@ use sha1::{Digest, Sha1};
 use crate::sink::{ErrorHook, RodioSink};
 use crate::vis::{AudioTap, Tapped};
 
+pub use librespot_playback::player::DjSet;
+pub const DJ_URI: &str = "spotify:playlist:37i9dQZF1EYkqdzj48dyYq";
+
 #[derive(Clone, Debug)]
 pub struct EngineConfig {
     pub device_name: String,
@@ -160,6 +163,10 @@ pub struct LocalState {
     pub position_ms: u32,
     /// When `position_ms` was observed; `None` while not advancing.
     pub position_at: Option<Instant>,
+    /// Speech is audible, but the song clock is stationary.
+    pub narrating: bool,
+    pub dj_context: Option<String>,
+    pub dj_next_set: Option<DjSet>,
     pub volume: u16,
     pub shuffle: bool,
     pub repeat: RepeatMode,
@@ -199,6 +206,9 @@ impl LocalState {
 
     /// The position now, interpolated from the last report while playing.
     pub fn position_now(&self) -> u32 {
+        if self.narrating {
+            return self.position_ms;
+        }
         match (self.playback, self.position_at) {
             (Playback::Playing, Some(at)) => {
                 let elapsed = at.elapsed().as_millis() as u32;
@@ -235,6 +245,7 @@ pub struct LoadSpec {
 pub enum PlayerCommand {
     Toggle,
     Next,
+    DjNextSet(String),
     Previous,
     /// Remove manually queued tracks and keep context tracks.
     ClearQueue,
@@ -489,6 +500,7 @@ impl Engine {
         match command {
             PlayerCommand::Toggle => spirc.play_pause()?,
             PlayerCommand::Next => spirc.next()?,
+            PlayerCommand::DjNextSet(uid) => spirc.dj_next_set(uid)?,
             PlayerCommand::Previous => spirc.prev()?,
             PlayerCommand::ClearQueue => spirc.clear_queue()?,
             PlayerCommand::AddToQueue(uri) => spirc.add_to_queue(uri)?,
@@ -660,13 +672,37 @@ fn set<T: PartialEq>(target: &mut T, value: T) -> bool {
 
 fn apply_event(state: &mut LocalState, event: PlayerEvent) -> bool {
     match event {
+        PlayerEvent::DjStateChanged {
+            context_uri,
+            next_set,
+        } => {
+            let mut changed = set(&mut state.dj_context, context_uri);
+            changed |= set(&mut state.dj_next_set, next_set);
+            changed
+        }
+        PlayerEvent::DjJumpRejected => set(
+            &mut state.error,
+            Some("The DJ set changed before the request arrived. Try the DJ button again".into()),
+        ),
+        PlayerEvent::Narration {
+            active,
+            position_ms,
+            ..
+        } => {
+            state.narrating = active;
+            state.position_ms = position_ms;
+            state.position_at = (!active && state.playback == Playback::Playing).then(Instant::now);
+            true
+        }
         PlayerEvent::Stopped { .. } => {
+            state.narrating = false;
             let mut changed = set(&mut state.playback, Playback::Stopped);
             changed |= set(&mut state.position_ms, 0);
             changed |= set(&mut state.position_at, None);
             changed
         }
         PlayerEvent::Loading { position_ms, .. } => {
+            state.narrating = false;
             let mut changed = if state.playback == Playback::Stopped {
                 set(&mut state.playback, Playback::Loading)
             } else {
@@ -680,7 +716,7 @@ fn apply_event(state: &mut LocalState, event: PlayerEvent) -> bool {
         PlayerEvent::Playing { position_ms, .. } => {
             let mut changed = set(&mut state.playback, Playback::Playing);
             changed |= set(&mut state.position_ms, position_ms);
-            state.position_at = Some(Instant::now());
+            state.position_at = (!state.narrating).then(Instant::now);
             changed || true
         }
         PlayerEvent::Paused { position_ms, .. } => {
@@ -692,12 +728,13 @@ fn apply_event(state: &mut LocalState, event: PlayerEvent) -> bool {
         PlayerEvent::PositionCorrection { position_ms, .. }
         | PlayerEvent::PositionChanged { position_ms, .. } => {
             state.position_ms = position_ms;
-            if state.playback == Playback::Playing {
+            if state.playback == Playback::Playing && !state.narrating {
                 state.position_at = Some(Instant::now());
             }
             true
         }
         PlayerEvent::Seeked { position_ms, .. } => {
+            state.narrating = false;
             state.position_ms = position_ms;
             if state.playback == Playback::Playing {
                 state.position_at = Some(Instant::now());
@@ -706,6 +743,7 @@ fn apply_event(state: &mut LocalState, event: PlayerEvent) -> bool {
             true
         }
         PlayerEvent::TrackChanged { audio_item } => {
+            state.narrating = false;
             let mut changed = set(&mut state.track, Some(local_track(&audio_item)));
             changed |= set(&mut state.error, None);
             changed
@@ -730,7 +768,13 @@ fn apply_event(state: &mut LocalState, event: PlayerEvent) -> bool {
         // In librespot this event means the Connect device became inactive,
         // usually because another device took over. The engine session is
         // still alive, and `Load` activates it again before starting a track.
-        PlayerEvent::SessionDisconnected { .. } => set(&mut state.active_client, String::new()),
+        PlayerEvent::SessionDisconnected { .. } => {
+            let mut changed = set(&mut state.dj_context, None);
+            changed |= set(&mut state.dj_next_set, None);
+            changed |= set(&mut state.narrating, false);
+            changed |= set(&mut state.active_client, String::new());
+            changed
+        }
         PlayerEvent::SessionClientChanged { client_name, .. } => {
             set(&mut state.active_client, client_name)
         }
@@ -963,6 +1007,35 @@ mod tests {
     use super::*;
     use librespot_core::SpotifyUri;
 
+    #[test]
+    fn dj_state_is_explicit_and_cleared_on_disconnect() {
+        let mut state = LocalState::default();
+        assert!(apply_event(
+            &mut state,
+            PlayerEvent::DjStateChanged {
+                context_uri: Some(DJ_URI.into()),
+                next_set: None
+            }
+        ));
+        assert_eq!(state.dj_context.as_deref(), Some(DJ_URI));
+        assert!(!apply_event(
+            &mut state,
+            PlayerEvent::DjStateChanged {
+                context_uri: Some(DJ_URI.into()),
+                next_set: None
+            }
+        ));
+        apply_event(
+            &mut state,
+            PlayerEvent::SessionDisconnected {
+                connection_id: String::new(),
+                user_name: String::new(),
+            },
+        );
+        assert!(state.dj_context.is_none());
+        assert!(state.dj_next_set.is_none());
+    }
+
     fn uri() -> SpotifyUri {
         SpotifyUri::from_uri("spotify:track:14XWXWv5FoCbFzLksawpEe").unwrap()
     }
@@ -978,6 +1051,62 @@ mod tests {
         assert_eq!(state.position_now(), 5_000);
         state.playback = Playback::Playing;
         assert!(state.position_now() >= 7_000);
+    }
+
+    #[test]
+    fn narration_freezes_the_song_clock_across_progress_pause_and_resume() {
+        let mut state = LocalState {
+            playback: Playback::Playing,
+            ..LocalState::default()
+        };
+        apply_event(
+            &mut state,
+            PlayerEvent::Narration {
+                track_id: uri(),
+                play_request_id: 1,
+                position_ms: 0,
+                active: true,
+            },
+        );
+        apply_event(
+            &mut state,
+            PlayerEvent::PositionCorrection {
+                track_id: uri(),
+                play_request_id: 1,
+                position_ms: 0,
+            },
+        );
+        assert!(state.position_at.is_none());
+        apply_event(
+            &mut state,
+            PlayerEvent::Paused {
+                track_id: uri(),
+                play_request_id: 1,
+                position_ms: 0,
+            },
+        );
+        apply_event(
+            &mut state,
+            PlayerEvent::Playing {
+                track_id: uri(),
+                play_request_id: 1,
+                position_ms: 0,
+            },
+        );
+        assert!(state.position_at.is_none());
+        state.position_at = Some(Instant::now() - Duration::from_secs(5));
+        assert_eq!(state.position_now(), 0);
+        apply_event(
+            &mut state,
+            PlayerEvent::Narration {
+                track_id: uri(),
+                play_request_id: 1,
+                position_ms: 0,
+                active: false,
+            },
+        );
+        assert!(state.position_at.is_some());
+        assert!(!state.narrating);
     }
 
     #[test]

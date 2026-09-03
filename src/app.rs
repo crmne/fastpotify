@@ -77,6 +77,12 @@ struct AssumedContext {
     at: Instant,
 }
 
+struct DjJump {
+    next: crate::player::DjSet,
+    preview: crate::player::LocalTrack,
+    at: Instant,
+}
+
 /// A track the interface shows before playback has reported its new state.
 ///
 /// Local engine events are ordered, so its next track report settles the
@@ -352,6 +358,7 @@ pub struct App {
     /// empty URI means a plain track list, whose lack of a context must also
     /// hide stale state.
     assumed_context: Option<AssumedContext>,
+    dj_jump_pending: Option<DjJump>,
     last_now_playing_uri: Option<String>,
     pub playlist_busy: bool,
     pub quit_requested: bool,
@@ -612,6 +619,7 @@ impl App {
             last_unavailable_reconnect: None,
             premium_notice_shown: false,
             assumed_context: None,
+            dj_jump_pending: None,
             last_now_playing_uri: None,
             playlist_busy: false,
             quit_requested: false,
@@ -882,6 +890,12 @@ impl App {
                 return (!assumed.uri.is_empty()).then(|| assumed.uri.clone());
             }
         }
+        if matches!(self.target(), Target::Local)
+            && self.local.is_active()
+            && let Some(context) = &self.local.dj_context
+        {
+            return Some(context.clone());
+        }
         remote
     }
 
@@ -893,6 +907,96 @@ impl App {
             return Some(intent.uri.clone());
         }
         self.now_playing().map(|now| now.uri)
+    }
+
+    pub fn dj_mode(&self) -> bool {
+        self.playing_context_uri().is_some_and(|uri| {
+            uri == crate::player::DJ_URI
+                || (matches!(self.target(), Target::Local)
+                    && self.local.dj_context.as_deref() == Some(uri.as_str()))
+        })
+    }
+
+    pub fn dj_change_pending(&self) -> bool {
+        self.dj_jump_pending
+            .as_ref()
+            .is_some_and(|jump| jump.at.elapsed() < Duration::from_secs(12))
+    }
+
+    pub fn local_dj_mode(&self) -> bool {
+        matches!(self.target(), Target::Local) && self.dj_mode()
+    }
+
+    pub fn can_change_dj_set(&self) -> bool {
+        self.dj_mode()
+            && matches!(self.target(), Target::Local)
+            && self.local.connected
+            && self.local.is_active()
+            && !self.local.shuffle
+            && self.local.repeat == RepeatMode::Off
+            && self.local.dj_next_set.is_some()
+            && !self.dj_change_pending()
+            && !self.any_play_pending()
+    }
+
+    fn change_dj_set(&mut self) {
+        if !self.can_change_dj_set() {
+            return;
+        }
+        let next = self.local.dj_next_set.clone().expect("checked above");
+        let mut item = self.optimistic_queue_item(&next.uri, "DJ: next set");
+        let queued = self.queued_rows_len();
+        if let Loadable::Loaded(queue) = &mut self.queue {
+            let matches = queue
+                .queue
+                .iter()
+                .skip(queued)
+                .take(next.consumed.len())
+                .map(|item| item.uri())
+                .eq(next.consumed.iter().map(String::as_str));
+            if matches && !next.consumed.is_empty() {
+                let mut consumed = queue.queue.drain(queued..queued + next.consumed.len());
+                let chosen = consumed.next_back();
+                drop(consumed);
+                if let Some(chosen) = &chosen {
+                    item = chosen.clone();
+                }
+                queue.currently_playing = chosen;
+            }
+        }
+        let preview = match item {
+            PlayableItem::Track(track) => crate::player::LocalTrack {
+                uri: track.uri,
+                title: track.name,
+                artists: track
+                    .artists
+                    .iter()
+                    .map(|artist| artist.name.clone())
+                    .collect(),
+                album: track
+                    .album
+                    .as_ref()
+                    .map(|album| album.name.clone())
+                    .unwrap_or_default(),
+                art_url: track
+                    .album
+                    .as_ref()
+                    .and_then(|album| pick_image(&album.images, 300))
+                    .map(str::to_owned),
+                duration_ms: track.duration_ms,
+                ..Default::default()
+            },
+            _ => return,
+        };
+        self.dj_jump_pending = Some(DjJump {
+            next: next.clone(),
+            preview,
+            at: Instant::now(),
+        });
+        self.expect_track(next.uri.clone());
+        self.set_play_pending(vec![next.uri]);
+        self.optimistic_playing = Some((true, Instant::now()));
+        self.backend.player(PlayerCommand::DjNextSet(next.uid));
     }
 
     /// Shows a user-requested track until the responsible playback surface
@@ -993,7 +1097,13 @@ impl App {
     /// What a device is actually playing, here or elsewhere.
     fn now_playing_live(&self) -> Option<NowPlaying> {
         if self.local.is_active() {
-            let track = self.local.track.as_ref()?;
+            let dj_preview = self
+                .dj_jump_pending
+                .as_ref()
+                .filter(|_| self.dj_change_pending());
+            let track = dj_preview
+                .map(|jump| &jump.preview)
+                .or(self.local.track.as_ref())?;
             let cached = track
                 .uri
                 .rsplit(':')
@@ -1035,9 +1145,13 @@ impl App {
                     .clone()
                     .or_else(|| track.art_url.clone()),
                 duration_ms: track.duration_ms,
-                position_ms: self.local.position_now(),
+                position_ms: if dj_preview.is_some() {
+                    0
+                } else {
+                    self.local.position_now()
+                },
                 playing,
-                loading: self.local.playback == Playback::Loading,
+                loading: dj_preview.is_some() || self.local.playback == Playback::Loading,
                 shuffle: self.shuffle_wanted,
                 repeat: self.local.repeat,
                 volume_percent: volume_to_percent(self.local.volume),
@@ -1443,6 +1557,11 @@ impl App {
         if let Some(error) = &state.error
             && self.local.error.as_deref() != Some(error.as_str())
         {
+            if self.dj_jump_pending.take().is_some() {
+                self.intent_track = None;
+                self.clear_play_pending();
+                self.refresh_queue(true);
+            }
             self.toast_error(error.clone());
             // One unavailable track is Spotify's catalogue; several in a
             // row is the session's audio-key service gone bad, which
@@ -1481,11 +1600,35 @@ impl App {
             }));
         }
         self.local = state;
+        if self.local_dj_mode() {
+            // DJ's ordered playback overrides a recent shuffle preference too.
+            // Do not let a delayed options event light the control back up.
+            if self.shuffle_wanted {
+                self.session_dirty = true;
+            }
+            self.shuffle_wanted = false;
+            if let Some(assumed) = &mut self.assumed_context {
+                assumed.shuffle = Some(false);
+            }
+        }
         if let Some(volume) = held_volume {
             self.local.volume = volume;
         }
         if track_changed {
             self.on_now_playing_changed();
+        }
+        if self.dj_jump_pending.as_ref().is_some_and(|jump| {
+            self.local
+                .track
+                .as_ref()
+                .is_some_and(|track| track.uri == jump.next.uri)
+                && self
+                    .local
+                    .dj_next_set
+                    .as_ref()
+                    .is_none_or(|next| next.uid != jump.next.uid)
+        }) {
+            self.dj_jump_pending = None;
         }
         if reconnected {
             if let Some(request) = self.queued_play.take() {
@@ -1695,7 +1838,10 @@ impl App {
             }
         }
         // Remove a manually queued track once it starts.
-        if self.manual_queue.first().map(String::as_str) == Some(now.uri.as_str()) {
+        let dj_jump = self.dj_jump_pending.as_ref().is_some_and(|jump| {
+            jump.next.uri == now.uri && jump.at.elapsed() < Duration::from_secs(12)
+        });
+        if !dj_jump && self.manual_queue.first().map(String::as_str) == Some(now.uri.as_str()) {
             self.manual_queue.remove(0);
             self.session_dirty = true;
         }
@@ -3008,6 +3154,16 @@ impl App {
 
     /// Whether a fetched queue predates the latest local change.
     fn queue_fetch_is_stale(&self, fetched: &Queue) -> bool {
+        if self.dj_change_pending()
+            && self.dj_jump_pending.as_ref().is_some_and(|jump| {
+                fetched
+                    .currently_playing
+                    .as_ref()
+                    .is_none_or(|track| track.uri() != jump.next.uri)
+            })
+        {
+            return true;
+        }
         if self.queue_stale_retries >= QUEUE_STALE_RETRIES {
             return false;
         }
@@ -3209,6 +3365,7 @@ impl App {
                                 .as_ref()
                                 .map(|remote| remote.state.shuffle_state),
                         ) && previous != current
+                            && !self.local_dj_mode()
                             && self
                                 .shuffle_set_at
                                 .is_none_or(|at| at.elapsed() > Duration::from_secs(5))
@@ -4421,11 +4578,20 @@ impl App {
         // Shuffle applies across contexts until disabled. A selected row still
         // starts first; otherwise choose a random starting track.
         let mut request = request;
-        if shuffle_first {
+        let dj = matches!(self.target(), Target::Local)
+            && request.context_uri.as_deref().is_some_and(|uri| {
+                uri == crate::player::DJ_URI || self.local.dj_context.as_deref() == Some(uri)
+            });
+        if dj {
+            self.shuffle_wanted = false;
+            self.local.shuffle = false;
+            self.shuffle_set_at = Some(Instant::now());
+            self.session_dirty = true;
+        } else if shuffle_first {
             self.shuffle_wanted = true;
             self.shuffle_set_at = Some(Instant::now());
         }
-        let shuffle = shuffle_first || self.shuffle_wanted;
+        let shuffle = !dj && (shuffle_first || self.shuffle_wanted);
         if shuffle
             && request.offset_uri.is_none()
             && request.offset_position.is_none()
@@ -4830,6 +4996,7 @@ impl App {
     }
 
     fn set_shuffle(&mut self, shuffle: bool) {
+        let shuffle = shuffle && !self.local_dj_mode();
         self.shuffle_wanted = shuffle;
         self.shuffle_set_at = Some(Instant::now());
         self.session_dirty = true;
@@ -5292,6 +5459,7 @@ impl App {
                 self.play_request(PlayRequest::context(uri), true);
             }
             Action::TogglePlay => self.toggle_play(),
+            Action::DjNextSet => self.change_dj_set(),
             Action::Next if self.resume_only() => {
                 self.step_resume(true);
             }
@@ -6542,6 +6710,366 @@ fn cap_uris(uris: Vec<String>, index: u32) -> (Vec<String>, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn dj_app() -> App {
+        let mut app = headless_app();
+        app.local.connected = true;
+        app.local.playback = Playback::Playing;
+        app.local.track = Some(crate::player::LocalTrack {
+            uri: "spotify:track:a".into(),
+            title: "Before".into(),
+            ..Default::default()
+        });
+        app.local.dj_context = Some(crate::player::DJ_URI.into());
+        app.local.dj_next_set = Some(crate::player::DjSet {
+            uri: "spotify:track:c".into(),
+            uid: "set-two-first".into(),
+            consumed: vec!["spotify:track:b".into(), "spotify:track:c".into()],
+        });
+        app.queue = loaded_queue(
+            "spotify:track:a",
+            &[
+                "spotify:track:q",
+                "spotify:track:b",
+                "spotify:track:c",
+                "spotify:track:d",
+            ],
+        );
+        app.manual_queue = vec!["spotify:track:q".into()];
+        app
+    }
+
+    #[test]
+    fn dj_set_changes_are_immediate_and_preserve_queued_songs() {
+        let ctx = egui::Context::default();
+        let mut app = dj_app();
+        let old = app.local.clone();
+        app.apply(Action::DjNextSet, &ctx);
+        assert_eq!(
+            queue_uris(&app),
+            (
+                Some("spotify:track:c".into()),
+                vec!["spotify:track:q".into(), "spotify:track:d".into()]
+            )
+        );
+        assert_eq!(app.manual_queue, vec!["spotify:track:q"]);
+        assert_eq!(app.now_playing().unwrap().uri, "spotify:track:c");
+        assert!(app.dj_change_pending());
+        assert!(!app.can_change_dj_set());
+        app.handle_local(old);
+        assert_eq!(
+            app.now_playing().unwrap().uri,
+            "spotify:track:c",
+            "an old snapshot cannot undo the clicked set"
+        );
+        app.queue_stale_retries = QUEUE_STALE_RETRIES;
+        let stale = loaded_queue("spotify:track:a", &["spotify:track:b"]);
+        assert!(app.queue_fetch_is_stale(stale.get().unwrap()));
+        let mut confirmed = app.local.clone();
+        confirmed.track.as_mut().unwrap().uri = "spotify:track:c".into();
+        confirmed.dj_next_set = None;
+        app.handle_local(confirmed);
+        assert!(!app.dj_change_pending());
+    }
+
+    #[test]
+    fn dj_does_not_consume_a_manually_queued_copy_of_its_chosen_song() {
+        let mut app = dj_app();
+        app.manual_queue = vec!["spotify:track:c".into()];
+        app.queue = loaded_queue(
+            "spotify:track:a",
+            &[
+                "spotify:track:c",
+                "spotify:track:b",
+                "spotify:track:c",
+                "spotify:track:d",
+            ],
+        );
+        app.change_dj_set();
+        let mut confirmed = app.local.clone();
+        confirmed.track.as_mut().unwrap().uri = "spotify:track:c".into();
+        confirmed.dj_next_set = None;
+        app.handle_local(confirmed);
+        assert_eq!(app.manual_queue, vec!["spotify:track:c"]);
+        assert_eq!(
+            queue_uris(&app).1,
+            vec!["spotify:track:c", "spotify:track:d"]
+        );
+    }
+
+    #[test]
+    fn dj_controls_need_a_local_ordered_session_and_a_real_set_boundary() {
+        let mut app = dj_app();
+        assert!(app.can_change_dj_set());
+        app.local.shuffle = true;
+        assert!(!app.can_change_dj_set());
+        app.local.shuffle = false;
+        app.local.dj_next_set = None;
+        assert!(!app.can_change_dj_set());
+        app.local.dj_context = None;
+        assert!(!app.dj_mode());
+        app = dj_app();
+        app.apply(
+            Action::PlayContext {
+                uri: "spotify:album:ordinary".into(),
+                offset_uri: None,
+                offset_index: None,
+            },
+            &egui::Context::default(),
+        );
+        assert!(!app.dj_mode(), "leaving DJ hides its controls immediately");
+    }
+
+    #[test]
+    fn starting_dj_turns_shuffle_off_immediately() {
+        let mut app = headless_app();
+        app.local.connected = true;
+        app.set_shuffle(true);
+        app.play_request(
+            PlayRequest {
+                context_uri: Some(crate::player::DJ_URI.into()),
+                ..Default::default()
+            },
+            true,
+        );
+        assert!(app.local_dj_mode());
+        assert!(!app.shuffle_wanted);
+        assert!(!app.local.shuffle);
+        let request = PlayRequest {
+            context_uri: Some(crate::player::DJ_URI.into()),
+            ..Default::default()
+        };
+        assert_ne!(local_load(&request, app.shuffle_wanted).shuffle, Some(true));
+    }
+
+    #[cfg(feature = "demo")]
+    #[test]
+    fn the_dj_playlist_play_button_loads_the_session_even_with_an_empty_sorted_view() {
+        for (context_uri, sorted, paused) in [
+            (crate::player::DJ_URI, false, false),
+            (crate::player::DJ_URI, true, false),
+            (crate::player::DJ_URI, true, true),
+            ("spotify:playlist:ordinary", true, false),
+        ] {
+            let mut app = headless_app();
+            crate::demo::populate(&mut app);
+            app.remote = None;
+            app.local.connected = true;
+            if paused {
+                app.local.playback = Playback::Paused;
+                app.local.dj_context = Some(context_uri.into());
+                app.local.track = Some(crate::player::LocalTrack {
+                    uri: "spotify:track:example".into(),
+                    ..Default::default()
+                });
+            }
+            let ctx = egui::Context::default();
+            app.attach(&ctx);
+            app.actions.clear();
+            let mut center = egui::Pos2::ZERO;
+            for pressed in [None, Some(true), Some(false)] {
+                let events = pressed
+                    .map(|pressed| {
+                        vec![
+                            egui::Event::PointerMoved(center),
+                            egui::Event::PointerButton {
+                                pos: center,
+                                button: egui::PointerButton::Primary,
+                                pressed,
+                                modifiers: egui::Modifiers::NONE,
+                            },
+                        ]
+                    })
+                    .unwrap_or_default();
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let view = crate::ui::collection::prepare_table_view(
+                            ui,
+                            &app,
+                            &Page::Playlist("dj-placeholder".into()),
+                            &[],
+                            "no match",
+                            sorted.then_some(TableSort {
+                                column: SortColumn::Title,
+                                ascending: true,
+                            }),
+                            0,
+                        );
+                        center = ui.next_widget_position() + egui::vec2(28.0, 28.0);
+                        crate::ui::collection::actions_row(
+                            &mut app,
+                            ui,
+                            crate::ui::collection::Actions {
+                                play_uri: Some(context_uri.into()),
+                                view: view.view_uris.as_ref().map(|uris| uris.to_vec()),
+                                saved: None,
+                                saved_icons: (
+                                    crate::theme::Icon::Heart,
+                                    crate::theme::Icon::HeartFilled,
+                                ),
+                                saved_tooltips: ("", ""),
+                                owned_playlist: None,
+                                name: "DJ",
+                            },
+                            None,
+                        );
+                    },
+                );
+                output.textures_delta.clear();
+            }
+            if context_uri != crate::player::DJ_URI {
+                assert!(
+                    matches!(app.actions.as_slice(), [Action::PlayFromRow { .. }]),
+                    "ordinary sorted playlists still play their visible rows"
+                );
+                app.backend.shutdown();
+                continue;
+            }
+            assert!(
+                matches!(app.actions.as_slice(), [Action::PlayContext { uri, .. }] if uri == crate::player::DJ_URI),
+                "sorted={sorted}"
+            );
+            app.apply_actions(&ctx);
+            assert!(app.play_pending(crate::player::DJ_URI));
+            assert!(
+                app.local_list.is_none(),
+                "DJ must not become an empty song list"
+            );
+            assert!(!app.shuffle_wanted);
+            app.backend.shutdown();
+        }
+    }
+
+    #[test]
+    fn dj_play_pending_clears_on_confirmation_and_can_be_retried_after_expiry() {
+        let mut app = dj_app();
+        app.local.playback = Playback::Paused;
+        let before = app.local.clone();
+        let ctx = egui::Context::default();
+        let play = || Action::PlayContext {
+            uri: crate::player::DJ_URI.into(),
+            offset_uri: None,
+            offset_index: None,
+        };
+        app.apply(play(), &ctx);
+        app.handle_local(before.clone());
+        assert!(
+            app.play_pending(crate::player::DJ_URI),
+            "old paused state is not confirmation"
+        );
+        app.pending_play_at = Some(Instant::now() - Duration::from_secs(9));
+        assert!(!app.any_play_pending());
+        app.apply(play(), &ctx);
+        assert!(app.play_pending(crate::player::DJ_URI));
+        let mut confirmed = before;
+        confirmed.playback = Playback::Playing;
+        confirmed.narrating = true;
+        app.handle_local(confirmed);
+        assert!(
+            !app.any_play_pending(),
+            "the same song can confirm a new DJ start"
+        );
+        assert!(app.can_change_dj_set());
+    }
+
+    #[test]
+    fn dj_play_waits_for_reconnection_then_dispatches_the_session_unshuffled() {
+        let mut app = headless_app();
+        app.shuffle_wanted = true;
+        app.play_request(PlayRequest::context(crate::player::DJ_URI), false);
+        assert_eq!(
+            app.queued_play.as_ref().unwrap().context_uri.as_deref(),
+            Some(crate::player::DJ_URI)
+        );
+        app.pending_play_at = Some(Instant::now() - Duration::from_secs(60));
+        assert!(
+            app.play_pending(crate::player::DJ_URI),
+            "connecting is not a play timeout"
+        );
+        app.handle_local(LocalState {
+            connected: true,
+            ..Default::default()
+        });
+        assert!(app.queued_play.is_none());
+        assert!(app.play_pending(crate::player::DJ_URI));
+        assert!(!app.shuffle_wanted);
+        assert!(app.local_list.is_none());
+    }
+
+    #[test]
+    fn dj_shuffle_policy_overrides_recent_intent_and_stale_spotify_answers() {
+        let ctx = egui::Context::default();
+        let mut app = dj_app();
+        let confirmed = app.local.clone();
+        app.shuffle_wanted = true;
+        app.local.shuffle = true;
+        app.shuffle_set_at = Some(Instant::now());
+        app.handle_local(confirmed);
+        assert!(!app.now_playing().unwrap().shuffle);
+        assert!(app.can_change_dj_set());
+
+        app.apply(Action::ToggleShuffle, &ctx);
+        assert!(!app.shuffle_wanted);
+        assert!(!app.local.shuffle);
+        assert!(app.can_change_dj_set());
+        app.local.repeat = RepeatMode::Context;
+        app.apply(Action::ToggleShuffle, &ctx);
+        assert_eq!(app.local.repeat, RepeatMode::Context);
+
+        app.shuffle_set_at = Some(Instant::now() - Duration::from_secs(6));
+        app.remote = Some(RemoteSnapshot {
+            state: PlaybackState::default(),
+            received_at: Instant::now(),
+        });
+        app.handle_api(ApiResponse::PlaybackState {
+            seq: app.remote_poll_seq,
+            result: Ok(Some(PlaybackState {
+                shuffle_state: true,
+                ..Default::default()
+            })),
+        });
+        assert!(
+            !app.shuffle_wanted,
+            "a delayed Web API answer cannot undo DJ order"
+        );
+
+        app.play_request(
+            PlayRequest {
+                context_uri: Some("spotify:album:ordinary".into()),
+                ..Default::default()
+            },
+            false,
+        );
+        app.apply(Action::ToggleShuffle, &ctx);
+        assert!(app.shuffle_wanted, "shuffle works after leaving DJ");
+        assert!(app.local.shuffle);
+    }
+
+    #[test]
+    fn dj_on_another_device_keeps_its_shuffle_controls() {
+        let mut app = dj_app();
+        app.local.playback = Playback::Stopped;
+        app.selected_device = Some("phone".into());
+        app.remote = Some(RemoteSnapshot {
+            state: PlaybackState {
+                context: Some(crate::api::models::Context {
+                    uri: crate::player::DJ_URI.into(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            received_at: Instant::now(),
+        });
+        assert!(app.dj_mode());
+        assert!(!app.local_dj_mode());
+        app.set_shuffle(true);
+        assert!(app.shuffle_wanted);
+        assert!(app.remote.as_ref().unwrap().state.shuffle_state);
+    }
 
     /// A song started outside a playlist must turn off the playlist's
     /// sidebar light at once, even while Spotify still reports the old

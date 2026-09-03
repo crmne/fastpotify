@@ -631,6 +631,7 @@ pub enum Action {
     ShufflePlay(String),
     TogglePlay,
     Next,
+    DjNextSet,
     Previous,
     Seek(u32),
     SeekBy(i64),

@@ -91,3 +91,29 @@ The engine discovers access points through `apresolve.spotify.com` and
 connects over TCP in the resolver's preference order: port 4070 first,
 falling back to 443 and 80. Only outbound connections are needed; no
 inbound ports have to be open.
+
+## Experimental DJ receiver
+
+The development DJ build resolves Spotify's generated DJ session and fetches
+its continuation pages as the queue runs low, independently of the autoplay
+setting. Start DJ in the official Spotify app and transfer playback to it,
+or open the DJ context through Fastpotify's existing media interface. Local DJ
+playback automatically turns shuffle off and keeps it off for DJ's intended
+sequence, including after a transfer. Outside DJ, shuffle can be enabled again;
+repeat is unchanged. This is experimental, not a feature of the published release.
+
+When a track carries narration, librespot sends Spotify's supplied script to
+Spotify's authenticated `client-tts` service. Its signed HTTPS audio URL is
+downloaded without forwarding Spotify authorization headers. Clips stay in
+memory, with an 8 MiB download limit, a two-minute decoded-duration limit, and
+an eight-second request timeout. A failed clip is skipped without dropping
+the music. No microphone audio or user-written prompt is collected or sent.
+
+Narration passes through the same equalizer, visualization tap, and volume
+control as music. The song clock stays still during speech. Seeking skips an
+introduction, and transferring or loading partway through a song omits its
+narration. In the main player bar, **DJ** skips to Spotify's next set boundary
+and uses its jump introduction, leaving manually queued songs intact. This is
+a local playback control, not a new playlist or prompt-generation endpoint.
+Its menu can open DJ in Spotify for text/voice requests; those requests are
+not sent by Fastpotify.

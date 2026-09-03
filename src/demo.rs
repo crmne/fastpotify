@@ -606,6 +606,68 @@ pub fn apply_flags(app: &mut App, page: Option<&str>, show: Option<&str>) {
     }
     for surface in show.unwrap_or("").split(',').map(str::trim) {
         match surface {
+            "dj-playlist" => {
+                let uri = crate::player::DJ_URI;
+                let id = uri.rsplit(':').next().expect("DJ playlist id");
+                let mut placeholder = PlaylistPage {
+                    playlist: Loadable::Loaded(Playlist {
+                        id: id.into(),
+                        uri: uri.into(),
+                        name: "DJ".into(),
+                        description: Some("Your own DJ. Press play to start your session.".into()),
+                        owner: Owner {
+                            id: Some("spotify".into()),
+                            display_name: Some("Spotify".into()),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                };
+                placeholder.items.absorb(0, self::page(Vec::new()));
+                app.playlist_pages.insert(id.into(), placeholder);
+                let page = Page::Playlist(id.into());
+                app.table_sorts.insert(
+                    page.clone(),
+                    TableSort {
+                        column: SortColumn::Title,
+                        ascending: true,
+                    },
+                );
+                app.remote = None;
+                app.open(page);
+            }
+            "dj" | "dj-speaking" => {
+                let item = track(0);
+                app.local.connected = true;
+                app.local.playback = crate::player::Playback::Playing;
+                app.local.track = Some(crate::player::LocalTrack {
+                    uri: item.uri,
+                    title: item.name,
+                    artists: item
+                        .artists
+                        .iter()
+                        .map(|artist| artist.name.clone())
+                        .collect(),
+                    duration_ms: item.duration_ms,
+                    art_url: item
+                        .album
+                        .as_ref()
+                        .and_then(|album| album.images.first())
+                        .map(|image| image.url.clone()),
+                    ..Default::default()
+                });
+                app.local.position_ms = if surface == "dj-speaking" { 0 } else { 45_000 };
+                app.local.narrating = surface == "dj-speaking";
+                app.local.dj_context = Some(crate::player::DJ_URI.into());
+                app.local.dj_next_set = Some(crate::player::DjSet {
+                    uri: "spotify:track:trk5".into(),
+                    uid: "demo-set-two".into(),
+                    consumed: (1..=5)
+                        .map(|index| format!("spotify:track:trk{index}"))
+                        .collect(),
+                });
+            }
             "queue" => app.show_queue_panel = true,
             "recents" => {
                 app.show_queue_panel = true;

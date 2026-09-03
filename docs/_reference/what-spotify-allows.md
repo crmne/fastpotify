@@ -71,6 +71,11 @@ Fastpotify uses a small librespot fork. Its patches add queue controls,
 normalisation data for the visualisers, and an event for rejected audio keys.
 They are listed in `Cargo.toml`. Larger changes go upstream first.
 
+The experimental DJ build also uses proposed engine support for Spotify's
+generated DJ sessions, narration, continuation pages, and set changes. This
+is not a capability of unmodified librespot 0.8. See
+[How It Connects](/how-it-connects/#experimental-dj-receiver).
+
 ## Not available
 
 The Web API and librespot do not provide these features:
@@ -80,6 +85,8 @@ The Web API and librespot do not provide these features:
   support its protocol. Fastpotify's pins are local and are stored in
   `settings.json`. See [issue #31](https://github.com/crmne/fastpotify/issues/31).
 - **Editing playlist folders.** librespot can only read them.
+- **Text or voice requests to DJ.** Fastpotify can play Spotify's supplied
+  sets, but cannot send a custom prompt or record microphone input for DJ.
 - **Smart Shuffle, Jam, Blend, and similar Spotify features.** Spotify
   generates these for its own clients. Fastpotify only has plain shuffle.
 - **Lossless audio.** librespot does not receive lossless streams. Fastpotify

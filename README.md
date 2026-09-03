@@ -45,6 +45,10 @@ everyday use, and connection details.
   in it, whether it is running or not. `open.spotify.com` addresses go
   through the browser, which hands them to the same handler.
 - **Queue** as a side panel or a page; add anything to it from a row menu.
+- **Experimental Spotify DJ.** Plays Spotify's generated sets and narration.
+  The **DJ** button changes sets; ordinary Next still skips one song. Local DJ
+  playback keeps shuffle off. Text and voice requests stay in Spotify's app.
+  See [connection details](docs/_reference/how-it-connects.md#experimental-dj-receiver).
 - **Resumes the last session.** On startup, the last song is paused where it
   stopped. Play resumes it, and the other playback controls work before it
   starts.

@@ -151,7 +151,12 @@ pub fn actions_row(
             {
                 if now_playing_here {
                     app.actions.push(Action::TogglePlay);
-                } else if let Some(uris) = actions.view.clone() {
+                } else if let Some(uris) = actions.view.clone().filter(|_| {
+                    // DJ is a generated session, not the (usually empty)
+                    // placeholder's rows, even when the table is sorted.
+                    uri != crate::player::DJ_URI
+                        && app.local.dj_context.as_deref() != Some(uri.as_str())
+                }) {
                     app.actions.push(Action::PlayFromRow {
                         context: RowContext::View {
                             uris,

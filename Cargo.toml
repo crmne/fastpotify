@@ -173,12 +173,14 @@ opt-level = 0
 projectm-sys = { git = "https://github.com/crmne/projectm-rs", branch = "respect-cmake-generator" }
 # librespot 0.8.0 plus the small patches Fastpotify needs: queue controls,
 # normalisation-factor reporting for the visualisers, and a distinct event
-# when Spotify refuses an audio key. Every librespot crate comes from the
-# fork so one copy exists. Drop patches as upstream takes them.
-librespot-audio = { git = "https://github.com/crmne/librespot", branch = "fastpotify-0.8" }
-librespot-connect = { git = "https://github.com/crmne/librespot", branch = "fastpotify-0.8" }
-librespot-core = { git = "https://github.com/crmne/librespot", branch = "fastpotify-0.8" }
-librespot-metadata = { git = "https://github.com/crmne/librespot", branch = "fastpotify-0.8" }
-librespot-oauth = { git = "https://github.com/crmne/librespot", branch = "fastpotify-0.8" }
-librespot-playback = { git = "https://github.com/crmne/librespot", branch = "fastpotify-0.8" }
-librespot-protocol = { git = "https://github.com/crmne/librespot", branch = "fastpotify-0.8" }
+# when Spotify refuses an audio key, plus experimental DJ session/narration
+# support. The immutable DJ review pin must move to the maintainer's merged
+# commit when the engine PR lands. Every librespot crate uses the same source.
+# Drop patches as upstream takes them.
+librespot-audio = { git = "https://github.com/derluke/librespot", rev = "3c79ae742ac1b194a00b28d4b9bfe0c24d94f07a" }
+librespot-connect = { git = "https://github.com/derluke/librespot", rev = "3c79ae742ac1b194a00b28d4b9bfe0c24d94f07a" }
+librespot-core = { git = "https://github.com/derluke/librespot", rev = "3c79ae742ac1b194a00b28d4b9bfe0c24d94f07a" }
+librespot-metadata = { git = "https://github.com/derluke/librespot", rev = "3c79ae742ac1b194a00b28d4b9bfe0c24d94f07a" }
+librespot-oauth = { git = "https://github.com/derluke/librespot", rev = "3c79ae742ac1b194a00b28d4b9bfe0c24d94f07a" }
+librespot-playback = { git = "https://github.com/derluke/librespot", rev = "3c79ae742ac1b194a00b28d4b9bfe0c24d94f07a" }
+librespot-protocol = { git = "https://github.com/derluke/librespot", rev = "3c79ae742ac1b194a00b28d4b9bfe0c24d94f07a" }
