@@ -1199,50 +1199,6 @@ fn drag_label(track: &DragTrack) -> String {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn song(uri: &str) -> PlayableItem {
-        PlayableItem::Track(Track {
-            uri: uri.to_string(),
-            ..Default::default()
-        })
-    }
-
-    #[test]
-    fn dragging_a_picked_row_carries_the_whole_selection() {
-        let first = song("spotify:track:first");
-        let second = song("spotify:track:second");
-        let dragged = dragged_items(&second, true, &[first.clone(), second.clone()]);
-        assert_eq!(
-            dragged.iter().map(PlayableItem::uri).collect::<Vec<_>>(),
-            [first.uri(), second.uri()],
-            "the sidebar receives every selected row in table order"
-        );
-    }
-
-    #[test]
-    fn dragging_multiple_songs_labels_the_first_and_the_rest() {
-        let track = DragTrack {
-            title: "Fitraten (VDJ Fly LoFi)".into(),
-            image: None,
-            items: vec![
-                PlayableItem::Track(Track {
-                    name: "Kora Panna".into(),
-                    ..Default::default()
-                }),
-                PlayableItem::Track(Track {
-                    name: "Fitraten (VDJ Fly LoFi)".into(),
-                    ..Default::default()
-                }),
-            ],
-            from: None,
-        };
-        assert_eq!(drag_label(&track), "Kora Panna + 1 more");
-    }
-}
-
 /// The chip that rides the pointer while a song is being dragged.
 pub fn drag_ghost(ctx: &egui::Context, palette: &Palette) {
     // A song and a sidebar row ride the pointer the same way.
@@ -1979,4 +1935,48 @@ pub fn setting_row(
         ui.with_layout(Layout::right_to_left(Align::Center), control);
     });
     ui.add_space(10.0);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn song(uri: &str) -> PlayableItem {
+        PlayableItem::Track(Track {
+            uri: uri.to_string(),
+            ..Default::default()
+        })
+    }
+
+    #[test]
+    fn dragging_a_picked_row_carries_the_whole_selection() {
+        let first = song("spotify:track:first");
+        let second = song("spotify:track:second");
+        let dragged = dragged_items(&second, true, &[first.clone(), second.clone()]);
+        assert_eq!(
+            dragged.iter().map(PlayableItem::uri).collect::<Vec<_>>(),
+            [first.uri(), second.uri()],
+            "the sidebar receives every selected row in table order"
+        );
+    }
+
+    #[test]
+    fn dragging_multiple_songs_labels_the_first_and_the_rest() {
+        let track = DragTrack {
+            title: "Fitraten (VDJ Fly LoFi)".into(),
+            image: None,
+            items: vec![
+                PlayableItem::Track(Track {
+                    name: "Kora Panna".into(),
+                    ..Default::default()
+                }),
+                PlayableItem::Track(Track {
+                    name: "Fitraten (VDJ Fly LoFi)".into(),
+                    ..Default::default()
+                }),
+            ],
+            from: None,
+        };
+        assert_eq!(drag_label(&track), "Kora Panna + 1 more");
+    }
 }
