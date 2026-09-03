@@ -227,7 +227,13 @@ pub fn show(
     if size.0 == 0 || size.1 == 0 {
         return Vec::new();
     }
-    render.layout.get_or_insert_with(|| Layout::build(view));
+    render.layout.get_or_insert_with(|| {
+        // The skin's declared numbers answer the expressions it writes
+        // in its attributes (`left="jscript:leftOffset;"`), so the
+        // window stands where drawing the skin's whole script first
+        // put it.
+        Layout::build_with(view, document.script.number_globals())
+    });
     if render.machine.is_none() {
         render.machine = Some(script::Machine::new(view));
         render.booted = false;

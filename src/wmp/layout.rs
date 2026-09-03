@@ -57,6 +57,10 @@ pub struct Layout {
     resolved: HashMap<String, [Option<i32>; 4]>,
     /// Expressions that could not be resolved, warned once.
     warned: HashSet<String>,
+    /// The skin's own numbers, declared as script globals: a name in
+    /// an expression that is not an element, nor an attribute, answers
+    /// from here (`left="jscript:leftOffset;"`).
+    constants: HashMap<String, i32>,
 }
 
 impl Layout {
@@ -64,6 +68,12 @@ impl Layout {
     /// view itself answers to its id and to the keyword `view`, the way
     /// skins write it.
     pub fn build(view: &View) -> Self {
+        Self::build_with(view, HashMap::new())
+    }
+
+    /// Builds the layout with the skin's declared constants, so the
+    /// expressions that name a script's `var` resolve against it.
+    pub fn build_with(view: &View, constants: HashMap<String, i32>) -> Self {
         let mut resolved = HashMap::new();
         let view_entry = [Some(0), Some(0), view.width, view.height];
         if let Some(id) = &view.id {
@@ -113,11 +123,13 @@ impl Layout {
                 let look = |name: &str, attr: &str| {
                     // A bare attribute name answers from the element
                     // itself: its own numbers as they settle, round by
-                    // round.
+                    // round. A bare name that is no attribute and no
+                    // element answers from the skin's declared numbers.
                     if attr.is_empty() {
-                        return Attr::from_name(name).and_then(|attr| {
-                            resolved.get(id).and_then(|entry| entry[attr.index()])
-                        });
+                        if let Some(attr) = Attr::from_name(name) {
+                            return resolved.get(id).and_then(|entry| entry[attr.index()]);
+                        }
+                        return constants.get(&name.to_ascii_lowercase()).copied();
                     }
                     Attr::from_name(attr)
                         .and_then(|attr| resolved.get(name).and_then(|entry| entry[attr.index()]))
@@ -138,7 +150,11 @@ impl Layout {
                 log_or_warn(&mut warned, expr, *index);
             }
         }
-        Self { resolved, warned }
+        Self {
+            resolved,
+            warned,
+            constants,
+        }
     }
 
     /// One geometry value: a number as written, or the expression that
@@ -164,13 +180,18 @@ impl Layout {
                 }
                 let look = |name: &str, attr: &str| {
                     if attr.is_empty() {
-                        return Self::own(common, self, id, name);
+                        // A bare attribute answers from the element
+                        // itself; a bare name that is neither answers
+                        // from the skin's declared numbers.
+                        Self::own(common, self, id, name)
+                            .or_else(|| self.constants.get(&name.to_ascii_lowercase()).copied())
+                    } else {
+                        Attr::from_name(attr).and_then(|attr| {
+                            self.resolved
+                                .get(name)
+                                .and_then(|entry| entry[attr.index()])
+                        })
                     }
-                    Attr::from_name(attr).and_then(|attr| {
-                        self.resolved
-                            .get(name)
-                            .and_then(|entry| entry[attr.index()])
-                    })
                 };
                 match eval(expr, &look) {
                     Some(number) => Some(number),
@@ -637,6 +658,43 @@ mod tests {
         assert_eq!(layout.number(&common, Attr::Left), Some(-12));
         assert_eq!(layout.number(&common, Attr::Width), Some(20));
         assert_eq!(layout.number(&common, Attr::Height), None);
+    }
+
+    #[test]
+    fn a_bare_name_that_is_a_script_number_answers_the_layout() {
+        // A skin writes `left="jscript:leftOffset;"`, where leftOffset
+        // is a number its script declares. The constants the skin's
+        // globals settled resolve the attribute; one that names no
+        // number stays nothing.
+        let view = view_with(
+            r#"<subview id="head" left="jscript:leftOffset;" top="jscript:vidClosedPos;"/>"#,
+        );
+        let constants = [("leftoffset", 260), ("vidclosedpos", 40)]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect();
+        let mut layout = Layout::build_with(&view, constants);
+        let common = walk_first_common(&view);
+        assert_eq!(layout.number(&common, Attr::Left), Some(260));
+        assert_eq!(layout.number(&common, Attr::Top), Some(40));
+    }
+
+    #[test]
+    fn an_expression_builds_on_a_script_number() {
+        // A pane's width settles from a constant, and the arithmetic
+        // the skin writes on it settles too.
+        let view = view_with(
+            r#"<subview id="splEqPl" left="jscript:eqPlClosedPos;" top="jscript:eqPlClosedPos" height="jscript:vidClosedPos*2;"/>"#,
+        );
+        let constants = [("eqplclosedpos", 300), ("vidclosedpos", 40)]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect();
+        let mut layout = Layout::build_with(&view, constants);
+        let common = walk_first_common(&view);
+        assert_eq!(layout.number(&common, Attr::Left), Some(300));
+        assert_eq!(layout.number(&common, Attr::Top), Some(300));
+        assert_eq!(layout.number(&common, Attr::Height), Some(80));
     }
 
     #[test]

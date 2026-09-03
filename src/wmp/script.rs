@@ -63,6 +63,12 @@ pub enum Expr {
     Name(String),
     /// A property of a name: `x.visible`, `x.enabled`, `x.down`.
     Prop(String, String),
+    /// Arithmetic, so a global like `eqPlClosedPos = leftOffset+40`
+    /// settles on the player's own numbers.
+    Add(Box<Expr>, Box<Expr>),
+    Sub(Box<Expr>, Box<Expr>),
+    Mul(Box<Expr>, Box<Expr>),
+    Div(Box<Expr>, Box<Expr>),
     Not(Box<Expr>),
     Equal(Box<Expr>, Box<Expr>),
     NotEqual(Box<Expr>, Box<Expr>),
@@ -104,6 +110,19 @@ impl Expr {
                 "enabled" | "down" => Val::Unknown,
                 _ => Val::Unknown,
             },
+            // Arithmetic over known numbers; anything the machine has
+            // not taken a number for leaves the whole as unknown. A
+            // division by zero is unknown too.
+            Expr::Add(a, b) => arith(|x, y| x + y, a.eval(machine), b.eval(machine)),
+            Expr::Sub(a, b) => arith(|x, y| x - y, a.eval(machine), b.eval(machine)),
+            Expr::Mul(a, b) => arith(|x, y| x * y, a.eval(machine), b.eval(machine)),
+            Expr::Div(a, b) => {
+                let (a, b) = (a.eval(machine), b.eval(machine));
+                match (a, b) {
+                    (Val::Num(x), Val::Num(y)) if y != 0.0 => Val::Num(x / y),
+                    _ => Val::Unknown,
+                }
+            }
             Expr::Not(inner) => Val::Flag(!inner.eval(machine).truth(&machine.panes)),
             Expr::Equal(a, b) => Val::Flag(a.eval(machine).same(&b.eval(machine))),
             Expr::NotEqual(a, b) => Val::Flag(!a.eval(machine).same(&b.eval(machine))),
@@ -141,6 +160,15 @@ fn compare(a: Val, b: Val) -> Option<std::cmp::Ordering> {
     match (a, b) {
         (Val::Num(a), Val::Num(b)) => a.partial_cmp(&b),
         _ => None,
+    }
+}
+
+/// One arithmetic step over two number values; a value that is not a
+/// number makes the step unknown.
+fn arith(step: impl Fn(f64, f64) -> f64, a: Val, b: Val) -> Val {
+    match (a, b) {
+        (Val::Num(a), Val::Num(b)) => Val::Num(step(a, b)),
+        _ => Val::Unknown,
     }
 }
 
@@ -213,6 +241,34 @@ impl Script {
     /// A function by its name, however it is written.
     pub fn function(&self, name: &str) -> Option<&Function> {
         self.functions.get(&name.to_ascii_lowercase())
+    }
+
+    /// The global variables the skin declares with numbers, by name, as
+    /// the layout arithmetic needs them. Later declarations may build
+    /// on earlier ones (`eqPlClosedPos = leftOffset+40`), so they
+    /// settle in the order the skin wrote them; a declaration that is
+    /// not a number, or that cannot be settled, is left out.
+    pub fn number_globals(&self) -> HashMap<String, i32> {
+        let mut out = HashMap::new();
+        let mut machine = Machine::default();
+        for statement in &self.globals {
+            let Statement::Var {
+                name,
+                init: Some(init),
+            } = statement
+            else {
+                continue;
+            };
+            if let Val::Num(number) = init.eval(&machine)
+                && number.fract() == 0.0
+                && ((-2147483648.0..=2147483647.0).contains(&number))
+            {
+                let key = name.to_ascii_lowercase();
+                machine.vars.insert(key.clone(), Val::Num(number));
+                out.insert(key, number as i32);
+            }
+        }
+        out
     }
 }
 
@@ -583,9 +639,10 @@ fn read_function(chars: &[char]) -> Option<(String, Function, usize)> {
     let open = chars[at..].iter().position(|c| *c == '{')?;
     let span = match_bracket(&chars[at + open..], '{')?;
     let body_text: String = chars[at + open + 1..at + open + span - 1].iter().collect();
-    let Ok(body) = block(&body_text) else {
-        return None;
-    };
+    // A body the machine cannot follow whole is kept anyway, its steps
+    // as far as they parsed, so the rest of the script — the globals
+    // that name the skin's numbers — is still read.
+    let body = block(&body_text).unwrap_or_default();
     Some((name, Function { params, body }, at + open + span))
 }
 
@@ -874,6 +931,11 @@ fn run_of(tokens: &[Token]) -> Result<(Vec<Statement>, usize), ()> {
                     _ => {}
                 }
             }
+            // A `{` with nothing closing it is not a block to read; the
+            // whole statement is not to be followed.
+            if end == 0 {
+                return Err(());
+            }
             let statements = block(&text_of(&tokens[1..end]))?;
             Ok((statements, end + 1))
         }
@@ -1042,9 +1104,10 @@ fn call(tokens: &[Token]) -> Result<(Statement, usize), ()> {
 }
 
 /// An expression, from the head of the stream, up to but not past the
-/// next mark that ends it. The binding tightens as the level climbs.
+/// next mark that ends it. The binding tightens as the level climbs:
+/// ternary, the or, the and, comparison, then arithmetic, then signs.
 fn expression(tokens: &[Token], level: u8) -> Result<(Expr, usize), ()> {
-    if level > 5 {
+    if level > 7 {
         return Err(());
     }
     let (mut expr, mut used) = match level {
@@ -1052,7 +1115,9 @@ fn expression(tokens: &[Token], level: u8) -> Result<(Expr, usize), ()> {
         1 => either(tokens, "||", 2)?,
         2 => either(tokens, "&&", 3)?,
         3 => comparison(tokens)?,
-        4 => unary(tokens)?,
+        4 => expression(tokens, 5)?,
+        5 => expression(tokens, 6)?,
+        6 => unary(tokens)?,
         _ => primary(tokens)?,
     };
     while matches!(
@@ -1071,6 +1136,10 @@ fn expression(tokens: &[Token], level: u8) -> Result<(Expr, usize), ()> {
             "!=" => Expr::NotEqual(Box::new(expr), Box::new(right)),
             ">" => Expr::Greater(Box::new(expr), Box::new(right)),
             "<" => Expr::Less(Box::new(expr), Box::new(right)),
+            "+" => Expr::Add(Box::new(expr), Box::new(right)),
+            "-" => Expr::Sub(Box::new(expr), Box::new(right)),
+            "*" => Expr::Mul(Box::new(expr), Box::new(right)),
+            "/" => Expr::Div(Box::new(expr), Box::new(right)),
             _ => break,
         };
         used += 1 + span;
@@ -1080,10 +1149,11 @@ fn expression(tokens: &[Token], level: u8) -> Result<(Expr, usize), ()> {
 
 fn binary_continues(punct: &str, level: u8) -> bool {
     match level {
-        0 => false,
         1 => punct == "||",
         2 => punct == "&&",
         3 => matches!(punct, "==" | "!=" | ">" | "<"),
+        4 => matches!(punct, "+" | "-"),
+        5 => matches!(punct, "*" | "/"),
         _ => false,
     }
 }
@@ -1122,19 +1192,28 @@ fn either(tokens: &[Token], mark: &str, level: u8) -> Result<(Expr, usize), ()> 
     Ok((expr, used))
 }
 
-/// `a == b`, `a != b`, `a > b`, `a < b`, or the unary beneath.
+/// `a == b`, `a != b`, `a > b`, `a < b`, or the arithmetic beneath.
 fn comparison(tokens: &[Token]) -> Result<(Expr, usize), ()> {
     let (expr, used) = expression(tokens, 4)?;
     Ok((expr, used))
 }
 
-/// `!expr`, or the primary beneath.
+/// `!expr` or `-expr`, or the primary beneath.
 fn unary(tokens: &[Token]) -> Result<(Expr, usize), ()> {
     if tokens.first() == Some(&Token::Punct("!".into())) {
         let (inner, used) = unary(&tokens[1..])?;
         return Ok((Expr::Not(Box::new(inner)), used + 1));
     }
-    expression(tokens, 5)
+    if tokens.first() == Some(&Token::Punct("-".into())) {
+        let (inner, used) = unary(&tokens[1..])?;
+        // A negated number is the subtraction from zero; anything not a
+        // number stayed unknown and stays so.
+        return Ok((
+            Expr::Sub(Box::new(Expr::Val(Val::Num(0.0))), Box::new(inner)),
+            used + 1,
+        ));
+    }
+    expression(tokens, 7)
 }
 
 /// A literal, a name, a property of a name, a parenthesised
@@ -1402,6 +1481,51 @@ function SetVisibility(pane)
         assert_eq!(machine.visible("sAudio"), Some(true));
         machine.handler(&script, "SetVisibility(currentPane==1?0:1);");
         assert_eq!(machine.visible("sAudio"), Some(false));
+    }
+
+    #[test]
+    fn a_function_the_machine_cannot_follow_whole_is_kept_anyway() {
+        // A body whose statement the machine does not read must not
+        // take the rest of the script with it: the globals that name
+        // the skin's numbers still parse.
+        let (script, _) = script(
+            r#"var leftOffset = 260;
+function SetHead()
+{
+    var sTmp = theme.loadPreference("headup");
+}
+var vidClosedPos = 40;"#,
+        );
+        let constants = script.number_globals();
+        assert_eq!(constants.get("leftoffset"), Some(&260));
+        assert_eq!(constants.get("vidclosedpos"), Some(&40));
+    }
+
+    #[test]
+    fn arithmetic_globals_settle_against_each_other() {
+        let (script, _) = script(
+            r#"var leftOffset = 260;
+var eqPlClosedPos = leftOffset+40;
+var half = eqPlClosedPos/2;
+var neg = -5;"#,
+        );
+        let constants = script.number_globals();
+        assert_eq!(constants.get("eqplclosedpos"), Some(&300));
+        assert_eq!(constants.get("half"), Some(&150));
+        assert_eq!(constants.get("neg"), Some(&-5));
+    }
+
+    #[test]
+    fn number_globals_leave_non_numbers_out() {
+        let (script, _) = script(
+            r##"var label = "#FFE53B";
+var on = false;
+var steps = 4;"##,
+        );
+        let constants = script.number_globals();
+        assert_eq!(constants.get("label"), None);
+        assert_eq!(constants.get("on"), None);
+        assert_eq!(constants.get("steps"), Some(&4));
     }
 
     #[test]

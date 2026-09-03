@@ -1653,7 +1653,7 @@ impl App {
         }
         self.sync_wmp_skin(ctx);
         if let Some(loaded) = self.wmp.poll() {
-            self.wmp_loaded(loaded);
+            self.wmp_loaded(ctx, loaded);
         }
         let fetched = self.winamp.presets.poll();
         if let Some(fetched) = fetched {
@@ -1780,7 +1780,7 @@ impl App {
     /// Puts a freshly read WMP skin on. The first one arrives while the
     /// big window is up — the skin window's size is only known from the
     /// skin — so the loop opens the small one.
-    fn wmp_loaded(&mut self, loaded: crate::wmp::Loaded) {
+    fn wmp_loaded(&mut self, ctx: &egui::Context, loaded: crate::wmp::Loaded) {
         match loaded.result {
             Ok(document) => {
                 let was_none = self.wmp.skin.is_none();
@@ -1792,7 +1792,12 @@ impl App {
                     },
                 );
                 if was_none && self.settings.wmp_window {
+                    // The window that opened before the skin was read was
+                    // the plain one, since a skin window needs the skin's
+                    // size to open. Stand the skin window now: the loop
+                    // in `main` closes this and reopens the other kind.
                     self.switch_intent = true;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
             }
             Err(error) => {
@@ -6710,10 +6715,13 @@ mod tests {
         let document =
             crate::wmp::SkinDocument::from_files("toothy", [("toothy.wms", b"<theme/>".to_vec())])
                 .unwrap();
-        app.wmp_loaded(crate::wmp::Loaded {
-            name: "Toothy.wmz".into(),
-            result: Ok(document),
-        });
+        app.wmp_loaded(
+            &egui::Context::default(),
+            crate::wmp::Loaded {
+                name: "Toothy.wmz".into(),
+                result: Ok(document),
+            },
+        );
 
         // #then
         assert!(app.wmp.skin.is_some());
@@ -6725,10 +6733,13 @@ mod tests {
         let document =
             crate::wmp::SkinDocument::from_files("toothy", [("toothy.wms", b"<theme/>".to_vec())])
                 .unwrap();
-        app.wmp_loaded(crate::wmp::Loaded {
-            name: "Toothy.wmz".into(),
-            result: Ok(document),
-        });
+        app.wmp_loaded(
+            &egui::Context::default(),
+            crate::wmp::Loaded {
+                name: "Toothy.wmz".into(),
+                result: Ok(document),
+            },
+        );
 
         // #then
         assert!(!app.switch_intent, "the window is already the small one");
@@ -6771,10 +6782,13 @@ mod tests {
         app.settings.wmp_skin = Some("Broken.wmz".into());
 
         // #when
-        app.wmp_loaded(crate::wmp::Loaded {
-            name: "Broken.wmz".into(),
-            result: Err(crate::wmp::WmpError::NoDefinition),
-        });
+        app.wmp_loaded(
+            &egui::Context::default(),
+            crate::wmp::Loaded {
+                name: "Broken.wmz".into(),
+                result: Err(crate::wmp::WmpError::NoDefinition),
+            },
+        );
 
         // #then
         assert!(!app.settings.wmp_window);
@@ -6801,10 +6815,13 @@ mod tests {
         app.settings.wmp_skin = Some("Broken.wmz".into());
 
         // #when
-        app.wmp_loaded(crate::wmp::Loaded {
-            name: "Broken.wmz".into(),
-            result: Err(crate::wmp::WmpError::NoDefinition),
-        });
+        app.wmp_loaded(
+            &egui::Context::default(),
+            crate::wmp::Loaded {
+                name: "Broken.wmz".into(),
+                result: Err(crate::wmp::WmpError::NoDefinition),
+            },
+        );
 
         // #then
         assert!(app.settings.wmp_window);
