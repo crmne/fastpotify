@@ -1191,6 +1191,14 @@ fn dragged_items(
     }
 }
 
+fn drag_label(track: &DragTrack) -> String {
+    match track.items.as_slice() {
+        [] => track.title.clone(),
+        [item] => item.name().to_string(),
+        [first, rest @ ..] => format!("{} + {} more", first.name(), rest.len()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1213,13 +1221,33 @@ mod tests {
             "the sidebar receives every selected row in table order"
         );
     }
+
+    #[test]
+    fn dragging_multiple_songs_labels_the_first_and_the_rest() {
+        let track = DragTrack {
+            title: "Fitraten (VDJ Fly LoFi)".into(),
+            image: None,
+            items: vec![
+                PlayableItem::Track(Track {
+                    name: "Kora Panna".into(),
+                    ..Default::default()
+                }),
+                PlayableItem::Track(Track {
+                    name: "Fitraten (VDJ Fly LoFi)".into(),
+                    ..Default::default()
+                }),
+            ],
+            from: None,
+        };
+        assert_eq!(drag_label(&track), "Kora Panna + 1 more");
+    }
 }
 
 /// The chip that rides the pointer while a song is being dragged.
 pub fn drag_ghost(ctx: &egui::Context, palette: &Palette) {
     // A song and a sidebar row ride the pointer the same way.
     let chip = egui::DragAndDrop::payload::<DragTrack>(ctx)
-        .map(|track| (track.title.clone(), track.image.clone()))
+        .map(|track| (drag_label(&track), track.image.clone()))
         .or_else(|| {
             egui::DragAndDrop::payload::<DragEntry>(ctx)
                 .map(|entry| (entry.title.clone(), entry.image.clone()))
