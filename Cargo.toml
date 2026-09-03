@@ -62,15 +62,11 @@ raw-window-handle = { version = "0.6", optional = true }
 # Spotify playback and Connect. rustls everywhere so the client links one TLS
 # stack and builds without OpenSSL on every platform.
 #
-# librespot-core depends on hyper-proxy2 for HTTP proxy support, whose only
-# published release (0.1.0) pins rustls 0.22 and so drags in rustls-webpki
-# 0.102, which carries advisories against its CRL and name-constraint
-# handling. Fastpotify never configures a proxy (SessionConfig.proxy stays
-# None), so that TLS client is compiled in but never used to verify anything.
-# Every connection this app actually makes (the Web API through reqwest, and
-# librespot's own sessions) goes through rustls 0.23 with a patched
-# rustls-webpki. Removing the old copy needs a release of hyper-proxy2, or a
-# librespot that stops depending on it.
+# librespot-core depends on hyper-proxy2 for HTTP proxy support. The
+# published 0.1.0 release pins rustls 0.22 / rustls-webpki 0.102; we patch
+# it (see [patch.crates-io]) onto rustls 0.23 so CONNECT-then-TLS uses the
+# same stack as the rest of the client. SOCKS5 still covers the Web API but
+# not the engine: librespot only speaks HTTP CONNECT.
 librespot-core = { version = "0.8", default-features = false, features = ["rustls-tls-native-roots"] }
 librespot-playback = { version = "0.8", default-features = false, features = ["rodio-backend", "rustls-tls-native-roots"] }
 librespot-connect = { version = "0.8", default-features = false }
@@ -84,11 +80,19 @@ protobuf = "3"
 # so nothing new is compiled.
 rodio = { version = "0.21", default-features = false, features = ["playback"] }
 cpal = "0.16"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "json", "gzip", "http2", "blocking"] }
+# `socks` is SOCKS5 proxy support for the Web API, artwork, lyrics, and
+# update checks. HTTP proxies work without it. `system-proxy` reads the OS
+# proxy on macOS and Windows when the mode is System; Linux uses environment
+# variables either way.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "json", "gzip", "http2", "blocking", "socks", "system-proxy"] }
+# Same System-proxy matcher reqwest uses, so local playback follows the same
+# HTTP proxy (environment, and the OS proxy on macOS and Windows).
+hyper-util = { version = "0.1", default-features = false, features = ["client-proxy", "client-proxy-system"] }
+http = "1"
 # `fs` is used by the playlist cache in `backend.rs`. On Linux the
 # mpris-server dependency happens to turn it on, which is why leaving it out
-# built there and nowhere else.
-tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "fs"] }
+# built there and nowhere else. `net` is the local HTTP-proxy tests.
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "fs", "net", "io-util"] }
 sha1 = "0.10"
 sha2 = "0.10"
 base64 = "0.22"
@@ -171,6 +175,9 @@ opt-level = 0
 # explicit CMAKE_GENERATOR win. Drop when upstream takes the change.
 [patch.crates-io]
 projectm-sys = { git = "https://github.com/crmne/projectm-rs", branch = "respect-cmake-generator" }
+# hyper-proxy2 0.1.0 still verifies proxied HTTPS with rustls 0.22. Drop when
+# a release, or a librespot that no longer depends on it, uses rustls 0.23.
+hyper-proxy2 = { path = "vendor/hyper-proxy2" }
 # librespot 0.8.0 plus the small patches Fastpotify needs: queue controls,
 # normalisation-factor reporting for the visualisers, and a distinct event
 # when Spotify refuses an audio key. Every librespot crate comes from the

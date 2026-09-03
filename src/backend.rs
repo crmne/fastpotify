@@ -17,15 +17,37 @@ use crate::api::{
     AccountId, ApiError, ApiGateway, ApiSource, NetActivity, Operation, PlayRequest, PlaylistId,
     SessionState, TokenProvider, WebTokens,
 };
+use crate::http::Http;
 use crate::images::{ArtLoader, accent_color};
 use crate::model::PlaylistCache;
 use crate::paths::AppDirs;
 use crate::player::{Engine, EngineConfig, EngineEvent, LoadSpec, LocalState, PlayerCommand};
+use crate::settings::ProxyConfig;
 
 pub type ApiResult<T> = Result<T, ApiError>;
 
 const PREMIUM_NEEDED: &str = "Local playback needs Spotify Premium.";
 pub const PLAYLIST_PAGE_SIZE: u32 = 50;
+const RECONNECT_WINDOW: Duration = Duration::from_secs(600);
+const RECONNECT_LIMIT: usize = 6;
+
+/// True when the session has already dropped this many times in the window,
+/// so another reconnect would only flap. Callers that still reconnect must
+/// push `now` themselves.
+fn session_drops_exhausted(reconnects: &mut Vec<Instant>, now: Instant) -> bool {
+    reconnects.retain(|attempt| now.duration_since(*attempt) < RECONNECT_WINDOW);
+    reconnects.len() >= RECONNECT_LIMIT
+}
+
+/// Record a replacement requested while a connection attempt is still in
+/// flight. The finished attempt must be discarded and immediately retried
+/// with the newest config instead of installing stale state.
+fn defer_engine_replace(engine_busy: bool, restart_pending: &mut bool) -> bool {
+    if engine_busy {
+        *restart_pending = true;
+    }
+    engine_busy
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum AuthStatus {
@@ -420,6 +442,9 @@ pub enum Command {
     AuthorizePlayback,
     /// Reload the engine config (audio settings changed).
     RestartEngine(EngineConfig),
+    /// Rebuild the HTTP client. Restart local playback only when its HTTP
+    /// proxy changed; Off, System, and SOCKS5 share a direct engine connection.
+    ApplyProxy(ProxyConfig),
     Player(PlayerCommand),
     Api(ApiRequest),
     Accent {
@@ -614,11 +639,7 @@ impl Backend {
             .enable_all()
             .build()
             .expect("unable to start the async runtime");
-        let http = reqwest::Client::builder()
-            .user_agent(concat!("fastpotify/", env!("CARGO_PKG_VERSION")))
-            .timeout(Duration::from_secs(30))
-            .build()
-            .expect("unable to build the HTTP client");
+        let http = Http::from_proxy(&engine_config.proxy);
         let art = ArtLoader::new(http.clone(), runtime.handle().clone(), dirs.art_cache_dir());
         let activity = Arc::new(NetActivity::default());
 
@@ -752,7 +773,7 @@ struct Worker {
     dirs: AppDirs,
     engine_config: EngineConfig,
     web_client_id: Option<String>,
-    http: reqwest::Client,
+    http: Http,
     api: Arc<ApiGateway>,
     background_api: Arc<tokio::sync::Semaphore>,
     art: ArtLoader,
@@ -763,6 +784,9 @@ struct Worker {
     /// True while a playback grant or engine connection is in flight, so a
     /// second attempt does not pile up.
     engine_busy: bool,
+    /// A user changed engine-affecting settings while the current connection
+    /// attempt was in flight. Its result is stale and must not be installed.
+    engine_restart_pending: bool,
     signed_in: bool,
     /// The plan, once the Web API has answered.
     premium: Option<bool>,
@@ -783,7 +807,7 @@ impl Worker {
         dirs: AppDirs,
         engine_config: EngineConfig,
         web_client_id: Option<String>,
-        http: reqwest::Client,
+        http: Http,
         art: ArtLoader,
         activity: Arc<NetActivity>,
         events: std::sync::mpsc::Sender<Event>,
@@ -803,6 +827,7 @@ impl Worker {
             waker,
             engine: None,
             engine_busy: false,
+            engine_restart_pending: false,
             signed_in: false,
             premium: None,
             cancel_signin: None,
@@ -817,6 +842,28 @@ impl Worker {
     fn emit(&self, event: Event) {
         let _ = self.events.send(event);
         self.waker.wake();
+    }
+
+    fn apply_proxy(&self, proxy: ProxyConfig) {
+        match crate::http::build_client(&proxy) {
+            Ok(client) => {
+                match &proxy {
+                    ProxyConfig::Off => log::info!("not using a proxy"),
+                    ProxyConfig::System => log::info!("using the system proxy"),
+                    ProxyConfig::Http(manual) => {
+                        log::info!("using HTTP proxy {}", manual.redacted())
+                    }
+                    ProxyConfig::Socks(manual) => {
+                        log::info!("using SOCKS5 proxy {}", manual.redacted())
+                    }
+                }
+                self.http.replace(client);
+            }
+            Err(error) => {
+                log::warn!("unable to apply the proxy: {error}");
+                self.emit(Event::Error(format!("Proxy could not be applied: {error}")));
+            }
+        }
     }
 
     async fn run(&mut self, mut commands: mpsc::UnboundedReceiver<Command>) {
@@ -839,8 +886,21 @@ impl Worker {
                 Command::SignOut => self.sign_out(),
                 Command::AuthorizePlayback => self.authorize_playback(),
                 Command::RestartEngine(config) => {
+                    if self.engine_config.proxy != config.proxy {
+                        self.apply_proxy(config.proxy.clone());
+                    }
                     self.engine_config = config;
-                    self.reconnect_engine();
+                    self.replace_engine();
+                }
+                Command::ApplyProxy(proxy) => {
+                    let restart = self.engine_config.proxy.restarts_local_playback(&proxy);
+                    if self.engine_config.proxy != proxy {
+                        self.apply_proxy(proxy.clone());
+                        self.engine_config.proxy = proxy;
+                    }
+                    if restart {
+                        self.replace_engine();
+                    }
                 }
                 Command::Player(command) => match &self.engine {
                     Some(engine) => {
@@ -1109,7 +1169,7 @@ impl Worker {
                 log::warn!("unable to open a browser: {error}");
             }
         });
-        let http = self.http.clone();
+        let http = self.http.client();
         let events = self.events.clone();
         let waker = self.waker.clone();
         let commands = self.commands.clone();
@@ -1220,14 +1280,50 @@ impl Worker {
         }
     }
 
-    /// Reconnect the engine after its session dropped or audio settings
-    /// changed. Whatever was playing comes back at the same spot on the new
-    /// session, so a dropped connection is a pause of a few seconds rather
-    /// than silence.
+    /// Replace the engine after a user-initiated change (audio settings or
+    /// an HTTP proxy). Does not count toward the drop limiter: flipping a
+    /// setting is not the session falling over.
+    fn replace_engine(&mut self) {
+        if !self.signed_in {
+            return;
+        }
+        if defer_engine_replace(self.engine_busy, &mut self.engine_restart_pending) {
+            return;
+        }
+        self.take_engine_for_resume();
+        self.resume_engine();
+    }
+
+    /// Reconnect the engine after its session dropped on its own. Whatever
+    /// was playing comes back at the same spot on the new session, so a
+    /// dropped connection is a pause of a few seconds rather than silence.
+    /// Six drops in ten minutes stop the loop so a flapping session cannot
+    /// sit there reconnecting forever.
     fn reconnect_engine(&mut self) {
         if !self.signed_in {
             return;
         }
+        if self.engine_busy {
+            return;
+        }
+        let now = Instant::now();
+        if session_drops_exhausted(&mut self.reconnects, now) {
+            self.take_engine_for_resume();
+            self.resume = None;
+            self.emit(Event::Playback(LocalPlayback::Failed(
+                "Local playback keeps dropping. Re-enable it from Settings.".into(),
+            )));
+            return;
+        }
+        self.reconnects.push(now);
+        log::info!(
+            "local playback session ended; reconnecting ({} of {RECONNECT_LIMIT} in ten minutes)",
+            self.reconnects.len()
+        );
+        self.replace_engine();
+    }
+
+    fn take_engine_for_resume(&mut self) {
         self.resume_verify = None;
         if let Some(engine) = self.engine.take() {
             self.resume = engine.interrupted().map(|interrupted| LoadSpec {
@@ -1238,22 +1334,6 @@ impl Worker {
             });
             engine.shutdown();
         }
-        let now = Instant::now();
-        self.reconnects
-            .retain(|attempt| now.duration_since(*attempt) < Duration::from_secs(600));
-        if self.reconnects.len() >= 6 {
-            self.resume = None;
-            self.emit(Event::Playback(LocalPlayback::Failed(
-                "Local playback keeps dropping. Re-enable it from Settings.".into(),
-            )));
-            return;
-        }
-        self.reconnects.push(now);
-        log::info!(
-            "local playback session ended; reconnecting ({} of 6 in ten minutes)",
-            self.reconnects.len()
-        );
-        self.resume_engine();
     }
 
     /// Start (or re-enter) the playback authorization in the browser. This is
@@ -1280,7 +1360,7 @@ impl Worker {
                 log::warn!("unable to open a browser: {error}");
             }
         });
-        let http = self.http.clone();
+        let http = self.http.client();
         let events = self.events.clone();
         let waker = self.waker.clone();
         let commands = self.commands.clone();
@@ -1374,6 +1454,15 @@ impl Worker {
 
     fn on_engine_connected(&mut self, engine: Option<Engine>, error: Option<String>) {
         self.engine_busy = false;
+        if std::mem::take(&mut self.engine_restart_pending) {
+            if let Some(engine) = engine {
+                engine.shutdown();
+            }
+            // Keep `resume`: it belongs to the engine which was replaced,
+            // not to this stale attempt. The newest config is already stored.
+            self.resume_engine();
+            return;
+        }
         match engine {
             Some(engine) => {
                 let device_id = engine.device_id().to_string();
@@ -1454,6 +1543,10 @@ impl Worker {
                             .to_string()
                     })?;
                 let http = reqwest::blocking::Client::builder()
+                    // Receiver endpoints are private LAN addresses. Keep
+                    // them off environment and OS proxies even when System
+                    // mode is active.
+                    .no_proxy()
                     .timeout(std::time::Duration::from_secs(8))
                     .build()
                     .map_err(|error| error.to_string())?;
@@ -1468,7 +1561,7 @@ impl Worker {
     }
 
     fn check_for_updates(&self) {
-        let http = self.http.clone();
+        let http = self.http.client();
         let events = self.events.clone();
         let waker = self.waker.clone();
         tokio::spawn(async move {
@@ -1541,7 +1634,7 @@ impl Worker {
     }
 
     fn fetch_lyrics(&self, request: LyricsRequest) {
-        let http = self.http.clone();
+        let http = self.http.client();
         let events = self.events.clone();
         let waker = self.waker.clone();
         let cache_dir = self.dirs.lyrics_cache_dir();
@@ -2249,5 +2342,48 @@ mod playlist_cache_tests {
         assert_eq!(stored.snapshot, "second");
         assert!(!path.with_extension("json.tmp").exists());
         let _ = std::fs::remove_dir_all(root);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn six_session_drops_in_ten_minutes_give_up() {
+        let start = Instant::now();
+        let mut reconnects = Vec::new();
+        for i in 0..RECONNECT_LIMIT {
+            let at = start + Duration::from_secs(i as u64);
+            assert!(
+                !session_drops_exhausted(&mut reconnects, at),
+                "attempt {i} should still reconnect"
+            );
+            reconnects.push(at);
+        }
+        assert!(session_drops_exhausted(
+            &mut reconnects,
+            start + Duration::from_secs(30)
+        ));
+    }
+
+    #[test]
+    fn session_drops_outside_the_window_do_not_count() {
+        let start = Instant::now();
+        let mut reconnects = vec![start; RECONNECT_LIMIT];
+        assert!(!session_drops_exhausted(
+            &mut reconnects,
+            start + RECONNECT_WINDOW + Duration::from_secs(1)
+        ));
+        assert!(reconnects.is_empty());
+    }
+
+    #[test]
+    fn an_engine_change_during_connect_is_deferred() {
+        let mut pending = false;
+        assert!(defer_engine_replace(true, &mut pending));
+        assert!(pending);
+        assert!(!defer_engine_replace(false, &mut pending));
+        assert!(pending, "finishing the attempt owns clearing the request");
     }
 }

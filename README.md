@@ -243,8 +243,13 @@ Settings live in one readable JSON file (`~/.config/fastpotify/settings.json`
 on Linux). They include the Connect device name, bitrate, normalisation,
 autoplay, gapless playback, the audio backend (PulseAudio/PipeWire or ALSA on
 Linux), audio cache size, theme, sidebar state, whether pages take colour
-from artwork, and the mini player's skin and size.
-Playback settings apply when you press **Apply and restart playback**.
+from artwork, the mini player's skin and size, and the proxy (off, system,
+HTTP, or SOCKS5). Playback settings apply when you press **Apply and restart
+playback**. Off and System proxies apply immediately. HTTP and SOCKS5 apply
+when you press **Apply settings**, and can also be set on the sign-in screen.
+A proxy password is stored next to the Spotify grants, not in settings.json.
+Proxy authentication covers Web requests. Local playback can use only an
+unauthenticated HTTP proxy; with proxy login or SOCKS5 it connects directly.
 
 Caches (audio, artwork) live under the cache directory and can be deleted at
 any time without signing you out.

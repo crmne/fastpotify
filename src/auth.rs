@@ -389,7 +389,7 @@ impl StoredToken {
         let text = serde_json::to_string_pretty(self)?;
         let temporary = path.with_extension("json.tmp");
         write_private(&temporary, text.as_bytes())?;
-        std::fs::rename(&temporary, path)?;
+        replace_file(&temporary, path)?;
         Ok(())
     }
 
@@ -418,7 +418,7 @@ impl StoredToken {
     }
 }
 
-fn write_private(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+pub(crate) fn write_private(path: &Path, contents: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create(true).truncate(true);
@@ -428,8 +428,59 @@ fn write_private(path: &Path, contents: &[u8]) -> std::io::Result<()> {
         options.mode(0o600);
     }
     let mut file = options.open(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
     file.write_all(contents)?;
     file.flush()
+}
+
+/// Atomically install a temporary file, replacing an older destination on
+/// every supported platform. `std::fs::rename` cannot replace a file on
+/// Windows, so settings and credentials need the native replace flag there.
+pub(crate) fn replace_file(temporary: &Path, destination: &Path) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
+        };
+
+        fn wide(path: &Path) -> std::io::Result<Vec<u16>> {
+            let mut value: Vec<u16> = path.as_os_str().encode_wide().collect();
+            if value.contains(&0) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "path contains a null character",
+                ));
+            }
+            value.push(0);
+            Ok(value)
+        }
+
+        let temporary = wide(temporary)?;
+        let destination = wide(destination)?;
+        // SAFETY: both slices are nul-terminated and remain alive for the
+        // call. The paths are in the same directory, so this is a same-volume
+        // atomic replacement.
+        let moved = unsafe {
+            MoveFileExW(
+                temporary.as_ptr(),
+                destination.as_ptr(),
+                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+            )
+        };
+        if moved == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        std::fs::rename(temporary, destination)
+    }
 }
 
 fn now_secs() -> u64 {
@@ -562,6 +613,47 @@ mod tests {
             assert_eq!(StoredToken::load(target), Some(token));
             assert!(!legacy.exists());
         }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn atomic_replace_overwrites_an_existing_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "fastpotify-replace-{}-{}",
+            std::process::id(),
+            now_secs()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let destination = dir.join("secret");
+        let temporary = dir.join("secret.tmp");
+        std::fs::write(&destination, "old").unwrap();
+        std::fs::write(&temporary, "new").unwrap();
+        replace_file(&temporary, &destination).unwrap();
+        assert_eq!(std::fs::read_to_string(&destination).unwrap(), "new");
+        assert!(!temporary.exists());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_write_tightens_an_existing_files_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!(
+            "fastpotify-private-{}-{}",
+            std::process::id(),
+            now_secs()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("secret.tmp");
+        std::fs::write(&path, "old").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        write_private(&path, b"new").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new");
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 }

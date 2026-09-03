@@ -52,6 +52,15 @@ Fastpotify stores a refresh token in your platform's state directory
 (`~/.local/state/fastpotify` on Linux). You normally need the browser only
 once per machine.
 
+If Spotify is only reachable through a proxy, set it on the sign-in screen
+before you grant access: Off, System, HTTP, or SOCKS5. A manual HTTP or
+SOCKS5 proxy needs a host and a port; username and password are optional.
+The password is stored with owner-only permissions in the state directory,
+not in settings.json. Authentication applies to Web requests; local playback
+uses only an unauthenticated HTTP proxy and otherwise connects directly.
+SOCKS5 resolves Spotify hostnames at the proxy. After sign-in, the same choice
+lives in Settings → Proxy.
+
 ## Enable playback on this computer
 
 Playing music *on this machine* needs a second browser approval because

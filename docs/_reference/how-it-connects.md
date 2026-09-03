@@ -32,7 +32,8 @@ adds a separate Development Mode quota. See
 
 - Shared and personal Web API refresh tokens, plus librespot's credential, in
   the state directory with owner-only permissions
-  ([file locations](/settings-and-files/)).
+  ([file locations](/settings-and-files/)). An optional proxy password is
+  stored the same way, not in settings.json.
 - Downloaded audio and artwork, in the cache directory, within the budget
   you set.
 - The first time MilkDrop opens with an empty preset folder, the two projectM
@@ -83,3 +84,32 @@ The engine discovers access points through `apresolve.spotify.com` and
 connects over TCP in the resolver's preference order: port 4070 first,
 falling back to 443 and 80. Only outbound connections are needed; no
 inbound ports have to be open.
+
+## Proxy
+
+Settings → Proxy has four modes:
+
+- **Off**: a direct connection. Environment proxy variables are ignored.
+- **System**: `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY`, and on macOS and
+  Windows the OS proxy. This is the default.
+- **HTTP**: a configured HTTP proxy: host, port, and optional login.
+- **SOCKS5**: a configured SOCKS5 proxy: host, port, and optional login.
+  Spotify hostnames are resolved by that proxy.
+
+The mode selects the protocol. Host and port are separate fields.
+
+The Web API, artwork, lyrics, update checks, and MilkDrop preset downloads
+follow that mode. Local receivers on the LAN are never sent through a proxy.
+
+Local playback can only use an unauthenticated, plaintext HTTP proxy: that is
+what librespot's CONNECT client supports. Proxy login still covers catalogue
+and control, but the engine then connects to Spotify directly. SOCKS5 behaves
+the same way for local playback. System uses the same proxy reqwest would
+(environment variables, and the OS proxy on macOS and Windows) only when it
+is an unauthenticated `http://` endpoint; authenticated, `https://`, and SOCKS
+system proxies are ignored by the engine. Changing the HTTP proxy the engine
+would actually use restarts local playback.
+
+Off and System apply immediately. HTTP and SOCKS5 apply when you press
+**Apply settings**. The same choice is on the sign-in screen, so it can be
+set before the first grant.

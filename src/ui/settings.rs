@@ -5,12 +5,13 @@ use egui::{Align, CornerRadius, Frame, Layout, Margin, Stroke, Vec2};
 use crate::api::models::pick_image;
 use crate::app::App;
 use crate::model::{Action, Dialog};
-use crate::settings::ThemeChoice;
+use crate::settings::{ProxyMode, ThemeChoice};
 use crate::theme::{self, Icon, Palette};
 
 use super::widgets;
 
 const PLAYBACK_DIRTY_ID: &str = "playback-settings-dirty";
+const PROXY_DIRTY_ID: &str = "proxy-settings-dirty";
 
 fn section(
     ui: &mut egui::Ui,
@@ -45,6 +46,10 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let dirty_id = egui::Id::new(PLAYBACK_DIRTY_ID);
     let mut playback_dirty = ui
         .data(|data| data.get_temp::<bool>(dirty_id))
+        .unwrap_or(false);
+    let proxy_dirty_id = egui::Id::new(PROXY_DIRTY_ID);
+    let mut proxy_dirty = ui
+        .data(|data| data.get_temp::<bool>(proxy_dirty_id))
         .unwrap_or(false);
     let mut changed = false;
 
@@ -534,6 +539,79 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         );
     });
 
+    section(ui, &palette, "Proxy", |ui| {
+        widgets::setting_row(
+            ui,
+            &palette,
+            "Mode",
+            "Off ignores environment variables. System uses them, and the OS proxy on macOS and Windows.",
+            |_| {},
+        );
+        // The row's control slot is right-to-left and too narrow for four
+        // choices; they sit on this line so they read Off, System, HTTP, SOCKS5.
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            for choice in ProxyMode::ALL {
+                if theme::soft_button(
+                    ui,
+                    &palette,
+                    None,
+                    choice.label(),
+                    app.settings.proxy_mode == choice,
+                )
+                .clicked()
+                    && app.settings.proxy_mode != choice
+                {
+                    app.settings.proxy_mode = choice;
+                    changed = true;
+                    if choice.is_manual() {
+                        proxy_dirty = true;
+                    } else {
+                        proxy_dirty = false;
+                        app.actions.push(Action::ApplyProxy);
+                    }
+                }
+            }
+        });
+        ui.add_space(10.0);
+        if app.settings.proxy_mode.is_manual() {
+            if widgets::proxy_manual_form(
+                ui,
+                &palette,
+                &mut app.settings.proxy_host,
+                &mut app.settings.proxy_port,
+                &mut app.settings.proxy_username,
+                &mut app.settings.proxy_password,
+            ) {
+                changed = true;
+                proxy_dirty = true;
+            }
+            ui.add_space(6.0);
+            widgets::proxy_scope_note(ui, &palette, app.settings.proxy_mode);
+            ui.add_space(10.0);
+        }
+        if app.settings.proxy_mode.is_manual() {
+            ui.horizontal(|ui| {
+                if theme::pill_button(ui, &palette, "Apply settings", true).clicked() {
+                    app.actions.push(Action::ApplyProxy);
+                    if app.settings.proxy_config().is_ok() {
+                        proxy_dirty = false;
+                    }
+                }
+            });
+        } else {
+            theme::subtle(
+                ui,
+                &palette,
+                match app.settings.proxy_mode {
+                    ProxyMode::Off => "Not using a proxy.",
+                    ProxyMode::System => "Using the system proxy.",
+                    ProxyMode::Http | ProxyMode::Socks => "",
+                },
+            );
+        }
+    });
+
     section(ui, &palette, "Winamp skins", |ui| {
         widgets::setting_row(
             ui,
@@ -928,6 +1006,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     });
 
     ui.data_mut(|data| data.insert_temp(dirty_id, playback_dirty));
+    ui.data_mut(|data| data.insert_temp(proxy_dirty_id, proxy_dirty));
     if changed {
         app.actions.push(Action::SettingsChanged);
     }
