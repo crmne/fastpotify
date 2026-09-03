@@ -99,6 +99,30 @@ pub enum Operation {
 
 /// A playlist with unknown access dispatches to the shared app, which can
 /// serve anything; later requests move once a response reveals the owner.
+/// Where a request goes: one of the Web API apps, or the streaming session.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Route {
+    Web(ApiSource),
+    Session,
+}
+
+/// The streaming session reads every playlist the shared app would have
+/// been asked for: other people's, which no personal app may read, and the
+/// account's own when it has no personal app. A personal app keeps its own
+/// playlists, which it reads quickly and with every field.
+fn route(operation: Operation, personal_ready: bool, session_ready: bool) -> Route {
+    let source = plan(operation, personal_ready);
+    let playlist_read = matches!(
+        operation,
+        Operation::PlaylistMetadata(_) | Operation::PlaylistItems(_)
+    );
+    if session_ready && playlist_read && source == ApiSource::Shared {
+        Route::Session
+    } else {
+        Route::Web(source)
+    }
+}
+
 fn plan(operation: Operation, personal_ready: bool) -> ApiSource {
     use Operation::*;
     match operation {
@@ -258,6 +282,15 @@ impl ApiGateway {
         Ok(Arc::clone(&session.client))
     }
 
+    /// Where an operation goes, given whether the streaming session is up.
+    pub fn route_for(&self, operation: Operation, session_ready: bool) -> Route {
+        let route = route(operation, self.personal_ready(), session_ready);
+        if route == Route::Session {
+            log::debug!("Spotify route operation={operation:?} source=session");
+        }
+        route
+    }
+
     pub fn playlist_access(&self, id: &str) -> PlaylistAccess {
         self.playlist_access
             .lock()
@@ -304,6 +337,53 @@ mod tests {
             path,
             source,
         ))
+    }
+
+    #[test]
+    fn the_session_reads_what_the_shared_app_would_have() {
+        let external = Operation::PlaylistItems(PlaylistAccess::External);
+        assert_eq!(route(external, true, true), Route::Session);
+        assert_eq!(
+            route(
+                Operation::PlaylistMetadata(PlaylistAccess::Unknown),
+                false,
+                true
+            ),
+            Route::Session,
+            "a playlist not yet classified is read the same way"
+        );
+        assert_eq!(
+            route(external, true, false),
+            Route::Web(ApiSource::Shared),
+            "no session, no choice"
+        );
+        assert_eq!(
+            route(Operation::PlaylistItems(PlaylistAccess::Owned), true, true),
+            Route::Web(ApiSource::Personal),
+            "a personal app keeps its own playlists"
+        );
+        assert_eq!(
+            route(
+                Operation::PlaylistMetadata(PlaylistAccess::Owned),
+                false,
+                true
+            ),
+            Route::Session,
+            "without a personal app, own playlists leave the shared app too"
+        );
+        assert_eq!(
+            route(
+                Operation::PlaylistMutation(PlaylistAccess::External),
+                true,
+                true
+            ),
+            Route::Web(ApiSource::Shared),
+            "writes stay on the Web API"
+        );
+        assert_eq!(
+            route(Operation::Catalog, false, true),
+            Route::Web(ApiSource::Shared)
+        );
     }
 
     #[test]

@@ -748,6 +748,16 @@ impl App {
         self.user.as_ref().map(|user| user.id.as_str())
     }
 
+    /// Whether the library list says a playlist is public.
+    fn library_public(&self, id: &str) -> Option<bool> {
+        self.library
+            .playlists
+            .get()?
+            .iter()
+            .find(|playlist| playlist.id == id)?
+            .public
+    }
+
     pub fn is_saved(&self, uri: &str) -> Option<bool> {
         let exact = self.saved.get(uri).copied();
         if exact == Some(true)
@@ -3508,10 +3518,16 @@ impl App {
                     }
                     return;
                 }
-                if let Ok(playlist) = &result
-                    && let Some(image) = pick_image(&playlist.images, 300)
-                {
-                    self.tint_for(Some(image));
+                let mut result = result;
+                if let Ok(playlist) = &mut result {
+                    if let Some(image) = pick_image(&playlist.images, 300) {
+                        self.tint_for(Some(image));
+                    }
+                    // The streaming session does not say whether a playlist
+                    // is public; the library list, from the Web API, does.
+                    if playlist.public.is_none() {
+                        playlist.public = self.library_public(&id);
+                    }
                 }
                 if let Some(page) = self.playlist_pages.get_mut(&id) {
                     let old_snapshot = page
@@ -6618,6 +6634,39 @@ mod tests {
             app.playing_context_uri().as_deref(),
             Some("spotify:playlist:phone")
         );
+    }
+
+    /// A header read over the streaming session carries no public flag,
+    /// and the edit dialog fills its switch from it, so the library list's
+    /// answer stands in.
+    #[test]
+    fn a_header_without_a_public_flag_takes_the_library_lists() {
+        let mut app = headless_app();
+        app.backend.set_offline(true);
+        app.library.playlists = Loadable::Loaded(vec![Playlist {
+            id: "pl1".into(),
+            public: Some(true),
+            ..Playlist::default()
+        }]);
+        app.playlist_pages.insert(
+            "pl1".into(),
+            PlaylistPage {
+                generation: 1,
+                ..Default::default()
+            },
+        );
+        app.handle_api(ApiResponse::Playlist {
+            id: "pl1".into(),
+            generation: 1,
+            result: Ok(Playlist {
+                id: "pl1".into(),
+                name: "Mine".into(),
+                ..Playlist::default()
+            }),
+        });
+        let playlist = app.playlist_pages["pl1"].playlist.get().unwrap();
+        assert_eq!(playlist.public, Some(true));
+        assert_eq!(playlist.name, "Mine", "the rest is Spotify's answer");
     }
 
     #[test]

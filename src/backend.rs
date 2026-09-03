@@ -15,12 +15,13 @@ use tokio::sync::{mpsc, watch};
 use crate::api::models::*;
 use crate::api::{
     AccountId, ApiError, ApiGateway, ApiSource, NetActivity, Operation, PlayRequest, PlaylistId,
-    SessionState, TokenProvider, WebTokens,
+    Route, SessionState, TokenProvider, WebTokens,
 };
 use crate::images::{ArtLoader, accent_color};
 use crate::model::PlaylistCache;
 use crate::paths::AppDirs;
 use crate::player::{Engine, EngineConfig, EngineEvent, LoadSpec, LocalState, PlayerCommand};
+use crate::session_reads;
 
 pub type ApiResult<T> = Result<T, ApiError>;
 
@@ -1655,7 +1656,7 @@ impl Worker {
         let waker = self.waker.clone();
         tokio::spawn(async move {
             for id in ids {
-                let name = engine.user_display_name(&id).await;
+                let name = session_reads::user_display_name(engine.session(), &id).await;
                 let _ = events.send(Event::UserName { id, name });
                 waker.wake();
             }
@@ -1668,6 +1669,7 @@ impl Worker {
         let api = Arc::clone(&self.api);
         let background_api = Arc::clone(&self.background_api);
         let background = request.background();
+        let engine = self.engine.clone();
         let events = self.events.clone();
         let waker = self.waker.clone();
         let commands = self.commands.clone();
@@ -1677,7 +1679,7 @@ impl Worker {
             } else {
                 None
             };
-            let (response, expired) = handle(&api, request).await;
+            let (response, expired) = handle(&api, engine.as_deref(), request).await;
             if let Some(api_source) = expired {
                 api.clear(api_source);
                 if api_source == ApiSource::Personal {
@@ -1849,8 +1851,19 @@ fn observe_playlists(api: &ApiGateway, response: &ApiResponse) {
     }
 }
 
-async fn handle(api: &ApiGateway, request: ApiRequest) -> (ApiResponse, Option<ApiSource>) {
-    let selected = api.client_for(operation_for(api, &request));
+async fn handle(
+    api: &ApiGateway,
+    engine: Option<&Engine>,
+    request: ApiRequest,
+) -> (ApiResponse, Option<ApiSource>) {
+    let operation = operation_for(api, &request);
+    if let (Route::Session, Some(engine)) = (api.route_for(operation, engine.is_some()), engine)
+        && let Some(response) = over_session(engine, &request).await
+    {
+        observe_playlists(api, &response);
+        return (response, None);
+    }
+    let selected = api.client_for(operation);
     let expired = std::cell::Cell::new(None);
     macro_rules! routed {
         ($method:ident($($argument:expr),* $(,)?)) => {{
@@ -2157,6 +2170,52 @@ async fn handle(api: &ApiGateway, request: ApiRequest) -> (ApiResponse, Option<A
     };
     observe_playlists(api, &response);
     (response, expired.get())
+}
+
+/// Answers a playlist read over the streaming session. `None` when the
+/// session could not, leaving the request to the Web API.
+async fn over_session(engine: &Engine, request: &ApiRequest) -> Option<ApiResponse> {
+    let session = engine.session();
+    Some(match request {
+        ApiRequest::Playlist { id, generation } => ApiResponse::Playlist {
+            id: id.clone(),
+            generation: *generation,
+            result: settle(session_reads::playlist(session, id).await)?,
+        },
+        ApiRequest::PlaylistItems {
+            id,
+            offset,
+            generation,
+        } => ApiResponse::PlaylistItems {
+            id: id.clone(),
+            offset: *offset,
+            generation: *generation,
+            result: settle(session_reads::items(session, id, *offset, PLAYLIST_PAGE_SIZE).await)?,
+        },
+        ApiRequest::PlaylistSample {
+            id,
+            offset,
+            generation,
+        } => ApiResponse::PlaylistSample {
+            id: id.clone(),
+            generation: *generation,
+            result: settle(session_reads::items(session, id, *offset, PLAYLIST_PAGE_SIZE).await)?,
+        },
+        _ => return None,
+    })
+}
+
+/// A session answer as the Web API would have given it. A final refusal is
+/// shown as such; a dropped line leaves the Web API to try.
+fn settle<T>(result: Result<T, session_reads::Failure>) -> Option<ApiResult<T>> {
+    match result {
+        Ok(value) => Some(Ok(value)),
+        Err(session_reads::Failure::Definitive(error)) => Some(Err(error)),
+        Err(session_reads::Failure::Retry(error)) => {
+            log::debug!("session read failed: {error}; asking the Web API");
+            None
+        }
+    }
 }
 
 /// Spotify's transcription of the track, when the local session can ask for

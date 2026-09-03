@@ -22,4 +22,6 @@ impl fmt::Display for ApiSource {
 }
 
 pub use client::{ApiClient, ApiError, NetActivity, PlayRequest, TokenProvider, WebTokens};
-pub use gateway::{AccountId, ApiGateway, Operation, PlaylistAccess, PlaylistId, SessionState};
+pub use gateway::{
+    AccountId, ApiGateway, Operation, PlaylistAccess, PlaylistId, Route, SessionState,
+};
