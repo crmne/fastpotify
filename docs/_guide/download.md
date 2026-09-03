@@ -55,37 +55,6 @@ later, allow it in Privacy & Security:
 
 Later launches work with a normal double-click.
 
-### Nix
-
-The repository [flake](https://github.com/crmne/fastpotify) can install the
-app instead of the download above. On macOS,
-`packages.<system>.fastpotify-app` is a `Fastpotify.app` bundle, ad-hoc
-signed and assembled like the release bundle. Nix builds it locally, so it
-is never quarantined and the first-open steps above do not apply.
-
-With nix-darwin, add the flake to your inputs and the bundle appears in
-`/Applications/Nix Apps`:
-
-```nix
-inputs.fastpotify.url = "github:crmne/fastpotify";
-```
-
-```nix
-environment.systemPackages = [
-  inputs.fastpotify.packages."${pkgs.stdenv.hostPlatform.system}".fastpotify-app
-];
-environment.pathsToLink = [ "/Applications" ];
-```
-
-With Home Manager, `home.packages` is enough; its darwin support links app
-bundles into `~/Applications`:
-
-```nix
-home.packages = [
-  inputs.fastpotify.packages."${pkgs.stdenv.hostPlatform.system}".fastpotify-app
-];
-```
-
 ## Windows
 
 The installer adds Fastpotify to the Start menu and needs no administrator
@@ -143,3 +112,43 @@ handling `spotify:` links.
 The binary needs ALSA, PulseAudio or PipeWire, and Wayland or X11.
 
 Or build from source: see [Getting Started](/getting-started/).
+
+## Nix
+
+Add the repository [flake](https://github.com/crmne/fastpotify) to your
+inputs:
+
+```nix
+inputs.fastpotify.url = "github:crmne/fastpotify";
+```
+
+On NixOS, install the default package:
+
+```nix
+environment.systemPackages = [
+  inputs.fastpotify.packages."${pkgs.stdenv.hostPlatform.system}".default
+];
+```
+
+### nix-darwin
+
+On macOS, use the `fastpotify-app` package instead. It is a `Fastpotify.app`
+bundle built and signed locally, so it is never quarantined and the
+first-open steps above do not apply:
+
+```nix
+environment.systemPackages = [
+  inputs.fastpotify.packages."${pkgs.stdenv.hostPlatform.system}".fastpotify-app
+];
+environment.pathsToLink = [ "/Applications" ];
+```
+
+The bundle appears in `/Applications/Nix Apps`. With Home Manager,
+`home.packages` is enough; its darwin support links app bundles into
+`~/Applications`:
+
+```nix
+home.packages = [
+  inputs.fastpotify.packages."${pkgs.stdenv.hostPlatform.system}".fastpotify-app
+];
+```
