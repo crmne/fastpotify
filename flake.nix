@@ -201,10 +201,15 @@
               ''
                 app="$out/Applications/Fastpotify.app/Contents"
                 mkdir -p "$app/MacOS" "$app/Resources"
-                ln -s ${fastpotify}/bin/fastpotify "$app/MacOS/fastpotify"
+                cp ${fastpotify}/bin/fastpotify "$app/MacOS/fastpotify"
+                chmod 755 "$app/MacOS/fastpotify"
                 cp ${icon} "$app/Resources/fastpotify.icns"
                 sed -e "s/__VERSION__/${version}/g" -e "s/__BUILD__/${build}/g" \
                   ${./packaging/macos/Info.plist} > "$app/Info.plist"
+                /usr/bin/codesign --force --sign - \
+                  "$out/Applications/Fastpotify.app"
+                /usr/bin/codesign --verify --strict \
+                  "$out/Applications/Fastpotify.app"
               '';
         in
         {
