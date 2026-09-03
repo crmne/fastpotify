@@ -229,9 +229,8 @@ fn run_control(control: Control) -> i32 {
     match control {
         Control::Scheme {
             action: SchemeAction::Reload,
-        } => match single_instance::send("scheme reload") {
-            Ok(single_instance::Reply::Ok) => 0,
-            Ok(_) => 0,
+        } => match single_instance::reload_theme_in_running_instance() {
+            Ok(()) => 0,
             Err(error) => {
                 eprintln!("Fastpotify is not running or does not support remote control: {error}");
                 1
