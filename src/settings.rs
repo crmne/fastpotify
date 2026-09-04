@@ -593,4 +593,20 @@ mod session_tests {
         assert!(!path.with_extension("json.tmp").exists());
         let _ = std::fs::remove_dir_all(root);
     }
+
+    #[test]
+    fn table_sort_with_artist_round_trips_in_session() {
+        let state = SessionState {
+            sorts: vec![(
+                "playlist:test".into(),
+                crate::model::TableSort {
+                    column: crate::model::SortColumn::Artist,
+                    ascending: true,
+                },
+            )],
+            ..SessionState::default()
+        };
+        let json = serde_json::to_string(&state).unwrap();
+        assert_eq!(serde_json::from_str::<SessionState>(&json).unwrap(), state);
+    }
 }

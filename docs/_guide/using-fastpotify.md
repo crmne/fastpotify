@@ -113,6 +113,13 @@ Changing the option while the mini player is open replaces that window while
 playback continues. This setting is available on Windows; it does not change
 Linux panels or the macOS Dock.
 
+## Sorting
+
+Playlists and Liked Songs can be sorted by title, artist, album, date added, or
+duration. Choose an order from the sort dropdown next to the filter field, or
+click a table column heading. Selecting the active sort again reverses it, and
+**Custom order** restores the list's natural sequence.
+
 ## Recent
 
 The queue panel's second tab combines Spotify's history with tracks played

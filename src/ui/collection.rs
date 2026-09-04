@@ -117,6 +117,8 @@ pub struct Actions<'a> {
     pub saved_tooltips: (&'a str, &'a str),
     pub owned_playlist: Option<Playlist>,
     pub name: &'a str,
+    pub sort_page: Option<Page>,
+    pub show_added_by: bool,
 }
 
 /// The big play button and its neighbours; returns the filter text if a
@@ -241,16 +243,41 @@ pub fn actions_row(
                     )
                 });
         }
-        if let Some(filter) = filter {
+        if filter.is_some() || actions.sort_page.is_some() {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                widgets::search_field(
-                    ui,
-                    &palette,
-                    egui::Id::new(("collection-filter", actions.name)),
-                    filter,
-                    "Filter",
-                    220.0,
-                );
+                if let Some(sort_page) = &actions.sort_page {
+                    let sort = app.table_sorts.get(sort_page).copied();
+                    if let Some(pick) =
+                        widgets::sort_menu(ui, &palette, sort, actions.show_added_by)
+                    {
+                        match pick {
+                            widgets::SortPick::Clear => {
+                                app.table_sorts.remove(sort_page);
+                                app.note_session_change();
+                            }
+                            widgets::SortPick::Set(new_sort) => {
+                                app.table_sorts.insert(sort_page.clone(), new_sort);
+                                app.note_session_change();
+                                app.actions.push(Action::LoadMore(sort_page.clone()));
+                            }
+                        }
+                    }
+                    if filter.is_some() {
+                        ui.add_space(8.0);
+                    }
+                }
+                if let Some(filter) = filter {
+                    let available = ui.available_width();
+                    let width = (available - 12.0).clamp(120.0, 220.0);
+                    widgets::search_field(
+                        ui,
+                        &palette,
+                        egui::Id::new(("collection-filter", actions.name)),
+                        filter,
+                        "Filter",
+                        width,
+                    );
+                }
             });
         }
     });
@@ -703,6 +730,14 @@ fn view_indices(items: &[TableItem], needle: &str, sort: Option<TableSort>) -> V
             PlayableItem::Track(track) => track.duration_ms,
             PlayableItem::Episode(episode) => episode.duration_ms,
         };
+        let artist_of = |item: &PlayableItem| match item {
+            PlayableItem::Track(track) => track.artist_names().to_lowercase(),
+            PlayableItem::Episode(episode) => episode
+                .show
+                .as_ref()
+                .map(|show| show.name.to_lowercase())
+                .unwrap_or_default(),
+        };
         visible.sort_by(|a, b| {
             let (item_a, added_a, adder_a) = &items[*a];
             let (item_b, added_b, adder_b) = &items[*b];
@@ -711,6 +746,12 @@ fn view_indices(items: &[TableItem], needle: &str, sort: Option<TableSort>) -> V
                     .name()
                     .to_lowercase()
                     .cmp(&item_b.name().to_lowercase()),
+                SortColumn::Artist => artist_of(item_a).cmp(&artist_of(item_b)).then_with(|| {
+                    item_a
+                        .name()
+                        .to_lowercase()
+                        .cmp(&item_b.name().to_lowercase())
+                }),
                 SortColumn::Album => album_of(item_a).cmp(&album_of(item_b)),
                 SortColumn::Added => added_a.cmp(added_b),
                 SortColumn::Index => a.cmp(b),
@@ -950,6 +991,8 @@ pub fn playlist(app: &mut App, ui: &mut egui::Ui, id: &str) {
                     saved_tooltips: ("Add to Your Library", "Remove from Your Library"),
                     owned_playlist: owned.then_some(playlist_clone),
                     name: &playlist.name,
+                    sort_page: Some(Page::Playlist(id.to_string())),
+                    show_added_by: made_together,
                 },
                 Some(&mut page.filter),
             );
@@ -1066,6 +1109,8 @@ pub fn album(app: &mut App, ui: &mut egui::Ui, id: &str) {
                     saved_tooltips: ("Save to Your Library", "Remove from Your Library"),
                     owned_playlist: None,
                     name: &album.name,
+                    sort_page: None,
+                    show_added_by: false,
                 },
                 None,
             );
@@ -1266,6 +1311,8 @@ pub fn liked(app: &mut App, ui: &mut egui::Ui) {
             saved_tooltips: ("", ""),
             owned_playlist: None,
             name: "Liked Songs",
+            sort_page: Some(Page::LikedSongs),
+            show_added_by: false,
         },
         Some(&mut filter),
     );
@@ -1479,6 +1526,123 @@ mod tests {
         });
         let visible = view_indices(&items, "", sort);
         assert_eq!(visible, vec![3, 2, 1, 0]);
+
+        // 6. Sort ascending by artist
+        let sort = Some(TableSort {
+            column: SortColumn::Artist,
+            ascending: true,
+        });
+        let visible = view_indices(&items, "", sort);
+        assert_eq!(visible, vec![2, 0, 3, 1]);
+
+        // 7. Sort descending by artist
+        let sort = Some(TableSort {
+            column: SortColumn::Artist,
+            ascending: false,
+        });
+        let visible = view_indices(&items, "", sort);
+        assert_eq!(visible, vec![1, 3, 0, 2]);
+    }
+
+    #[test]
+    fn test_artist_sorting_tie_break() {
+        let make_track = |title: &str, artist: &str| {
+            (
+                PlayableItem::Track(Track {
+                    name: title.to_string(),
+                    artists: vec![ArtistRef {
+                        id: Some("a1".into()),
+                        name: artist.to_string(),
+                        uri: None,
+                    }],
+                    ..Default::default()
+                }),
+                None,
+                None,
+            )
+        };
+        let items = vec![
+            make_track("Under Pressure", "Queen"),
+            make_track("Bohemian Rhapsody", "Queen"),
+            make_track("Another One Bites the Dust", "Queen"),
+        ];
+        let sort_asc = Some(TableSort {
+            column: SortColumn::Artist,
+            ascending: true,
+        });
+        let visible_asc = view_indices(&items, "", sort_asc);
+        assert_eq!(visible_asc, vec![2, 1, 0]);
+
+        let sort_desc = Some(TableSort {
+            column: SortColumn::Artist,
+            ascending: false,
+        });
+        let visible_desc = view_indices(&items, "", sort_desc);
+        assert_eq!(visible_desc, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn test_artist_sorting_multi_artist_case_and_episodes() {
+        use crate::api::models::{Episode, Show};
+        let make_track = |title: &str, artists: &[&str]| {
+            (
+                PlayableItem::Track(Track {
+                    name: title.to_string(),
+                    artists: artists
+                        .iter()
+                        .map(|name| ArtistRef {
+                            id: None,
+                            name: name.to_string(),
+                            uri: None,
+                        })
+                        .collect(),
+                    ..Default::default()
+                }),
+                None,
+                None,
+            )
+        };
+        let make_episode = |title: &str, show_name: &str| {
+            (
+                PlayableItem::Episode(Episode {
+                    name: title.to_string(),
+                    show: Some(Show {
+                        name: show_name.to_string(),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+                None,
+                None,
+            )
+        };
+        let items = vec![
+            // 0: David Bowie (lowercase artist name)
+            make_track("Starman", &["david bowie"]),
+            // 1: Multiple artists
+            make_track("Under Pressure", &["Queen", "David Bowie"]),
+            // 2: Queen (uppercase artist name)
+            make_track("Bohemian Rhapsody", &["QUEEN"]),
+            // 3: Podcast episode (show name acts as artist)
+            make_episode("The Fall of Rome", "Dan Carlin's Hardcore History"),
+            // 4: ABBA
+            make_track("Dancing Queen", &["ABBA"]),
+        ];
+
+        let sort_asc = Some(TableSort {
+            column: SortColumn::Artist,
+            ascending: true,
+        });
+        let visible_asc = view_indices(&items, "", sort_asc);
+        // "abba" (4) < "dan carlin's hardcore history" (3) < "david bowie" (0) < "queen" (2) < "queen, david bowie" (1)
+        assert_eq!(visible_asc, vec![4, 3, 0, 2, 1]);
+
+        let sort_desc = Some(TableSort {
+            column: SortColumn::Artist,
+            ascending: false,
+        });
+        let visible_desc = view_indices(&items, "", sort_desc);
+        assert_eq!(visible_desc, vec![1, 2, 0, 3, 4]);
     }
 
     #[test]
@@ -1625,6 +1789,8 @@ mod tests {
                     saved_tooltips: ("", ""),
                     owned_playlist: None,
                     name: "Test",
+                    sort_page: None,
+                    show_added_by: false,
                 },
                 None,
             );
@@ -1670,6 +1836,8 @@ mod tests {
                     saved_tooltips: ("", ""),
                     owned_playlist: None,
                     name: "Test",
+                    sort_page: None,
+                    show_added_by: false,
                 },
                 None,
             );
@@ -1719,6 +1887,8 @@ mod tests {
                     saved_tooltips: ("", ""),
                     owned_playlist: None,
                     name: "Test",
+                    sort_page: None,
+                    show_added_by: false,
                 },
                 None,
             );
@@ -1764,6 +1934,8 @@ mod tests {
                     saved_tooltips: ("", ""),
                     owned_playlist: None,
                     name: "Test",
+                    sort_page: None,
+                    show_added_by: false,
                 },
                 None,
             );
@@ -1814,6 +1986,8 @@ mod tests {
                     saved_tooltips: ("", ""),
                     owned_playlist: None,
                     name: "Test",
+                    sort_page: None,
+                    show_added_by: false,
                 },
                 Some(&mut filter),
             );
@@ -1859,6 +2033,8 @@ mod tests {
                     saved_tooltips: ("", ""),
                     owned_playlist: None,
                     name: "Test",
+                    sort_page: None,
+                    show_added_by: false,
                 },
                 Some(&mut filter),
             );
