@@ -977,6 +977,10 @@ fn switch(tokens: &[Token]) -> Result<(Statement, usize), ()> {
             _ => {}
         }
     }
+    // A `{` with nothing closing it is not a switch to read.
+    if end == at {
+        return Err(());
+    }
     let body = &tokens[at + 1..end];
     let mut cases = Vec::new();
     let mut at = 0usize;
@@ -1513,6 +1517,15 @@ var neg = -5;"#,
         assert_eq!(constants.get("eqplclosedpos"), Some(&300));
         assert_eq!(constants.get("half"), Some(&150));
         assert_eq!(constants.get("neg"), Some(&-5));
+    }
+
+    #[test]
+    fn an_unclosed_switch_does_not_panic() {
+        // A `switch` with no closing brace is not a statement to read;
+        // it is refused instead of panicking.
+        let (script, _) = script("switch(pane) { case 0: sAudio.visible = false;");
+        assert!(script.globals.is_empty());
+        assert!(script.functions.is_empty());
     }
 
     #[test]
