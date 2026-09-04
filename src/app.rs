@@ -3877,7 +3877,6 @@ impl App {
                                         } else {
                                             self.library
                                                 .liked
-                                                .items
                                                 .retain(|item| item.track.uri != *uri);
                                             if let Some(total) = self.library.liked.total.as_mut() {
                                                 *total = total.saturating_sub(1);
@@ -9517,6 +9516,47 @@ mod tests {
                 100.0, 150.0
             ))),
             "attach restored the main window position: {commands:?}"
+        );
+    }
+
+    /// Unliking a song shortens Liked Songs. The table caches its row order
+    /// against the list's revision, so a silent removal leaves the cache
+    /// pointing past the end of the rows and the next frame panics.
+    #[test]
+    fn unliking_a_song_moves_the_liked_revision() {
+        use crate::api::models::SavedTrack;
+
+        let saved = |uri: &str| SavedTrack {
+            added_at: None,
+            track: Track {
+                uri: uri.into(),
+                ..Default::default()
+            },
+        };
+        let mut app = headless_app();
+        app.library.liked.items = vec![saved("spotify:track:stays"), saved("spotify:track:goes")];
+        app.library.liked.total = Some(2);
+        app.library.liked.loaded_once = true;
+        let before = app.library.liked.revision;
+
+        app.handle_api(ApiResponse::SavedChanged {
+            uris: vec!["spotify:track:goes".into()],
+            saved: false,
+            result: Ok(()),
+        });
+
+        let uris: Vec<&str> = app
+            .library
+            .liked
+            .items
+            .iter()
+            .map(|item| item.track.uri.as_str())
+            .collect();
+        assert_eq!(uris, vec!["spotify:track:stays"], "the song is gone");
+        assert_eq!(app.library.liked.total, Some(1));
+        assert_ne!(
+            app.library.liked.revision, before,
+            "the shorter list must invalidate the table's cached row order"
         );
     }
 }
