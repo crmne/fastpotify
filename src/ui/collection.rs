@@ -151,9 +151,12 @@ pub fn actions_row(
             )
             .clicked()
             {
+                let is_filtered = filter.as_ref().is_some_and(|f| !f.trim().is_empty());
                 if now_playing_here {
                     app.actions.push(Action::TogglePlay);
-                } else if let Some(uris) = actions.view.clone() {
+                } else if let Some(uris) = actions.view.clone()
+                    && (!app.playing_context_shuffle() || is_filtered)
+                {
                     app.actions.push(Action::PlayFromRow {
                         context: RowContext::View {
                             uris: Arc::clone(&uris),
@@ -1577,6 +1580,289 @@ mod tests {
         assert!(
             after > 80_000,
             "500 tracks with nested metadata should retain a substantial copy: {after}"
+        );
+    }
+
+    #[test]
+    fn sorted_collection_play_button_plays_context_when_shuffling() {
+        let ctx = egui::Context::default();
+        let mut app = test_app();
+        app.apply(Action::SetShuffle(true), &ctx);
+        app.actions.clear();
+
+        let input_layout = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(800.0, 600.0),
+            )),
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(input_layout, |ui| {
+            actions_row(
+                &mut app,
+                ui,
+                Actions {
+                    play_uri: Some("spotify:playlist:test".into()),
+                    view: Some(Arc::from([
+                        "spotify:track:1".into(),
+                        "spotify:track:2".into(),
+                    ])),
+                    saved: None,
+                    saved_icons: (Icon::CirclePlus, Icon::CircleCheck),
+                    saved_tooltips: ("", ""),
+                    owned_playlist: None,
+                    name: "Test",
+                },
+                None,
+            );
+        });
+        out.textures_delta.clear();
+
+        let click_pos = egui::pos2(28.0, 28.0);
+        let input_click = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(800.0, 600.0),
+            )),
+            events: vec![
+                egui::Event::PointerMoved(click_pos),
+                egui::Event::PointerButton {
+                    pos: click_pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+                egui::Event::PointerButton {
+                    pos: click_pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+            ..Default::default()
+        };
+
+        let mut output = ctx.run_ui(input_click, |ui| {
+            actions_row(
+                &mut app,
+                ui,
+                Actions {
+                    play_uri: Some("spotify:playlist:test".into()),
+                    view: Some(Arc::from([
+                        "spotify:track:1".into(),
+                        "spotify:track:2".into(),
+                    ])),
+                    saved: None,
+                    saved_icons: (Icon::CirclePlus, Icon::CircleCheck),
+                    saved_tooltips: ("", ""),
+                    owned_playlist: None,
+                    name: "Test",
+                },
+                None,
+            );
+        });
+        output.textures_delta.clear();
+
+        assert!(
+            matches!(
+                app.actions.as_slice(),
+                [Action::PlayContext {
+                    uri,
+                    offset_uri: None,
+                    offset_index: None,
+                }] if uri == "spotify:playlist:test"
+            ),
+            "expected PlayContext, got {:?}",
+            app.actions
+        );
+    }
+
+    #[test]
+    fn sorted_collection_play_button_plays_from_top_when_not_shuffling() {
+        let ctx = egui::Context::default();
+        let mut app = test_app();
+        app.apply(Action::SetShuffle(false), &ctx);
+        app.actions.clear();
+
+        let input_layout = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(800.0, 600.0),
+            )),
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(input_layout, |ui| {
+            actions_row(
+                &mut app,
+                ui,
+                Actions {
+                    play_uri: Some("spotify:playlist:test".into()),
+                    view: Some(Arc::from([
+                        "spotify:track:1".into(),
+                        "spotify:track:2".into(),
+                    ])),
+                    saved: None,
+                    saved_icons: (Icon::CirclePlus, Icon::CircleCheck),
+                    saved_tooltips: ("", ""),
+                    owned_playlist: None,
+                    name: "Test",
+                },
+                None,
+            );
+        });
+        out.textures_delta.clear();
+
+        let click_pos = egui::pos2(28.0, 28.0);
+        let input_click = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(800.0, 600.0),
+            )),
+            events: vec![
+                egui::Event::PointerMoved(click_pos),
+                egui::Event::PointerButton {
+                    pos: click_pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+                egui::Event::PointerButton {
+                    pos: click_pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+            ..Default::default()
+        };
+
+        let mut output = ctx.run_ui(input_click, |ui| {
+            actions_row(
+                &mut app,
+                ui,
+                Actions {
+                    play_uri: Some("spotify:playlist:test".into()),
+                    view: Some(Arc::from([
+                        "spotify:track:1".into(),
+                        "spotify:track:2".into(),
+                    ])),
+                    saved: None,
+                    saved_icons: (Icon::CirclePlus, Icon::CircleCheck),
+                    saved_tooltips: ("", ""),
+                    owned_playlist: None,
+                    name: "Test",
+                },
+                None,
+            );
+        });
+        output.textures_delta.clear();
+
+        assert!(
+            matches!(
+                app.actions.as_slice(),
+                [Action::PlayFromRow {
+                    context: RowContext::View { uris, context_uri },
+                    index: 0,
+                    ..
+                }] if uris.as_ref() == ["spotify:track:1", "spotify:track:2"] && context_uri == "spotify:playlist:test"
+            ),
+            "expected PlayFromRow, got {:?}",
+            app.actions
+        );
+    }
+
+    #[test]
+    fn sorted_collection_play_button_preserves_filtered_view_when_shuffling() {
+        let ctx = egui::Context::default();
+        let mut app = test_app();
+        app.apply(Action::SetShuffle(true), &ctx);
+        app.actions.clear();
+
+        let input_layout = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(800.0, 600.0),
+            )),
+            ..Default::default()
+        };
+        let mut filter = "filter".to_string();
+        let mut out = ctx.run_ui(input_layout, |ui| {
+            actions_row(
+                &mut app,
+                ui,
+                Actions {
+                    play_uri: Some("spotify:playlist:test".into()),
+                    view: Some(Arc::from([
+                        "spotify:track:1".into(),
+                        "spotify:track:2".into(),
+                    ])),
+                    saved: None,
+                    saved_icons: (Icon::CirclePlus, Icon::CircleCheck),
+                    saved_tooltips: ("", ""),
+                    owned_playlist: None,
+                    name: "Test",
+                },
+                Some(&mut filter),
+            );
+        });
+        out.textures_delta.clear();
+
+        let click_pos = egui::pos2(28.0, 28.0);
+        let input_click = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(800.0, 600.0),
+            )),
+            events: vec![
+                egui::Event::PointerMoved(click_pos),
+                egui::Event::PointerButton {
+                    pos: click_pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+                egui::Event::PointerButton {
+                    pos: click_pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+            ..Default::default()
+        };
+
+        let mut output = ctx.run_ui(input_click, |ui| {
+            actions_row(
+                &mut app,
+                ui,
+                Actions {
+                    play_uri: Some("spotify:playlist:test".into()),
+                    view: Some(Arc::from([
+                        "spotify:track:1".into(),
+                        "spotify:track:2".into(),
+                    ])),
+                    saved: None,
+                    saved_icons: (Icon::CirclePlus, Icon::CircleCheck),
+                    saved_tooltips: ("", ""),
+                    owned_playlist: None,
+                    name: "Test",
+                },
+                Some(&mut filter),
+            );
+        });
+        output.textures_delta.clear();
+
+        assert!(
+            matches!(
+                app.actions.as_slice(),
+                [Action::PlayFromRow {
+                    context: RowContext::View { uris, context_uri },
+                    index: 0,
+                    ..
+                }] if uris.as_ref() == ["spotify:track:1", "spotify:track:2"] && context_uri == "spotify:playlist:test"
+            ),
+            "expected PlayFromRow with filtered view, got {:?}",
+            app.actions
         );
     }
 
