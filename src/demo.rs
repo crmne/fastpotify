@@ -1089,6 +1089,69 @@ mod tests {
     }
 
     #[test]
+    fn playlist_sort_menu_opens_and_selects_with_keyboard() {
+        use egui::accesskit::{Action as AccessibleAction, Role};
+        let (ctx, mut app) = accessible_app("playlist-sort-menu");
+        app.open(Page::Playlist("pl1".into()));
+        accessible_frame(&ctx, &mut app, vec![]);
+        let tree = accessible_frame(&ctx, &mut app, vec![]);
+        let sort = accessible_node(&tree, "Custom order", Role::Button);
+        accessible_frame(
+            &ctx,
+            &mut app,
+            vec![accessible_action(sort, AccessibleAction::Focus, None)],
+        );
+        let tree = accessible_frame(
+            &ctx,
+            &mut app,
+            vec![keyboard(egui::Key::Enter, egui::Modifiers::NONE)],
+        );
+        let artist = accessible_node(&tree, "Artist", Role::Button);
+        accessible_frame(
+            &ctx,
+            &mut app,
+            vec![accessible_action(artist, AccessibleAction::Focus, None)],
+        );
+        accessible_frame(
+            &ctx,
+            &mut app,
+            vec![keyboard(egui::Key::Enter, egui::Modifiers::NONE)],
+        );
+        assert_eq!(
+            app.table_sorts.get(&Page::Playlist("pl1".into())),
+            Some(&crate::model::TableSort {
+                column: crate::model::SortColumn::Artist,
+                ascending: true,
+            })
+        );
+        let tree = accessible_frame(&ctx, &mut app, vec![]);
+        let sort = accessible_node(&tree, "Artist", Role::Button);
+        accessible_frame(
+            &ctx,
+            &mut app,
+            vec![accessible_action(sort, AccessibleAction::Focus, None)],
+        );
+        let tree = accessible_frame(
+            &ctx,
+            &mut app,
+            vec![keyboard(egui::Key::Enter, egui::Modifiers::NONE)],
+        );
+        let custom = accessible_node(&tree, "Custom order", Role::Button);
+        accessible_frame(
+            &ctx,
+            &mut app,
+            vec![accessible_action(custom, AccessibleAction::Focus, None)],
+        );
+        accessible_frame(
+            &ctx,
+            &mut app,
+            vec![keyboard(egui::Key::Enter, egui::Modifiers::NONE)],
+        );
+        assert_eq!(app.table_sorts.get(&Page::Playlist("pl1".into())), None);
+        app.backend.shutdown();
+    }
+
+    #[test]
     fn library_sorts_finish_paging_without_retrying_failed_pages() {
         use crate::settings::{LibraryShelf, LibrarySort};
         for (shelf, label, page) in [

@@ -601,6 +601,7 @@ pub struct TableSort {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum SortColumn {
     Title,
+    Artist,
     Album,
     Added,
     Duration,
