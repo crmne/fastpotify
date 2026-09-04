@@ -450,10 +450,13 @@ pub fn show_window(app: &mut crate::app::App, ui: &mut Ui) {
     // child sets the pace. A stopped child leaves the last picture
     // cleared where the lifecycle runs, falling back to bars.
     #[cfg(feature = "milkdrop")]
+    let mut milkdrop_fresh = false;
+    #[cfg(feature = "milkdrop")]
     if let Some(host) = app.wmp_milkdrop.as_ref() {
         let mut cursor = render.milkdrop_cursor;
         if let Some((width, height, pixels)) = host.frames(&mut cursor) {
             render.milkdrop_cursor = cursor;
+            milkdrop_fresh = true;
             let image =
                 ColorImage::from_rgba_unmultiplied([width as usize, height as usize], &pixels);
             let same = render.milkdrop.is_some() && render.milkdrop_size == (width, height);
@@ -562,6 +565,21 @@ pub fn show_window(app: &mut crate::app::App, ui: &mut Ui) {
                 }
             }
         }
+    }
+
+    // Keep the picture moving: a fresh MilkDrop frame, bars still
+    // falling, or a sounding scope all want the next frame. Otherwise
+    // the pane sits on its last picture until something else repaints,
+    // freezing for seconds at a time.
+    #[cfg(feature = "milkdrop")]
+    let milkdrop_animating = milkdrop_fresh;
+    #[cfg(not(feature = "milkdrop"))]
+    let milkdrop_animating = false;
+    let sounding = media.is_some_and(|now| (now.playing || now.loading) && now.local);
+    let bars_moving = app.settings.vis == VisMode::Bars && (sounding || !render.analyser.settled());
+    let scope_moving = app.settings.vis == VisMode::Scope && sounding;
+    if milkdrop_animating || bars_moving || scope_moving {
+        ctx.request_repaint();
     }
 
     // The move handle: a press on the skin's own shape that no control
