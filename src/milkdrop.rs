@@ -24,6 +24,10 @@ use std::time::{Duration, Instant};
 pub mod child;
 #[cfg(feature = "milkdrop")]
 pub mod engine;
+/// The shared-memory picture between the MilkDrop child and a skin that
+/// wears it: the frame the child rendered, for the app to draw.
+#[cfg(feature = "milkdrop")]
+pub mod frame;
 /// The app's side of the child process: spawning it and talking to it.
 #[cfg(feature = "milkdrop")]
 pub mod host;

@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex};
 
 use serde::Deserialize;
 
+use super::frame::Frame;
 use super::shm::Ring;
 use crate::vis::AudioTap;
 
@@ -55,21 +56,33 @@ struct Running {
     /// The song last told to the window, which overlays a change.
     song: Option<Vec<String>>,
 }
-
 pub struct Host {
     tap: Arc<AudioTap>,
     /// Where the shared-memory ring file lives, one per app run.
     shm_path: PathBuf,
+    /// Where the shared-memory framebuffer lives, for a skin that wears
+    /// the picture. One per app run, alongside the ring.
+    frame_path: PathBuf,
+    /// The framebuffer a skin reads, when a hidden child is rendering
+    /// for one. `None` is a window only, or nothing at all.
+    frame: Option<Frame>,
     running: Option<Running>,
+    /// When starting a hidden child last failed, so a persistent failure
+    /// does not respawn it every frame.
+    retry_after: Option<std::time::Instant>,
 }
 
 impl Host {
     pub fn new(tap: Arc<AudioTap>) -> Self {
         let shm_path = std::env::temp_dir().join(format!("fastpotify-milkdrop-{}.pcm", pid()));
+        let frame_path = std::env::temp_dir().join(format!("fastpotify-milkdrop-{}.frames", pid()));
         Self {
             tap,
             shm_path,
+            frame_path,
+            frame: None,
             running: None,
+            retry_after: None,
         }
     }
 
@@ -158,6 +171,107 @@ impl Host {
         });
     }
 
+    /// Starts a hidden child that renders only to write frames for a
+    /// skin: no visible window, the picture goes to the framebuffer a
+    /// skin reads. The size is the frame's own; the skin scales it to
+    /// the pane.
+    pub fn open_hidden(
+        &mut self,
+        presets: &Path,
+        size: [f32; 2],
+        fps: u32,
+        seconds: u32,
+        scale: u32,
+    ) {
+        if self.running.is_some() {
+            return;
+        }
+        // A persistent failure must not respawn every frame.
+        if self
+            .retry_after
+            .is_some_and(|at| std::time::Instant::now() < at)
+        {
+            return;
+        }
+        let cool = || Some(std::time::Instant::now() + std::time::Duration::from_secs(10));
+        let ring = match Ring::create(&self.shm_path) {
+            Ok(ring) => Arc::new(ring),
+            Err(error) => {
+                log::warn!("MilkDrop: could not make the audio buffer: {error}");
+                self.retry_after = cool();
+                return;
+            }
+        };
+        let frame = match Frame::create(&self.frame_path) {
+            Ok(frame) => frame,
+            Err(error) => {
+                log::warn!("MilkDrop: could not make the frame buffer: {error}");
+                self.retry_after = cool();
+                return;
+            }
+        };
+        let exe = match std::env::current_exe() {
+            Ok(exe) => exe,
+            Err(error) => {
+                log::warn!("MilkDrop: could not find the program to run: {error}");
+                return;
+            }
+        };
+        let mut command = Command::new(exe);
+        command
+            .arg("--milkdrop-child")
+            .arg("--milkdrop-shm")
+            .arg(&self.shm_path)
+            .arg("--milkdrop-presets")
+            .arg(presets)
+            .arg("--milkdrop-size")
+            .arg(format!("{}x{}", size[0], size[1]))
+            .arg("--milkdrop-fps")
+            .arg(fps.to_string())
+            .arg("--milkdrop-seconds")
+            .arg(seconds.to_string())
+            .arg("--milkdrop-scale")
+            .arg(scale.to_string())
+            .arg("--milkdrop-hidden")
+            .arg("--milkdrop-frames")
+            .arg(&self.frame_path)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit());
+        let mut process = match command.spawn() {
+            Ok(process) => process,
+            Err(error) => {
+                log::warn!("MilkDrop: could not start its window: {error}");
+                self.retry_after = cool();
+                return;
+            }
+        };
+        let stdin = process.stdin.take().expect("child stdin was piped");
+        let stdout = process.stdout.take().expect("child stdout was piped");
+        let reported = Arc::new(Mutex::new(Reported::default()));
+        spawn_reader(stdout, Arc::clone(&reported));
+
+        // The child keeps both mappings by their paths; this side keeps
+        // writing the sound and reading the picture.
+        self.tap.set_shm(Some(ring));
+        self.frame = Some(frame);
+        self.running = Some(Running {
+            process,
+            stdin,
+            reported,
+            fps,
+            seconds,
+            scale,
+            song: None,
+        });
+    }
+
+    /// The latest picture, when the child has drawn one since `cursor`:
+    /// its size and RGBA bytes, top-down. Updates the cursor past it.
+    pub fn frames(&self, cursor: &mut u64) -> Option<(u32, u32, Vec<u8>)> {
+        self.frame.as_ref()?.read(cursor)
+    }
+
     /// Sends new settings to the window, if they changed.
     pub fn update(&mut self, fps: u32, seconds: u32, scale: u32) {
         let Some(running) = &mut self.running else {
@@ -232,6 +346,7 @@ impl Host {
 
     fn stop(&mut self) {
         self.tap.set_shm(None);
+        self.frame = None;
         if let Some(mut running) = self.running.take() {
             // Ask nicely, then make sure it is gone.
             drop(running.stdin);
@@ -244,6 +359,7 @@ impl Host {
             }
         }
         let _ = std::fs::remove_file(&self.shm_path);
+        let _ = std::fs::remove_file(&self.frame_path);
     }
 }
 

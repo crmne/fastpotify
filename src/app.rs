@@ -272,6 +272,11 @@ pub struct App {
     /// `Drop` stops the child when the app does.
     #[cfg(feature = "milkdrop")]
     milkdrop_host: Option<crate::milkdrop::host::Host>,
+    /// The hidden MilkDrop child that renders frames for a worn skin's
+    /// media pane; `None` until a skin showing one is worn. Independent
+    /// of the standalone window above.
+    #[cfg(feature = "milkdrop")]
+    pub wmp_milkdrop: Option<crate::milkdrop::host::Host>,
     last_eviction: Instant,
     pub sign_in_url: Option<String>,
     /// The verified personal Web API application, when acceleration is ready.
@@ -522,6 +527,8 @@ impl App {
             milkdrop_pos: session.milkdrop_pos,
             #[cfg(feature = "milkdrop")]
             milkdrop_host: None,
+            #[cfg(feature = "milkdrop")]
+            wmp_milkdrop: None,
             last_eviction: Instant::now(),
             sign_in_url: None,
             web_app: None,
@@ -1737,6 +1744,65 @@ impl App {
         // while the app is otherwise idle.
         if self.settings.milkdrop_open {
             ctx.request_repaint_after(std::time::Duration::from_millis(300));
+        }
+    }
+
+    /// Whether a view holds a media pane (effects, video) the skin would
+    /// show a picture in. The pane need not be visible now; a drawer that
+    /// opens holds one all the same.
+    #[cfg(feature = "milkdrop")]
+    fn has_media_pane(view: &crate::wmp::View) -> bool {
+        view.children
+            .iter()
+            .flat_map(crate::wmp::Element::walk)
+            .any(|element| {
+                matches!(
+                    element,
+                    crate::wmp::Element::Other(other)
+                        if matches!(other.name.as_str(), "wmpvideo" | "effects" | "video")
+                )
+            })
+    }
+
+    /// Runs a hidden MilkDrop child that renders frames for a worn skin's
+    /// media pane, and stops it when no skin showing one is worn. The
+    /// picture the child draws is what the pane wears instead of bars.
+    #[cfg(feature = "milkdrop")]
+    fn sync_wmp_milkdrop(&mut self) {
+        let want = self.settings.wmp_window
+            && self.settings.wmp_milkdrop
+            && self
+                .wmp
+                .skin
+                .as_ref()
+                .is_some_and(|skin| skin.document.views.iter().any(Self::has_media_pane));
+        if self.wmp_milkdrop.is_none() {
+            let tap = std::sync::Arc::clone(&self.winamp.tap);
+            self.wmp_milkdrop = Some(crate::milkdrop::host::Host::new(tap));
+        }
+        let host = self.wmp_milkdrop.as_mut().expect("the host was just made");
+        if want {
+            if !host.is_running() {
+                let presets = self.dirs.milkdrop_dir();
+                // The hidden child follows the standalone window's own
+                // settings; a skin pane scales whatever picture comes.
+                host.open_hidden(
+                    &presets,
+                    [320.0, 240.0],
+                    self.settings.milkdrop_fps,
+                    self.settings.milkdrop_seconds,
+                    self.settings.milkdrop_scale.max(1),
+                );
+            }
+        } else if host.is_running() {
+            host.close();
+        }
+        // A stopped child leaves no picture; the pane falls back to bars
+        // instead of a frozen frame.
+        if !host.is_running()
+            && let Some(skin) = self.wmp.skin.as_mut()
+        {
+            skin.render.milkdrop = None;
         }
     }
 
@@ -5163,6 +5229,10 @@ impl App {
         // updates, and hears back from it here.
         #[cfg(feature = "milkdrop")]
         self.sync_milkdrop(ctx);
+        // A worn skin's media pane wears the hidden child's picture; the
+        // child runs only while such a pane stands.
+        #[cfg(feature = "milkdrop")]
+        self.sync_wmp_milkdrop();
         self.apply_actions(ctx);
         self.sync_media_controls();
 

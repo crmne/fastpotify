@@ -684,6 +684,17 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 });
             },
         );
+        widgets::setting_row(
+            ui,
+            &palette,
+            "MilkDrop picture",
+            "On shows MilkDrop's picture in a skin's video screen, rendered by a hidden child; off shows the built-in bars or scope, which cost almost nothing. The vis setting picks bars, scope, or off.",
+            |ui| {
+                if widgets::switch(ui, &palette, &mut app.settings.wmp_milkdrop).changed() {
+                    changed = true;
+                }
+            },
+        );
     });
 
     section(ui, &palette, "MilkDrop", |ui| {

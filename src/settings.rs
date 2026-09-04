@@ -112,6 +112,11 @@ pub struct Settings {
     /// The WMP skin the skin window wears: a `.wmz` file name in the
     /// skins folder. `None` is no skin.
     pub wmp_skin: Option<String>,
+    /// The skin's media pane shows MilkDrop's picture, rendered by a
+    /// hidden child. Off is the built-in bars or scope, which cost
+    /// almost nothing.
+    #[serde(default)]
+    pub wmp_milkdrop: bool,
     /// The Winamp window stays above other windows.
     pub winamp_on_top: bool,
     /// The mini player's visualiser: bars, scope, or off.
@@ -189,6 +194,7 @@ impl Default for Settings {
             wmp_scale: None,
             wmp_window: false,
             wmp_skin: None,
+            wmp_milkdrop: false,
             winamp_on_top: false,
             vis: VisMode::default(),
             playlist_open: false,
@@ -282,6 +288,7 @@ mod tests {
         assert_eq!(settings.wmp_scale, None);
         assert!(!settings.wmp_window);
         assert_eq!(settings.wmp_skin, None);
+        assert!(!settings.wmp_milkdrop);
         assert!(!settings.winamp_on_top);
         assert_eq!(settings.vis, super::VisMode::Bars);
         assert!(!settings.playlist_open);
