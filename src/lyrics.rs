@@ -1,17 +1,12 @@
 //! Lyrics for the playing track, from Spotify or LRCLIB.
 //!
-//! [LRCLIB](https://lrclib.net) is an open lyrics database with no account
-//! and no key. It serves plain lyrics and, for many tracks, synced ones in
-//! LRC form, a timestamp per line, which is what lets the panel follow the
-//! song instead of guessing. Spotify's own transcription is asked first when
-//! the streaming session is signed in; LRCLIB answers for everything else,
-//! wherever it plays.
+//! [LRCLIB](https://lrclib.net) provides plain and LRC-synced lyrics without an
+//! account or key. Fastpotify tries Spotify's transcription first when the
+//! playback session is signed in, then LRCLIB.
 //!
-//! Matching is the work. What a player reports rarely matches a database
-//! exactly, so an exact lookup goes first and a search is ranked after it,
-//! with the track's length as the strongest signal: a title shared by a
-//! studio take, a live one, and somebody else's song of the same name is
-//! told apart by how long each runs.
+//! Matching starts with an exact lookup, then ranks search results. Track
+//! length is the strongest signal for distinguishing versions with the same
+//! title.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -28,7 +23,7 @@ const CACHE_LIFETIME: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 /// recording, however well the names match.
 const MAX_DRIFT_SECS: f64 = 30.0;
 
-/// What is playing, as a lyrics database wants it asked.
+/// Track metadata used for lyrics lookup.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Query {
     pub artist: String,
@@ -67,8 +62,7 @@ impl Lyrics {
     }
 }
 
-/// Spotify's own transcription, read from the `color-lyrics` answer its
-/// clients use. `None` when the answer holds no usable lines.
+/// Parses Spotify's `color-lyrics` response.
 pub fn from_spotify(json: &serde_json::Value) -> Option<Lyrics> {
     let lyrics = json.get("lyrics")?;
     let synced = lyrics.get("syncType").and_then(|value| value.as_str()) == Some("LINE_SYNCED");
@@ -117,8 +111,7 @@ pub fn store(path: &Path, found: &Option<Lyrics>) {
     write_cache(path, found);
 }
 
-/// The lyrics for `query`, or `None` when nobody has transcribed the track.
-/// Answers are kept on disk, so a track heard again costs no request.
+/// Fetches lyrics for `query`, using the disk cache when available.
 pub async fn fetch(
     http: &reqwest::Client,
     cache_dir: &Path,

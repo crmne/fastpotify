@@ -15,7 +15,7 @@ body:
     id: problem
     attributes:
       label: What problem should Fastpotify solve?
-      description: Describe the workflow and pain, not only the name of a feature.
+      description: Explain what you are trying to do and what stops you.
       placeholder: "When I ..., I cannot ..., so I currently have to ..."
     validations:
       required: true
@@ -23,13 +23,13 @@ body:
     id: proposal
     attributes:
       label: What would a good solution look like?
-      description: Include alternatives you considered and how often this comes up.
+      description: Include other options you tried and how often you need this.
     validations:
       required: true
   - type: textarea
     id: fit
     attributes:
       label: Why does this fit Fastpotify?
-      description: Explain how it preserves a small, native, cross-platform Spotify client.
+      description: Explain why it belongs in a small, native Spotify client.
     validations:
       required: true

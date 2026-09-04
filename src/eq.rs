@@ -1,11 +1,11 @@
-//! The equalizer: Winamp's ten bands, done to the sound on its way out.
+//! Ten-band equalizer for local playback.
 //!
-//! librespot has no equalizer, so this is Fastpotify's own: a peaking
-//! filter per band (the textbook second-order kind) run over every sample
-//! of local playback, and a preamp that only ever turns down, since the
-//! app does not boost past 0 dB. The settings live behind a mutex the
-//! window writes and the player's thread reads once per packet; the
-//! filters are rebuilt only when something changed.
+//! Each Winamp band uses a second-order peaking filter. Bands and preamp range
+//! from -12 to +12 dB. The UI writes settings behind a mutex; the player reads
+//! them once per packet and rebuilds filters only after changes.
+//!
+//! This stage does not clip boosted samples. `vis::Tapped` limits the signal
+//! later, after accounting for output volume.
 
 use std::sync::{Arc, Mutex};
 
@@ -23,14 +23,13 @@ const FLAT: f32 = 0.05;
 /// combined response meet them; a guard, not a target.
 const SOLVED_LIMIT: f64 = 36.0;
 
-/// What the listener set: the switch, the preamp, and the bands, and
-/// the two things Winamp's main window did to the sound as well, the
-/// balance and (a lamp there, a switch here) mono. Those two apply
-/// whether the equalizer is on or not.
+/// Equalizer, preamp, balance, and mono settings.
+///
+/// Balance and mono apply even when the equalizer is off.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct EqSettings {
     pub on: bool,
-    /// Never above zero.
+    /// Twelve decibels either way, like the bands.
     pub preamp_db: f32,
     pub bands_db: [f32; 10],
     /// -1 is all left, 1 all right.
@@ -61,15 +60,13 @@ impl EqSettings {
         self
     }
 
-    /// The gain of each channel from the balance: the side turned away
-    /// from loses, the other keeps its level, as Winamp's did.
+    /// Per-channel balance gains. The quieter side is attenuated.
     pub fn channel_gains(&self) -> [f64; 2] {
         let balance = f64::from(self.balance);
         [(1.0 - balance).min(1.0), (1.0 + balance).min(1.0)]
     }
 
-    /// The response as it is played, with the switch on: the very filters
-    /// the player runs, to draw from.
+    /// Filter response used for playback and the curve display.
     pub fn curve(&self) -> Curve {
         Curve {
             preamp_db: self.preamp_db,
@@ -83,7 +80,7 @@ impl EqSettings {
     }
 }
 
-/// The equalizer's response, ready to be asked frequency by frequency.
+/// Equalizer response by frequency.
 pub struct Curve {
     preamp_db: f32,
     filters: Vec<Biquad>,
@@ -99,14 +96,11 @@ impl Curve {
     }
 }
 
-/// Each band's width in octaves, from where its neighbours are: half way
-/// to each. Winamp's bands are not evenly spaced, three of them sit
-/// within a third of an octave at the top, and one width for all piled
-/// those three on top of each other, so that "Full Treble" came out at
-/// +26 dB where it says +12. The first and last band have no neighbour
-/// on their outer side and, as Winamp's did, take in what lies beyond:
-/// the sub-bass under 60 Hz and the air over 16 kHz, so their outer
-/// halves reach three octaves down and one up.
+/// Band widths in octaves, based on the midpoint between adjacent bands.
+///
+/// The bands are unevenly spaced. A shared width makes the high bands overlap
+/// and overboost presets such as Full Treble. The outer bands extend three
+/// octaves below 60 Hz and one octave above 16 kHz, matching Winamp.
 fn band_widths() -> [f64; 10] {
     let octaves: Vec<f64> = BANDS.iter().map(|hz| f64::from(*hz).log2()).collect();
     let mut widths = [0.0; 10];
@@ -123,10 +117,8 @@ fn band_widths() -> [f64; 10] {
     widths
 }
 
-/// The filters that make the combined response meet the sliders at every
-/// band's centre. Neighbouring peaks add up, so the gain each filter is
-/// given is not the slider's own: the interaction is solved for, on the
-/// digital filters themselves, and refined until the centres agree.
+/// Builds filters whose combined response matches each slider at its centre.
+/// Adjacent filters overlap, so their individual gains are solved together.
 fn chain(bands_db: &[f32; 10]) -> Vec<Biquad> {
     let widths = band_widths();
     let target: [f64; 10] = bands_db.map(f64::from);
@@ -471,7 +463,12 @@ impl Processor {
                 frame[1] = middle;
             }
             for (sample, gain) in frame.iter_mut().zip(gains) {
-                *sample = (*sample * gain).clamp(-1.0, 1.0);
+                // No ceiling here. These are floats with room to spare, and
+                // the one ceiling in the chain sits at the end, past the
+                // volume: a boost that would clip at full volume is fine
+                // three notches down, and holding it back here would take
+                // that away for good. See `vis::Tapped`.
+                *sample *= gain;
             }
         }
     }

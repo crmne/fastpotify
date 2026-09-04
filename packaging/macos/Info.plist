@@ -18,6 +18,19 @@
     <array>
         <string>_spotify-connect._tcp</string>
     </array>
+    <!-- Spotify links (spotify:track:…) open in Fastpotify; src/mac_links.rs
+         takes them. Launch Services notes this when the app is first opened. -->
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key><string>Spotify link</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>spotify</string>
+            </array>
+            <key>CFBundleTypeRole</key><string>Viewer</string>
+        </dict>
+    </array>
     <key>NSHumanReadableCopyright</key><string>MIT License. Not affiliated with Spotify AB.</string>
 </dict>
 </plist>

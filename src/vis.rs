@@ -1,17 +1,10 @@
-//! The visualiser's audio: a tap on the samples on their way out, and the
-//! sums that turn them into Winamp's bars and scope. The analyser is a
-//! port of the one in Winamp's own published source (Src/Winamp/
-//! classic_vis.cpp): its constants, bands, and clipping, expressed anew.
+//! Audio tap and Winamp-style spectrum and oscilloscope data.
 //!
-//! The tap wraps whichever sink plays the music (this crate's, or one of
-//! librespot's) and keeps the last half second of it, mixed to mono for the
-//! analyser and in stereo for MilkDrop, which reads what has arrived since
-//! it last looked. The analyser is a port of Winamp's classic one as Webamp reconstructed it
-//! (`VisPainter.ts` and `FFTNullsoft.ts`): Nullsoft's own FFT with its sine
-//! envelope and log equalisation, 75 columns spread over the spectrum on a
-//! mostly logarithmic sweep and grouped four at a time into 19 bars, bars
-//! that fall at a fixed rate, and peaks that hang, then drop faster and
-//! faster.
+//! The tap wraps the active sink and stores half a second of post-EQ,
+//! pre-volume audio. The analyser uses Winamp's constants and behavior from
+//! `classic_vis.cpp`, with FFT details cross-checked against Webamp's
+//! `VisPainter.ts` and `FFTNullsoft.ts`. MilkDrop receives stereo samples;
+//! the spectrum and scope use mono samples.
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -23,7 +16,7 @@ use librespot_playback::decoder::AudioPacket;
 use librespot_playback::mixer::VolumeGetter;
 use librespot_playback::{NUM_CHANNELS, SAMPLE_RATE};
 
-/// How much sound the tap keeps: half a second.
+/// Half a second of audio.
 const KEPT: usize = SAMPLE_RATE as usize / 2;
 /// How far behind the newest sample the visualiser looks, so that it shows
 /// what the speaker is playing rather than what the sink has queued.
@@ -48,8 +41,7 @@ const PEAK_FALLOFF: f32 = 1.1;
 /// changed how quickly the bars fell; a frame that comes sooner than
 /// this shows the bars where they were.
 pub const STEP: Duration = Duration::from_micros(16_667);
-/// Winamp summed the two channels; the tap keeps their mean, so the
-/// analyser doubles it back.
+/// Converts the tap's channel mean to Winamp's channel sum.
 const CHANNEL_SUM: f32 = 2.0;
 /// Winamp's own scale on every magnitude.
 const SPEC_SCALE: f32 = 0.5;
@@ -86,16 +78,14 @@ impl AudioTap {
         Arc::new(Self::default())
     }
 
-    /// Points the tap at a shared-memory ring, so the sound reaches the
-    /// MilkDrop child process; `None` detaches it when the child is gone.
+    /// Connects the tap to MilkDrop's shared-memory ring. `None` detaches it.
     #[cfg(feature = "milkdrop")]
     pub fn set_shm(&self, ring: Option<std::sync::Arc<crate::milkdrop::shm::Ring>>) {
         *self.shm.lock().unwrap_or_else(|p| p.into_inner()) = ring;
     }
 
-    /// Takes interleaved stereo samples, scaled by `gain`: mixed down for
-    /// the analyser, and, if a MilkDrop child is listening, sent on in
-    /// stereo through the shared ring.
+    /// Adds scaled stereo samples to the mono analyser buffer and, when
+    /// attached, MilkDrop's stereo shared-memory ring.
     pub fn push(&self, interleaved: &[f64], gain: f32) {
         let mut samples = self.samples.lock().unwrap_or_else(|p| p.into_inner());
         let (frames, _) = interleaved.as_chunks::<{ NUM_CHANNELS as usize }>();
@@ -150,20 +140,20 @@ impl AudioTap {
     }
 }
 
-/// A sink that runs the equalizer over every sample and hands the tap
-/// the result on its way to the real one, so the bars show what is heard.
+/// Runs the equalizer and taps the signal before passing it to the real sink.
 pub struct Tapped {
     inner: Box<dyn Sink>,
     tap: Arc<AudioTap>,
     eq: crate::eq::Processor,
-    /// The volume this sink applies itself, after the tap, so the bars
-    /// show the music and not the knob; undoing an already-applied volume
-    /// cannot work at zero, where the signal is gone. `None` when the
-    /// inner sink applies the volume, also after the tap.
-    apply_volume: Option<Box<dyn VolumeGetter + Send>>,
-    /// The playing track's normalisation factor, reported by the player;
-    /// the tap undoes it so the picture shows the music, not the loudness
-    /// housekeeping. Winamp's analyser compensated the same way.
+    /// Player volume, used to calculate the limiter ceiling.
+    volume: Box<dyn VolumeGetter + Send>,
+    /// Whether this wrapper applies volume after the tap. Otherwise the inner
+    /// sink applies it, still after the tap and to already queued audio.
+    applies_volume: bool,
+    /// Final limiter, placed here because this stage knows the output volume.
+    limiter: crate::limiter::Limiter,
+    /// Track normalization factor. The tap removes it so visualizers show the
+    /// source dynamics, as Winamp's analyser did.
     normalisation: Arc<std::sync::atomic::AtomicU64>,
 }
 
@@ -171,7 +161,8 @@ impl Tapped {
     pub fn new(
         inner: Box<dyn Sink>,
         tap: Arc<AudioTap>,
-        apply_volume: Option<Box<dyn VolumeGetter + Send>>,
+        volume: Box<dyn VolumeGetter + Send>,
+        applies_volume: bool,
         eq: crate::eq::SharedEq,
         normalisation: Arc<std::sync::atomic::AtomicU64>,
     ) -> Self {
@@ -179,9 +170,26 @@ impl Tapped {
             inner,
             tap,
             eq: crate::eq::Processor::new(eq),
-            apply_volume,
+            volume,
+            applies_volume,
+            limiter: crate::limiter::Limiter::new(f64::from(SAMPLE_RATE)),
             normalisation,
         }
+    }
+}
+
+/// Full-scale level for samples leaving `Tapped`.
+///
+/// This is 1.0 after volume is applied. Before volume, it is the level that
+/// becomes 1.0 after the inner sink applies volume.
+fn full_scale(volume: f64, applied: bool) -> Option<f64> {
+    if applied {
+        Some(1.0)
+    } else if volume > f64::EPSILON {
+        Some(1.0 / volume)
+    } else {
+        // At zero volume, no finite pre-volume ceiling is needed.
+        None
     }
 }
 
@@ -212,11 +220,14 @@ impl Sink for Tapped {
                     1.0
                 };
                 self.tap.push(&samples, restore);
-                if let Some(volume) = &self.apply_volume {
-                    let attenuation = volume.attenuation_factor();
+                let attenuation = self.volume.attenuation_factor();
+                if self.applies_volume {
                     for sample in &mut samples {
                         *sample *= attenuation;
                     }
+                }
+                if let Some(full_scale) = full_scale(attenuation, self.applies_volume) {
+                    self.limiter.process(&mut samples, full_scale);
                 }
                 AudioPacket::Samples(samples)
             }
@@ -624,5 +635,18 @@ mod tests {
         assert_eq!(scope_shade(7), 0);
         assert_eq!(scope_shade(0), 3);
         assert_eq!(scope_shade(15), 4);
+    }
+
+    /// Rule: full scale is one when the volume is already in, and the
+    /// level that lands on one when the output has yet to apply it.
+    /// Getting this wrong would hold a quiet listener to a quarter of
+    /// what their speaker could have had. The limiting itself is
+    /// [`crate::limiter`]'s, and tested there.
+    #[test]
+    fn full_scale_follows_the_volume_still_to_come() {
+        assert_eq!(full_scale(0.5, true), Some(1.0), "already applied: one");
+        assert_eq!(full_scale(0.25, false), Some(4.0), "a quarter to come");
+        assert_eq!(full_scale(1.0, false), Some(1.0), "full volume to come");
+        assert_eq!(full_scale(0.0, false), None, "silence has no ceiling");
     }
 }

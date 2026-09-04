@@ -1,4 +1,4 @@
-//! Local playback: a Spotify Connect device built on librespot.
+//! Local Spotify Connect playback through librespot.
 //!
 //! The engine owns one librespot session, player, mixer, and Spirc (the
 //! Connect state machine). Player events are folded into a [`LocalState`]
@@ -33,7 +33,7 @@ use librespot_playback::{
 };
 use sha1::{Digest, Sha1};
 
-use crate::sink::{ErrorHook, RodioSink};
+use crate::sink::{AudioControl, ErrorHook, RodioSink};
 use crate::vis::{AudioTap, Tapped};
 
 #[derive(Clone, Debug)]
@@ -50,7 +50,8 @@ pub struct EngineConfig {
     pub volume_dir: PathBuf,
     pub audio_cache_dir: Option<PathBuf>,
     pub audio_cache_limit: Option<u64>,
-    /// Where the samples on their way out are copied for the visualiser.
+    /// Output buffer length in milliseconds.
+    pub buffer_ms: u32,
     pub tap: Arc<AudioTap>,
     /// The equalizer's settings, shared with the window that sets them.
     pub eq: crate::eq::SharedEq,
@@ -162,6 +163,9 @@ pub struct LocalState {
     pub volume: u16,
     pub shuffle: bool,
     pub repeat: RepeatMode,
+    /// The librespot engine's Spotify session is alive. Connect device
+    /// activity is separate: Spotify may make this device inactive while the
+    /// session remains ready to be activated by the next load.
     pub connected: bool,
     pub username: String,
     pub active_client: String,
@@ -232,7 +236,7 @@ pub enum PlayerCommand {
     Toggle,
     Next,
     Previous,
-    /// Drop every hand-queued track, keeping the context's own.
+    /// Remove manually queued tracks and keep context tracks.
     ClearQueue,
     /// Queue a track or episode after the ones already queued.
     AddToQueue(String),
@@ -267,6 +271,7 @@ pub struct Engine {
     /// What was playing when the session ended on its own.
     interrupted: Arc<Mutex<Option<Interrupted>>>,
     shutting_down: Arc<std::sync::atomic::AtomicBool>,
+    audio: Arc<AudioControl>,
 }
 
 impl Engine {
@@ -314,16 +319,23 @@ impl Engine {
             ..LocalState::default()
         }));
         let session = Session::new(session_config, Some(cache));
+        let audio = AudioControl::new(config.buffer_ms);
         let (sink_builder, volume) = sink_builder(
             config,
             Arc::clone(&state),
             Arc::clone(&notify),
             &mixer,
             Arc::clone(&normalisation_factor),
+            Arc::clone(&audio),
         );
         let player = Player::new(player_config, session.clone(), volume, sink_builder);
         let events = player.get_player_event_channel();
-        tokio::spawn(run_events(events, Arc::clone(&state), Arc::clone(&notify)));
+        tokio::spawn(run_events(
+            events,
+            Arc::clone(&state),
+            Arc::clone(&notify),
+            Arc::clone(&audio),
+        ));
 
         let connect_config = ConnectConfig {
             name: config.device_name.clone(),
@@ -383,12 +395,11 @@ impl Engine {
             state,
             interrupted,
             shutting_down,
+            audio,
         })
     }
 
-    /// What to resume after this engine is replaced: what was playing when
-    /// its session ended, or what is playing now if the session still
-    /// stands and the engine is being restarted anyway.
+    /// Playback state to resume after replacing this engine.
     pub fn interrupted(&self) -> Option<Interrupted> {
         let ended = self
             .interrupted
@@ -424,12 +435,12 @@ impl Engine {
         }
     }
 
-    /// The account's playlist tree, the way Spotify's own clients read
-    /// it: playlist rows in the listener's order, with markers around each
-    /// folder.
-    pub async fn rootlist(&self) -> Result<Vec<RootlistEntry>> {
+    /// Account playlist tree in Spotify order, including folder markers,
+    /// and which of its playlists the account may add songs to.
+    pub async fn rootlist(&self) -> Result<Rootlist> {
         use protobuf::Message as _;
         let mut uris = Vec::new();
+        let mut editable = std::collections::BTreeSet::new();
         let mut from = 0usize;
         loop {
             let bytes = self
@@ -447,13 +458,17 @@ impl Engine {
             };
             let count = contents.items.len();
             let truncated = contents.truncated();
+            editable.extend(editable_uris(&contents));
             uris.extend(contents.items.into_iter().filter_map(|item| item.uri));
             if !truncated || count == 0 {
                 break;
             }
             from += count;
         }
-        Ok(parse_rootlist(&uris))
+        Ok(Rootlist {
+            entries: parse_rootlist(&uris),
+            editable,
+        })
     }
 
     /// The display name behind a user id, from the profile view Spotify's
@@ -479,6 +494,21 @@ impl Engine {
     }
 
     pub fn command(&self, command: PlayerCommand) -> Result<()> {
+        let interrupts_audio = command_interrupts_audio(
+            &self.state.lock().unwrap_or_else(|p| p.into_inner()),
+            &command,
+        );
+        if interrupts_audio {
+            self.audio.interrupt();
+        }
+        let result = self.send_command(command);
+        if interrupts_audio && result.is_err() {
+            self.audio.stopped();
+        }
+        result
+    }
+
+    fn send_command(&self, command: PlayerCommand) -> Result<()> {
         let spirc = &self.spirc;
         match command {
             PlayerCommand::Toggle => spirc.play_pause()?,
@@ -545,14 +575,19 @@ impl Engine {
     }
 }
 
-/// The audio sink for a new player, and where the volume is applied.
+fn command_interrupts_audio(state: &LocalState, command: &PlayerCommand) -> bool {
+    state.playback == Playback::Playing
+        && matches!(
+            command,
+            PlayerCommand::Next | PlayerCommand::Previous | PlayerCommand::Load(_)
+        )
+}
+
+/// Builds the audio sink and chooses where volume is applied.
 ///
-/// The default is this crate's own sink, which opens the output device when
-/// playback starts and reports failure instead of panicking. It also sets
-/// the volume at the output rather than in the player: the player scales
-/// samples before they queue in the sink, so a change there was heard only
-/// once the queue had drained. librespot's other backends (PulseAudio on
-/// Linux) stay available to whoever chose one in Settings, volume and all.
+/// The default sink opens the device on playback and reports errors instead
+/// of panicking. It applies volume at output so changes affect queued audio.
+/// Other librespot backends remain available through Settings.
 type SinkAndVolume = (
     Box<dyn FnOnce() -> Box<dyn Sink> + Send>,
     Box<dyn VolumeGetter + Send>,
@@ -564,8 +599,10 @@ fn sink_builder(
     notify: Notify,
     mixer: &Arc<dyn Mixer>,
     normalisation: Arc<std::sync::atomic::AtomicU64>,
+    audio: Arc<AudioControl>,
 ) -> SinkAndVolume {
     let device = config.audio_device.clone();
+    let buffer_ms = config.buffer_ms;
     let tap = Arc::clone(&config.tap);
     let eq = Arc::clone(&config.eq);
     let report: ErrorHook = Arc::new(move |message: String| {
@@ -583,16 +620,14 @@ fn sink_builder(
     {
         match audio_backend::find(Some(name.to_string())) {
             Some(builder) => {
-                // The player is given no volume to apply: the tap sees
-                // the music first, and the wrapper applies the volume after
-                // it, so the bars never follow the knob and zero still
-                // shows the song.
+                // Apply volume after the tap so visualizers are independent of
+                // volume, including at zero.
                 let applied = mixer.get_soft_volume();
                 let normalisation = Arc::clone(&normalisation);
                 return (
                     Box::new(move || {
                         let sink = builder(device, AudioFormat::S16);
-                        Box::new(Tapped::new(sink, tap, Some(applied), eq, normalisation))
+                        Box::new(Tapped::new(sink, tap, applied, true, eq, normalisation))
                             as Box<dyn Sink>
                     }),
                     Box::new(NoOpVolume),
@@ -602,10 +637,13 @@ fn sink_builder(
         }
     }
     let volume = mixer.get_soft_volume();
+    // The output applies volume to queued audio. The wrapper reads the same
+    // value to calculate the pre-volume limiter ceiling.
+    let ceiling = mixer.get_soft_volume();
     (
         Box::new(move || {
-            let sink = Box::new(RodioSink::new(device, report, volume));
-            Box::new(Tapped::new(sink, tap, None, eq, normalisation)) as Box<dyn Sink>
+            let sink = Box::new(RodioSink::new(device, report, volume, buffer_ms, audio));
+            Box::new(Tapped::new(sink, tap, ceiling, false, eq, normalisation)) as Box<dyn Sink>
         }),
         Box::new(NoOpVolume),
     )
@@ -615,6 +653,7 @@ async fn run_events(
     mut events: tokio::sync::mpsc::UnboundedReceiver<PlayerEvent>,
     state: Arc<Mutex<LocalState>>,
     notify: Notify,
+    audio: Arc<AudioControl>,
 ) {
     let mut play_request_id = None;
     while let Some(event) = events.recv().await {
@@ -629,6 +668,13 @@ async fn run_events(
             && current != incoming
         {
             continue;
+        }
+        match &event {
+            PlayerEvent::TrackChanged { .. } | PlayerEvent::Seeked { .. } => {
+                audio.track_changed();
+            }
+            PlayerEvent::Stopped { .. } => audio.stopped(),
+            _ => {}
         }
         let snapshot = {
             let mut current = state.lock().unwrap_or_else(|p| p.into_inner());
@@ -712,17 +758,20 @@ fn apply_event(state: &mut LocalState, event: PlayerEvent) -> bool {
                 track_id.to_uri().unwrap_or_default()
             )),
         ),
+        PlayerEvent::AudioKeyUnavailable { .. } => set(
+            &mut state.error,
+            Some("Spotify refused the audio key. Try again later".into()),
+        ),
         PlayerEvent::VolumeChanged { volume } => set(&mut state.volume, volume),
         PlayerEvent::SessionConnected { user_name, .. } => {
             let mut changed = set(&mut state.connected, true);
             changed |= set(&mut state.username, user_name);
             changed
         }
-        PlayerEvent::SessionDisconnected { .. } => {
-            let mut changed = set(&mut state.connected, false);
-            changed |= set(&mut state.active_client, String::new());
-            changed
-        }
+        // In librespot this event means the Connect device became inactive,
+        // usually because another device took over. The engine session is
+        // still alive, and `Load` activates it again before starting a track.
+        PlayerEvent::SessionDisconnected { .. } => set(&mut state.active_client, String::new()),
         PlayerEvent::SessionClientChanged { client_name, .. } => {
             set(&mut state.active_client, client_name)
         }
@@ -783,8 +832,34 @@ fn local_track(item: &AudioItem) -> LocalTrack {
     }
 }
 
+/// The account's playlist tree, and what Spotify lets the account do to
+/// the playlists in it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Rootlist {
+    /// The rows in Spotify's order, folder markers included.
+    pub entries: Vec<RootlistEntry>,
+    /// Playlists the account may add songs to, by URI, as Spotify's own
+    /// permission service decorates the rootlist. The Web API's
+    /// `collaborative` flag stays false for a playlist shared by
+    /// invitation, so this is the only word on those.
+    pub editable: std::collections::BTreeSet<String>,
+}
+
+/// The playlists in one rootlist page the account may add songs to, read
+/// from the `capabilities` Spotify puts beside each row.
+pub fn editable_uris(
+    contents: &librespot_protocol::playlist4_external::ListItems,
+) -> impl Iterator<Item = String> + '_ {
+    contents
+        .items
+        .iter()
+        .zip(&contents.meta_items)
+        .filter(|(_, meta)| meta.capabilities.can_edit_items())
+        .filter_map(|(item, _)| item.uri.clone())
+}
+
 /// One row of the account's playlist tree.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum RootlistEntry {
     /// A playlist, by its URI.
     Playlist(String),
@@ -889,6 +964,43 @@ mod tests {
         assert_eq!(rows.len(), 9);
     }
 
+    /// A playlist shared by invitation is editable by Spotify's word in the
+    /// rootlist, never by the Web API's collaborative flag.
+    #[test]
+    fn the_rootlist_says_which_playlists_take_songs() {
+        use librespot_protocol::playlist_permission::Capabilities;
+        use librespot_protocol::playlist4_external::{Item, ListItems, MetaItem};
+
+        // #given
+        let mut contents = ListItems::new();
+        for (uri, can_edit) in [
+            ("spotify:playlist:mine", Some(true)),
+            ("spotify:playlist:theirs", Some(false)),
+            ("spotify:playlist:shared", Some(true)),
+            ("spotify:playlist:undecorated", None),
+        ] {
+            let mut item = Item::new();
+            item.set_uri(uri.to_string());
+            contents.items.push(item);
+            let mut meta = MetaItem::new();
+            if let Some(can_edit) = can_edit {
+                let mut capabilities = Capabilities::new();
+                capabilities.set_can_edit_items(can_edit);
+                meta.capabilities = protobuf::MessageField::some(capabilities);
+            }
+            contents.meta_items.push(meta);
+        }
+
+        // #when
+        let editable: Vec<String> = editable_uris(&contents).collect();
+
+        // #then
+        assert_eq!(
+            editable,
+            ["spotify:playlist:mine", "spotify:playlist:shared"]
+        );
+    }
+
     use super::*;
     use librespot_core::SpotifyUri;
 
@@ -927,6 +1039,66 @@ mod tests {
     }
 
     #[test]
+    fn replacing_a_playing_track_interrupts_queued_audio() {
+        let playing = LocalState {
+            playback: Playback::Playing,
+            ..LocalState::default()
+        };
+        let stopped = LocalState::default();
+        let load = PlayerCommand::Load(LoadSpec::default());
+
+        assert!(command_interrupts_audio(&playing, &PlayerCommand::Next));
+        assert!(command_interrupts_audio(&playing, &PlayerCommand::Previous));
+        assert!(command_interrupts_audio(&playing, &load));
+        assert!(!command_interrupts_audio(&stopped, &PlayerCommand::Next));
+        assert!(!command_interrupts_audio(
+            &playing,
+            &PlayerCommand::Seek(10)
+        ));
+    }
+
+    /// Spotify making this Connect device inactive must not be mistaken for
+    /// the engine session ending. A later playlist load can activate the same
+    /// Spirc instance; marking it disconnected makes the UI hold that load
+    /// forever while waiting for a reconnect that will never happen.
+    #[test]
+    fn an_inactive_connect_device_keeps_its_engine_session() {
+        let mut state = LocalState {
+            connected: true,
+            active_client: "Fastpotify".into(),
+            ..LocalState::default()
+        };
+
+        assert!(apply_event(
+            &mut state,
+            PlayerEvent::SessionDisconnected {
+                connection_id: "connection".into(),
+                user_name: "listener".into(),
+            },
+        ));
+
+        assert!(state.connected, "the Spotify session is still usable");
+        assert!(state.active_client.is_empty());
+    }
+
+    #[test]
+    fn a_rejected_audio_key_has_its_own_error() {
+        let mut state = LocalState::default();
+
+        assert!(apply_event(
+            &mut state,
+            PlayerEvent::AudioKeyUnavailable {
+                play_request_id: 1,
+                track_id: uri(),
+            },
+        ));
+        assert_eq!(
+            state.error.as_deref(),
+            Some("Spotify refused the audio key. Try again later")
+        );
+    }
+
+    #[test]
     fn repeat_cycles_and_maps() {
         assert_eq!(RepeatMode::Off.next(), RepeatMode::Context);
         assert_eq!(RepeatMode::Track.next(), RepeatMode::Off);
@@ -937,6 +1109,7 @@ mod tests {
     #[test]
     fn device_id_is_stable_hex() {
         let config = EngineConfig {
+            buffer_ms: crate::sink::DEFAULT_BUFFER_MS,
             tap: AudioTap::new(),
             eq: crate::eq::shared(),
             device_name: "Fastpotify".into(),

@@ -2,7 +2,7 @@
 <component type="desktop-application">
   <id>rocks.fastpotify.Fastpotify</id>
   <name>Fastpotify</name>
-  <summary>Spotify, native and fast</summary>
+  <summary>A native Spotify client</summary>
   <developer id="me.paolino">
     <name>Carmine Paolino</name>
   </developer>
@@ -10,17 +10,15 @@
   <project_license>MIT</project_license>
   <description>
     <p>
-      A lightweight Spotify client written in Rust, with no browser engine
-      anywhere in the process. It starts in well under a second, stays small
-      while it runs, plays music on this computer as a Spotify Connect
-      device, and controls playback on your other devices.
+      A Spotify client written in Rust with no browser engine. It starts
+      in well under a second, plays music on this computer, and controls other
+      Spotify Connect devices.
     </p>
     <p>
-      Your library, search, home, artist and album pages, the queue, lyrics,
-      keyboard shortcuts, media keys, a tray icon that keeps the music going
-      when the window closes, and a mini player that wears classic Winamp
-      skins. Playing music needs Spotify Premium; Spotify only lets Premium
-      accounts play through another app.
+      Browse your library, search Spotify, edit playlists, manage the queue,
+      and view lyrics. It also has keyboard shortcuts, media-key support,
+      background playback, and a mini player for classic Winamp skins.
+      Playback needs Spotify Premium.
     </p>
   </description>
   <launchable type="desktop-id">rocks.fastpotify.Fastpotify.desktop</launchable>
@@ -52,8 +50,14 @@
     <control>keyboard</control>
   </supports>
   <releases>
-    <release version="0.4.0" date="2026-08-30" type="development">
-      <url>https://github.com/crmne/fastpotify/releases</url>
+    <release version="0.5.0-rc1" date="2026-09-01" type="development">
+      <url>https://github.com/crmne/fastpotify/releases/tag/v0.5.0-rc1</url>
+    </release>
+    <release version="0.4.1" date="2026-08-31">
+      <url>https://github.com/crmne/fastpotify/releases/tag/v0.4.1</url>
+    </release>
+    <release version="0.4.0" date="2026-08-30">
+      <url>https://github.com/crmne/fastpotify/releases/tag/v0.4.0</url>
     </release>
     <release version="0.3.0" date="2026-08-29">
       <url>https://github.com/crmne/fastpotify/releases/tag/v0.3.0</url>

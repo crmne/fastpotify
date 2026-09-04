@@ -12,8 +12,8 @@ album is playing. Your songs always play first.
 These are the rules the app follows. The queue tests in `src/app.rs`
 check every one of them.
 
-1. **The list is the truth.** The top row plays next, then the second,
-   and so on down.
+1. **The list shows the play order.** The top row plays next, followed by the
+   rows below it.
 
 2. **Play next adds a song to your part of the queue.** It goes after
    the songs you queued earlier and before the playlist's songs. Queue
@@ -41,18 +41,12 @@ check every one of them.
    below stay. It only shows while this computer is the player, because
    that is the only queue the app can actually clear.
 
-8. **The app acts first and tells Spotify after.** Everything above
-   happens on screen the moment you do it. When this computer is the
-   player, the app tells its own player directly instead of going
-   through the Web API.
+8. **Changes appear immediately.** Fastpotify updates the queue before Spotify
+   confirms the change. For local playback, it updates its own player directly.
 
-9. **Closing the app keeps the queue.** Reopen it and the queue is
-   there as you left it. It is only a picture until you press play:
-   your queued songs are queued again the moment the remembered song
-   resumes, and the playlist carries on where it stopped.
+9. **Closing the app keeps the queue.** Fastpotify saves it locally. When you
+   resume the last song, it restores your queued songs and playlist position.
 
-10. **Old answers from Spotify are ignored.** Spotify's answers about
-   the queue can run a few seconds behind. If an answer is older than
-   what you just did, the app throws it away and asks again. A song you
-   queued stays on screen until Spotify confirms it. Nothing you do
-   disappears and comes back.
+10. **Old answers from Spotify are ignored.** Queue responses can be a few
+    seconds late. Fastpotify ignores stale responses and asks again. Your
+    changes stay visible while it waits for confirmation.

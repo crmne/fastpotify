@@ -1,9 +1,4 @@
-//! Whether a newer release exists, from GitHub's releases.
-//!
-//! Most people never look at a releases page, so a build they downloaded
-//! once is the one they keep, bugs included. Asking once a day and pointing
-//! at the release page is cheap, and the only thing that leaves the machine
-//! is the request itself.
+//! Daily update check against GitHub releases.
 
 use std::time::Duration;
 
@@ -12,7 +7,7 @@ use serde::Deserialize;
 
 const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/crmne/fastpotify/releases/latest";
 
-/// How often a running app asks again.
+/// Update-check interval.
 pub const CHECK_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -64,10 +59,9 @@ fn parse(version: &str) -> Option<([u64; 3], bool)> {
     ))
 }
 
-/// Whether `candidate` is a later version than `current`. A release comes
-/// after its own release candidates, so a candidate's users hear about
-/// the release; a pre-release is never announced, and neither is anything
-/// that does not parse.
+/// Whether `candidate` is a newer stable version than `current`.
+/// Stable releases supersede their release candidates. Other prereleases and
+/// invalid versions are ignored.
 pub fn is_newer(candidate: &str, current: &str) -> bool {
     match (parse(candidate), parse(current)) {
         (Some((candidate, false)), Some((current, current_pre))) => {

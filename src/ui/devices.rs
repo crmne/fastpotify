@@ -56,7 +56,7 @@ fn enable_playback_row(app: &mut App, ui: &mut egui::Ui) {
         if authorizing {
             "Setting up…"
         } else {
-            "Play here, set up once"
+            "Set up playback here"
         },
         theme::regular(12.0),
         palette.accent,
@@ -119,7 +119,7 @@ fn receiver_row(app: &mut App, ui: &mut egui::Ui, receiver: &crate::zeroconf::Re
         if activating {
             "Connecting…"
         } else {
-            "On your network, tap to connect"
+            "On your network, click to connect"
         },
         theme::regular(12.0),
         palette.secondary,
@@ -231,7 +231,7 @@ pub fn popup(app: &mut App, ctx: &egui::Context) {
                     theme::subtle(
                         ui,
                         &palette,
-                        "No devices found. Open Spotify on another device to see it here.",
+                        "No devices found. Open Spotify on another device, then refresh.",
                     );
                     ui.add_space(8.0);
                 }

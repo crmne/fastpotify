@@ -1,17 +1,11 @@
 //! Sample rate conversion for an output that will not take 44.1 kHz.
 //!
-//! Spotify's audio is stereo 44.1 kHz and the output is opened at that
-//! rate when the device allows it. Windows shares a device at one rate,
-//! the one in its sound settings, and that is 48 kHz on most PCs, so the
-//! stream falls back to it. rodio would then resample each chunk on its
-//! own, starting its interpolator afresh at every chunk boundary, thirty
-//! times a second, and each restart is a small step in the waveform:
-//! heard as crackle and static. This converter keeps its state across
-//! chunks, so the output is one continuous signal.
+//! Spotify audio is stereo 44.1 kHz, but many shared Windows devices run at
+//! 48 kHz. rodio resets its resampler at each chunk boundary, which can cause
+//! crackle. This converter preserves state across chunks.
 //!
-//! It is a polyphase windowed sinc: the input is notionally raised by
-//! `up`, low-passed, and every `down`th sample kept, with only the taps
-//! that reach an output sample computed.
+//! It uses a polyphase windowed-sinc filter and computes only the taps needed
+//! for each output sample.
 
 use std::f64::consts::PI;
 

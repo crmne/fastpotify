@@ -69,7 +69,7 @@ impl ksni::Tray for FastTray {
         use ksni::menu::*;
         vec![
             StandardItem {
-                label: "Show / hide Fastpotify".into(),
+                label: "Show or hide Fastpotify".into(),
                 activate: Box::new(|tray: &mut Self| tray.send(TrayCommand::ShowHide)),
                 ..Default::default()
             }

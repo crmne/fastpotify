@@ -1,13 +1,9 @@
-//! The MilkDrop child process: a window of its own, with its own OpenGL
-//! context and its own winit event loop.
+//! MilkDrop child process with its own window, OpenGL context, and event loop.
 //!
-//! winit allows one event loop per process and eframe owns the app's, so
-//! MilkDrop runs as a separate process: the app spawns this same binary with
-//! `--milkdrop-child` (see `super::host`). It reads the sound from the
-//! shared-memory ring the app fills, takes its settings and a close request
-//! on stdin as JSON lines, and reports where it sits and when it closes on
-//! stdout. Everything projectM makes belongs to this process, so it cannot
-//! touch the app's windows.
+//! The app starts this binary with `--milkdrop-child` because winit permits one
+//! event loop per process. The child reads audio from shared memory, receives
+//! JSON-line commands on stdin, and reports window state on stdout. projectM
+//! resources stay isolated from the app's windows.
 
 use std::io::{BufRead, Write};
 use std::num::NonZeroU32;
@@ -31,7 +27,7 @@ use winit::keyboard::{Key, NamedKey};
 use winit::window::{Fullscreen, ResizeDirection, Window, WindowId};
 
 use super::engine::Engine;
-use super::overlay::{Overlay, Place, TextLine};
+use super::overlay::{Backing, Overlay, Place, Row, Span};
 use super::shm::Ring;
 use super::{DEFAULT_FPS, DEFAULT_SECONDS, LAG, MIN_SIZE, Presets, Request};
 
@@ -51,6 +47,12 @@ struct Control {
 struct Event {
     #[serde(skip_serializing_if = "Option::is_none")]
     closed: Option<bool>,
+    /// What the window asks the app to do with the player.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    command: Option<String>,
+    /// How often the screen it opened on refreshes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    screen_hz: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pos: Option<[f32; 2]>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -185,6 +187,10 @@ struct Live {
     engine: Engine,
     gl: Arc<glow::Context>,
     overlay: Option<Overlay>,
+    /// What is switched on to stay, each in a corner of its own so that
+    /// none of them can cover another: the frame rate, the song, the
+    /// preset's name. None of these fade.
+    corners: [Option<Overlay>; 3],
     context: PossiblyCurrentContext,
     surface: Surface<WindowSurface>,
     window: Window,
@@ -202,7 +208,21 @@ struct Child {
     presets: Presets,
     live: Option<Live>,
     song: Option<Vec<String>>,
+    /// When the last frames were drawn, for the count D shows.
+    drawn: Vec<Instant>,
+    /// Whether the keys are what is on show, so the same key hides them.
+    showing_keys: bool,
+    /// Song-title display mode.
+    song_shown: SongShown,
+    preset_on: bool,
+    fps_on: bool,
+    /// Cached corner text and its last render time.
+    corner_lines: [Vec<String>; 3],
+    corner_written: [Option<Instant>; 3],
+    modifiers: winit::keyboard::ModifiersState,
     fps: u32,
+    /// Current screen refresh rate, when reported.
+    screen_hz: Option<f32>,
     scale: u32,
     seconds: u32,
     pointer: PhysicalPosition<f64>,
@@ -225,6 +245,15 @@ impl Child {
             presets: Presets::new(),
             live: None,
             song: None,
+            drawn: Vec::new(),
+            showing_keys: false,
+            song_shown: SongShown::OnChange,
+            preset_on: false,
+            fps_on: false,
+            corner_lines: [Vec::new(), Vec::new(), Vec::new()],
+            corner_written: [None; 3],
+            screen_hz: None,
+            modifiers: winit::keyboard::ModifiersState::empty(),
             fps,
             scale,
             seconds,
@@ -235,8 +264,53 @@ impl Child {
         }
     }
 
+    /// Schedules from the previous deadline so render time does not reduce FPS.
+    fn schedule_next_frame(&mut self) {
+        self.schedule_next_frame_at(Instant::now());
+    }
+
+    /// The same, told what the time is.
+    ///
+    /// Accepts `now` so tests can advance time without sleeping.
+    fn schedule_next_frame_at(&mut self, now: Instant) {
+        let Some(interval) = self.frame_interval() else {
+            self.next_frame = now;
+            return;
+        };
+        self.next_frame += interval;
+        if self.next_frame <= now {
+            // Slower than the limit asks for, or back from a pause: take
+            // the rhythm up from here rather than chasing frames whose
+            // moment has gone.
+            self.next_frame = now + interval;
+        }
+    }
+
+    /// How long a frame is meant to take: the screen's own rhythm, a
+    /// number of frames a second, or nothing at all when uncapped.
     fn frame_interval(&self) -> Option<Duration> {
         (self.fps != 0).then(|| Duration::from_secs_f32(1.0 / self.fps as f32))
+    }
+
+    /// Asks the screen the window is on how often it refreshes.
+    fn read_screen_hz(&mut self) {
+        let Some(live) = &self.live else {
+            return;
+        };
+        let hz = live
+            .window
+            .current_monitor()
+            .and_then(|monitor| monitor.refresh_rate_millihertz())
+            .map(|millihertz| millihertz as f32 / 1000.0);
+        if hz != self.screen_hz {
+            self.screen_hz = hz;
+            if let Some(hz) = hz {
+                report(&Event {
+                    screen_hz: Some(hz.round() as u32),
+                    ..Default::default()
+                });
+            }
+        }
     }
 
     fn create(&mut self, event_loop: &ActiveEventLoop) {
@@ -244,6 +318,7 @@ impl Child {
             Ok(live) => {
                 live.window.request_redraw();
                 self.live = Some(live);
+                self.read_screen_hz();
             }
             Err(error) => {
                 eprintln!("MilkDrop: {error}");
@@ -303,9 +378,11 @@ impl Child {
             self.scale.max(1),
         );
         if let Some(overlay) = &mut live.overlay {
-            let scale = live.window.scale_factor() as f32;
-            overlay.draw(&live.gl, (size.width, size.height), scale);
+            overlay.draw(&live.gl, (size.width, size.height));
         }
+        // A skin's frames read the clean picture, before the overlay
+        // text and the window's rounded corners go on for a standalone
+        // window.
         if self.frames.is_some() {
             let size = live.window.inner_size();
             let (width, height) = (size.width.max(1), size.height.max(1));
@@ -313,12 +390,20 @@ impl Child {
                 Self::write_frame(&live.gl, frames, &mut self.frame_buf, width, height);
             }
         }
+        for corner in live.corners.iter_mut().flatten() {
+            corner.draw(&live.gl, (size.width, size.height));
+        }
+        if self.drawn.len() >= 60 {
+            self.drawn.remove(0);
+        }
+        self.drawn.push(Instant::now());
         // A hidden child feeding a skin presents to nothing.
         if !self.args.hidden
             && let Err(error) = live.surface.swap_buffers(&live.context)
         {
             eprintln!("MilkDrop: present failed: {error}");
         }
+        self.update_corners();
         self.report_geometry();
     }
 
@@ -367,15 +452,22 @@ impl Child {
         let Some(live) = &self.live else {
             return;
         };
-        let size = live.window.inner_size();
-        let size = [size.width as f32, size.height as f32];
+        let scale = live.window.scale_factor();
+        let size = live.window.inner_size().to_logical::<f32>(scale);
+        let size = [size.width, size.height];
         let pos = live
             .window
             .outer_position()
-            .map(|pos| [pos.x as f32, pos.y as f32])
+            .map(|pos| {
+                let pos = pos.to_logical::<f32>(scale);
+                [pos.x, pos.y]
+            })
             .unwrap_or([0.0, 0.0]);
         if self.reported != Some((pos, size)) {
             self.reported = Some((pos, size));
+            // Moved or resized: it may be on another screen now, and
+            // screens do not all refresh at the same rate.
+            self.read_screen_hz();
             report(&Event {
                 pos: Some(pos),
                 size: Some(size),
@@ -407,9 +499,12 @@ impl ApplicationHandler<Control> for Child {
         if let Some(song) = control.song
             && self.song.as_ref() != Some(&song)
         {
-            // The way MilkDrop showed the title when the song turned over.
             self.song = Some(song);
-            self.show_song();
+            // The card in the middle is the announcement; the corner is
+            // the reminder. One or the other, never both.
+            if self.song_shown == SongShown::OnChange {
+                self.show_song();
+            }
         }
         if let Some(fps) = control.fps {
             self.fps = fps;
@@ -437,6 +532,7 @@ impl ApplicationHandler<Control> for Child {
                 }
             }
             WindowEvent::CursorMoved { position, .. } => self.pointer = position,
+            WindowEvent::ModifiersChanged(modifiers) => self.modifiers = modifiers.state(),
             WindowEvent::MouseInput {
                 state: ElementState::Pressed,
                 button,
@@ -447,7 +543,7 @@ impl ApplicationHandler<Control> for Child {
             }
             WindowEvent::RedrawRequested => {
                 self.render();
-                self.next_frame = Instant::now() + self.frame_interval().unwrap_or(Duration::ZERO);
+                self.schedule_next_frame();
             }
             _ => {}
         }
@@ -518,6 +614,10 @@ impl Child {
 
     fn on_key(&mut self, key: Key, event_loop: &ActiveEventLoop) {
         let fullscreen = self.live.as_ref().is_some_and(|live| live.fullscreen);
+        // Control (Command on the Mac) is what the app's own playback
+        // shortcuts are held with; a plain key is the window's own.
+        let control = self.modifiers.control_key() || self.modifiers.super_key();
+        let plain = !control && !self.modifiers.alt_key();
         match key.as_ref() {
             Key::Named(NamedKey::Escape) => {
                 if fullscreen {
@@ -526,22 +626,56 @@ impl Child {
                     self.close(event_loop);
                 }
             }
-            Key::Named(NamedKey::Space) | Key::Named(NamedKey::ArrowRight) => {
-                self.presets.next(false);
-            }
-            Key::Named(NamedKey::ArrowLeft) => self.presets.previous(),
-            Key::Character("f") | Key::Character("F") => self.set_fullscreen(!fullscreen),
-            Key::Character("n") | Key::Character("N") => self.presets.next(false),
-            Key::Character("p") | Key::Character("P") => self.presets.previous(),
-            Key::Character("l") | Key::Character("L") => {
+            // Plain keys control presets; modified keys keep the app's playback
+            // bindings.
+            Key::Named(NamedKey::ArrowRight) if plain => self.presets.next(false),
+            Key::Named(NamedKey::ArrowLeft) if plain => self.presets.previous(),
+            Key::Character("n") | Key::Character("N") if plain => self.presets.next(false),
+            Key::Character("p") | Key::Character("P") if plain => self.presets.previous(),
+            Key::Character("h") | Key::Character("H") if plain => self.presets.next(true),
+            Key::Character("l") | Key::Character("L") if plain => {
                 self.presets.locked = !self.presets.locked;
+                let note = if self.presets.locked {
+                    "Preset kept"
+                } else {
+                    "Preset free again"
+                };
+                self.show_note(note.into());
             }
+            Key::Character("r") | Key::Character("R") if plain => {
+                let note = if self.presets.toggle_order() {
+                    "Random order"
+                } else {
+                    "Folder order"
+                };
+                self.show_note(note.into());
+            }
+            // Playback, in the app's own bindings.
+            Key::Named(NamedKey::Space) if plain => command("play-pause"),
+            Key::Named(NamedKey::ArrowLeft) if control => command("previous"),
+            Key::Named(NamedKey::ArrowRight) if control => command("next"),
+            Key::Named(NamedKey::ArrowUp) if control => command("volume-up"),
+            Key::Named(NamedKey::ArrowDown) if control => command("volume-down"),
+            Key::Character("m") | Key::Character("M") if plain => command("mute"),
+            Key::Character("s") | Key::Character("S") if plain => command("shuffle"),
+            // The window itself.
+            Key::Named(NamedKey::Enter) if self.modifiers.alt_key() => {
+                self.set_fullscreen(!fullscreen)
+            }
+            Key::Character("f") | Key::Character("F") if plain => self.set_fullscreen(!fullscreen),
+            // What it can tell you.
             Key::Character("?") | Key::Named(NamedKey::F1) => self.show_keys(),
+            Key::Character("i") | Key::Character("I") if plain => self.cycle_song(),
+            Key::Character("t") | Key::Character("T") if plain => {
+                self.toggle_status(Status::Preset)
+            }
+            Key::Character("d") | Key::Character("D") if plain => self.toggle_status(Status::Fps),
             _ => {}
         }
     }
 
-    /// The keys, over the picture, the way MilkDrop answered F1.
+    /// Every key this window answers, in two columns over the picture.
+    /// The list is the window's own bindings: what is here is what works.
     fn show_keys(&mut self) {
         let Some(live) = &mut self.live else {
             return;
@@ -549,33 +683,208 @@ impl Child {
         let Some(overlay) = &mut live.overlay else {
             return;
         };
-        let line = |text: &str| TextLine {
-            text: text.into(),
-            px: 17.0,
+        if overlay.showing() && self.showing_keys {
+            // The same key that opened it puts it away again.
+            overlay.hide();
+            self.showing_keys = false;
+            return;
+        }
+        let heading = |text: &str| Row::Heading(Span::new(text, 12.0).weight(700.0).tint(0.62));
+        let keys = |key: &str, does: &str| Row::Keys {
+            key: Span::new(key, 14.0).weight(600.0),
+            does: Span::new(does, 14.0).tint(0.86),
         };
-        let lines = [
-            TextLine {
-                text: "Keys".into(),
-                px: 24.0,
-            },
-            line("N, Space, the right arrow, or a right-click \u{2014} next preset"),
-            line("P or the left arrow \u{2014} previous preset"),
-            line("L \u{2014} keep this preset"),
-            line("F or a double-click \u{2014} full screen"),
-            line("Esc \u{2014} leave full screen, or close"),
-            line("? \u{2014} these keys"),
+        let rows = [
+            Row::Line(Span::new("MilkDrop", 22.0).weight(700.0)),
+            Row::Gap(10.0),
+            heading("PRESETS"),
+            Row::Gap(3.0),
+            keys("\u{2192}  or  N", "Next preset"),
+            keys("\u{2190}  or  P", "Previous preset"),
+            keys("H", "Next preset, cut on the beat"),
+            keys("L", "Keep this preset"),
+            keys("R", "Random or folder order"),
+            keys("Right-click", "Next preset"),
+            Row::Gap(9.0),
+            heading("PLAYBACK"),
+            Row::Gap(3.0),
+            keys("Space", "Play or pause"),
+            keys("Ctrl+\u{2190}  /  Ctrl+\u{2192}", "Previous or next song"),
+            keys("Ctrl+\u{2191}  /  Ctrl+\u{2193}", "Volume up or down"),
+            keys("M", "Mute or unmute"),
+            keys("S", "Shuffle"),
+            Row::Gap(9.0),
+            heading("WINDOW"),
+            Row::Gap(3.0),
+            keys("F, Alt+Enter, double-click", "Full screen"),
+            keys("Esc", "Leave full screen, or close"),
+            keys("Drag", "Move it; drag a corner to resize"),
+            Row::Gap(9.0),
+            heading("SHOW"),
+            Row::Gap(3.0),
+            keys("?  or  F1", "These keys"),
+            keys("I", "Song title: on a change, always, off"),
+            keys("T", "This preset's name, on or off"),
+            keys("D", "FPS, on or off"),
         ];
         overlay.show(
             &live.gl,
-            &lines,
-            Place::TopLeft,
-            Duration::from_secs(8),
-            live.window.scale_factor() as f32,
+            &rows,
+            Place::Center,
+            Backing::Box,
+            Duration::from_secs(12),
+            window_size(&live.window),
         );
+        self.showing_keys = true;
         live.window.request_redraw();
     }
 
-    /// The playing song, over the picture, fading away again.
+    /// A line of its own, low in the picture: a short answer to a key.
+    fn show_note(&mut self, text: String) {
+        let Some(live) = &mut self.live else {
+            return;
+        };
+        let Some(overlay) = &mut live.overlay else {
+            return;
+        };
+        overlay.show(
+            &live.gl,
+            &[Row::Line(Span::new(text, 15.0).weight(600.0))],
+            Place::BottomLeft,
+            Backing::Shadow,
+            Duration::from_secs(3),
+            window_size(&live.window),
+        );
+        self.showing_keys = false;
+        live.window.request_redraw();
+    }
+
+    /// Moves the song title on to its next way of being shown: the card
+    /// in the middle when it changes, the corner at all times, neither.
+    fn cycle_song(&mut self) {
+        self.song_shown = match self.song_shown {
+            SongShown::OnChange => SongShown::Always,
+            SongShown::Always => SongShown::Off,
+            SongShown::Off => SongShown::OnChange,
+        };
+        let note = match self.song_shown {
+            SongShown::OnChange => "Song title: when it changes",
+            SongShown::Always => "Song title: always",
+            SongShown::Off => "Song title: off",
+        };
+        self.corner_written[Status::Song.index()] = None;
+        self.update_corners();
+        self.show_note(note.into());
+    }
+
+    /// Toggles a persistent corner status.
+    fn toggle_status(&mut self, what: Status) {
+        match what {
+            Status::Song => return,
+            Status::Preset => self.preset_on = !self.preset_on,
+            Status::Fps => self.fps_on = !self.fps_on,
+        }
+        // A key press answers at once, whatever the pace below.
+        self.corner_written[what.index()] = None;
+        self.update_corners();
+        if let Some(live) = &self.live {
+            live.window.request_redraw();
+        }
+    }
+
+    /// Current lines for a corner status, or none when disabled.
+    fn corner_lines(&self, what: Status) -> Vec<String> {
+        match what {
+            Status::Fps if self.fps_on => {
+                vec![format!("{:.0} FPS", frames_per_second(&self.drawn))]
+            }
+            Status::Song if self.song_shown == SongShown::Always => match &self.song {
+                Some(song) => song
+                    .iter()
+                    .take(2)
+                    .filter(|line| !line.is_empty())
+                    .cloned()
+                    .collect(),
+                None => vec!["Nothing playing".into()],
+            },
+            Status::Preset if self.preset_on => vec![
+                self.presets
+                    .current()
+                    .and_then(|path| path.file_stem())
+                    .map(|stem| stem.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "No preset".into()),
+            ],
+            _ => Vec::new(),
+        }
+    }
+
+    /// Writes each corner again when it would say something else, and no
+    /// more often than a few times a second while a count is moving.
+    fn update_corners(&mut self) {
+        for what in [Status::Fps, Status::Song, Status::Preset] {
+            let at = what.index();
+            let lines = self.corner_lines(what);
+            if lines.is_empty() {
+                if !self.corner_lines[at].is_empty() {
+                    self.corner_lines[at].clear();
+                    if let Some(live) = &mut self.live
+                        && let Some(corner) = &mut live.corners[at]
+                    {
+                        corner.hide();
+                    }
+                }
+                continue;
+            }
+            // Saying the same thing again is not worth a new bitmap, and
+            // a frame rate that flickers between two numbers is not worth
+            // one several times a second either.
+            if lines == self.corner_lines[at] {
+                continue;
+            }
+            let waited = self.corner_written[at]
+                .is_none_or(|written| written.elapsed() >= Duration::from_millis(400));
+            if !waited {
+                continue;
+            }
+            let rows: Vec<Row> = lines
+                .iter()
+                .enumerate()
+                .map(|(index, line)| {
+                    // The song leads with its title and names who plays
+                    // it underneath; everything else is one plain line.
+                    let span = match (what, index) {
+                        (Status::Song, 0) => Span::new(line.clone(), 16.0).weight(700.0),
+                        (Status::Song, _) => Span::new(line.clone(), 13.0).tint(0.82),
+                        _ => Span::new(line.clone(), 13.0).weight(600.0),
+                    };
+                    Row::Line(span)
+                })
+                .collect();
+            self.corner_lines[at] = lines;
+            self.corner_written[at] = Some(Instant::now());
+            let Some(live) = &mut self.live else {
+                return;
+            };
+            let gl = Arc::clone(&live.gl);
+            let window = window_size(&live.window);
+            let Some(corner) = &mut live.corners[at] else {
+                continue;
+            };
+            corner.show(
+                &gl,
+                &rows,
+                what.place(),
+                Backing::Shadow,
+                // Long enough that it never fades on its own; the key
+                // that turned it on is what turns it off.
+                Duration::from_secs(60 * 60),
+                window,
+            );
+        }
+    }
+
+    /// What is playing, big in the middle of the picture: the title, then
+    /// the artist, then the album, fading out into the visuals again.
     fn show_song(&mut self) {
         let Some(live) = &mut self.live else {
             return;
@@ -583,27 +892,99 @@ impl Child {
         let (Some(overlay), Some(song)) = (&mut live.overlay, &self.song) else {
             return;
         };
-        let lines: Vec<TextLine> = song
-            .iter()
-            .take(2)
-            .enumerate()
-            .map(|(index, text)| TextLine {
-                text: text.clone(),
-                px: if index == 0 { 26.0 } else { 18.0 },
-            })
-            .collect();
-        if lines.is_empty() {
+        let mut rows: Vec<Row> = Vec::new();
+        for (index, text) in song.iter().take(3).enumerate() {
+            if text.is_empty() {
+                continue;
+            }
+            let span = match index {
+                0 => Span::new(text.clone(), 27.0).weight(700.0),
+                1 => Span::new(text.clone(), 19.0).weight(500.0).tint(0.92),
+                _ => Span::new(text.clone(), 15.0).tint(0.68),
+            };
+            if index > 0 {
+                rows.push(Row::Gap(3.0));
+            }
+            rows.push(Row::Line(span));
+        }
+        if rows.is_empty() {
             return;
         }
         overlay.show(
             &live.gl,
-            &lines,
-            Place::BottomLeft,
+            &rows,
+            Place::Center,
+            Backing::Shadow,
             Duration::from_secs(4),
-            live.window.scale_factor() as f32,
+            window_size(&live.window),
         );
+        self.showing_keys = false;
         live.window.request_redraw();
     }
+}
+
+/// How the song's title is shown, which one key moves through.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum SongShown {
+    /// A card in the middle of the picture when the song turns over.
+    OnChange,
+    /// In its corner, all the time.
+    Always,
+    Off,
+}
+
+/// What a corner can be asked to keep showing, and which corner it is.
+#[derive(Clone, Copy)]
+enum Status {
+    Fps,
+    Song,
+    Preset,
+}
+
+impl Status {
+    fn index(self) -> usize {
+        match self {
+            Status::Fps => 0,
+            Status::Song => 1,
+            Status::Preset => 2,
+        }
+    }
+
+    /// The frame rate out of the way in the top left, the song where the
+    /// eye goes first, the preset's name furthest from both.
+    fn place(self) -> Place {
+        match self {
+            Status::Fps => Place::TopLeft,
+            Status::Song => Place::TopRight,
+            Status::Preset => Place::BottomRight,
+        }
+    }
+}
+
+/// Frames a second, from when the last frames were drawn.
+fn frames_per_second(drawn: &[Instant]) -> f32 {
+    let (Some(first), Some(last)) = (drawn.first(), drawn.last()) else {
+        return 0.0;
+    };
+    let span = last.duration_since(*first);
+    if drawn.len() < 2 || span.is_zero() {
+        return 0.0;
+    }
+    (drawn.len() - 1) as f32 / span.as_secs_f32()
+}
+
+/// The window's size in pixels, which the overlay lays itself out for.
+fn window_size(window: &Window) -> (u32, u32) {
+    let size = window.inner_size();
+    (size.width.max(1), size.height.max(1))
+}
+
+/// Asks the app for something only it can do: the player is over there.
+fn command(what: &str) {
+    report(&Event {
+        command: Some(what.to_string()),
+        ..Default::default()
+    });
 }
 
 /// Writes one event line to the app and flushes it. The line is tagged so
@@ -686,11 +1067,13 @@ fn build(event_loop: &ActiveEventLoop, args: &Args, seconds: u32) -> Result<Live
     // Text over the picture; the picture goes on without it if the
     // shaders will not take.
     let overlay = Overlay::new(&gl);
+    let corners = [Overlay::new(&gl), Overlay::new(&gl), Overlay::new(&gl)];
 
     let mut live = Live {
         engine,
         gl,
         overlay,
+        corners,
         context,
         surface,
         window,
@@ -702,4 +1085,179 @@ fn build(event_loop: &ActiveEventLoop, args: &Args, seconds: u32) -> Result<Live
         live.fullscreen = true;
     }
     Ok(live)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_RING: AtomicU64 = AtomicU64::new(0);
+
+    /// A child with no window, for the parts that need none.
+    fn headless_child() -> Child {
+        let dir = std::env::temp_dir().join(format!(
+            "fastpotify-milkdrop-child-{}-{}",
+            std::process::id(),
+            NEXT_RING.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).expect("a place for the test's ring");
+        let shm = dir.join("ring");
+        let ring = Ring::create(&shm).expect("a ring to read");
+        Child::new(
+            Args {
+                shm,
+                presets: dir,
+                size: [640.0, 480.0],
+                pos: None,
+                fullscreen: false,
+                fps: 30,
+                seconds: 30,
+                scale: 1,
+                frames: None,
+                hidden: false,
+            },
+            ring,
+            None,
+        )
+    }
+
+    /// The limit is the number it was given, and nothing at zero.
+    #[test]
+    fn the_frame_limit_is_the_number_it_was_given() {
+        let mut child = headless_child();
+        let hz = |interval: Option<Duration>| {
+            interval.map(|gap| (1.0 / gap.as_secs_f32()).round() as u32)
+        };
+        for rate in [24, 60, 144, 240] {
+            child.fps = rate;
+            assert_eq!(hz(child.frame_interval()), Some(rate));
+        }
+        child.fps = 0;
+        assert!(child.frame_interval().is_none(), "zero is uncapped");
+    }
+
+    /// Frame deadlines do not drift with rendering time.
+    #[test]
+    fn the_frame_limit_does_not_drift_with_the_drawing() {
+        let mut child = headless_child();
+        child.fps = 60;
+        let interval = Duration::from_secs_f32(1.0 / 60.0);
+        let start = Instant::now();
+        child.next_frame = start;
+
+        // Simulate ten frames that each use one third of the interval.
+        for frame in 1..=10 {
+            child.schedule_next_frame_at(start + interval * (frame - 1) / 3);
+            assert_eq!(
+                child.next_frame,
+                start + interval * frame,
+                "frame {frame} is due on the beat"
+            );
+        }
+
+        // Falling behind for good does not pile up a debt of frames to
+        // catch up on: the rhythm picks up from now.
+        let late = start + Duration::from_secs(60);
+        child.next_frame = late - Duration::from_secs(5);
+        child.schedule_next_frame_at(late);
+        assert_eq!(
+            child.next_frame,
+            late + interval,
+            "a missed stretch is let go, not chased"
+        );
+    }
+
+    /// Each corner status renders independently and clears when disabled.
+    #[test]
+    fn each_corner_carries_what_was_switched_on() {
+        let mut child = headless_child();
+        for what in [Status::Fps, Status::Song, Status::Preset] {
+            assert!(
+                child.corner_lines(what).is_empty(),
+                "nothing on, nothing shown"
+            );
+        }
+
+        child.fps_on = true;
+        let fps = child.corner_lines(Status::Fps);
+        assert_eq!(fps.len(), 1);
+        assert!(fps[0].ends_with("FPS"), "the count says FPS: {}", fps[0]);
+        assert!(
+            child.corner_lines(Status::Song).is_empty(),
+            "one key, one corner"
+        );
+
+        child.song = Some(vec![
+            "Wish You Were Here".into(),
+            "Incubus".into(),
+            "Morning View".into(),
+        ]);
+        // One key moves the title through its three ways of being shown.
+        assert_eq!(
+            child.song_shown,
+            SongShown::OnChange,
+            "the card, by default"
+        );
+        assert!(
+            child.corner_lines(Status::Song).is_empty(),
+            "announced on a change, it is not also kept in the corner"
+        );
+        child.cycle_song();
+        assert_eq!(child.song_shown, SongShown::Always);
+        assert_eq!(
+            child.corner_lines(Status::Song),
+            vec!["Wish You Were Here", "Incubus"],
+            "the song names itself, then who plays it"
+        );
+        child.cycle_song();
+        assert_eq!(child.song_shown, SongShown::Off);
+        assert!(child.corner_lines(Status::Song).is_empty());
+        child.cycle_song();
+        assert_eq!(child.song_shown, SongShown::OnChange, "round it goes");
+        child.cycle_song();
+
+        child.presets.files = vec![PathBuf::from("/presets/Geiss - Spiral Artifact.milk")];
+        child.presets.next(true);
+        child.preset_on = true;
+        assert_eq!(
+            child.corner_lines(Status::Preset),
+            vec!["Geiss - Spiral Artifact"]
+        );
+
+        // Three corners, three places, no two the same.
+        let places: Vec<Place> = [Status::Fps, Status::Song, Status::Preset]
+            .iter()
+            .map(|what| what.place())
+            .collect();
+        assert!(
+            places[0] != places[1] && places[1] != places[2] && places[0] != places[2],
+            "each corner is its own"
+        );
+
+        child.cycle_song();
+        child.preset_on = false;
+        child.fps_on = false;
+        for what in [Status::Fps, Status::Song, Status::Preset] {
+            assert!(child.corner_lines(what).is_empty(), "and off again");
+        }
+    }
+
+    /// FPS uses elapsed time and requires at least two frames.
+    #[test]
+    fn frames_a_second_are_counted_over_the_time_they_took() {
+        assert_eq!(frames_per_second(&[]), 0.0);
+        let now = Instant::now();
+        assert_eq!(frames_per_second(&[now]), 0.0, "one frame measures nothing");
+
+        // Thirty frames, a fiftieth of a second apart: fifty a second.
+        let drawn: Vec<Instant> = (0..30)
+            .map(|index| now + Duration::from_micros(20_000 * index))
+            .collect();
+        let fps = frames_per_second(&drawn);
+        assert!(
+            (fps - 50.0).abs() < 0.001,
+            "twenty milliseconds a frame is fifty a second, not {fps}"
+        );
+    }
 }

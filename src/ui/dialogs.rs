@@ -24,25 +24,93 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
         });
     let response = egui::Modal::new(egui::Id::new("dialog"))
         .frame(frame)
-        .backdrop_color(egui::Color32::from_black_alpha(if palette.dark { 150 } else { 80 }))
+        .backdrop_color(egui::Color32::from_black_alpha(if palette.dark {
+            150
+        } else {
+            80
+        }))
         .show(ctx, |ui| {
             ui.set_width(420.0);
             match dialog {
                 Dialog::CreatePlaylist { .. } => create_playlist(app, ui),
                 Dialog::EditPlaylist { .. } => edit_playlist(app, ui),
                 Dialog::ConfirmDeletePlaylist { id, name, owned } => {
-                    theme::text(ui, if owned { "Delete playlist?" } else { "Remove from Your Library?" }, theme::bold(20.0), palette.text);
+                    theme::text(
+                        ui,
+                        if owned {
+                            "Delete playlist?"
+                        } else {
+                            "Remove from Your Library?"
+                        },
+                        theme::bold(20.0),
+                        palette.text,
+                    );
                     ui.add_space(8.0);
                     let body = if owned {
-                        format!("This will delete “{name}” from Your Library. Spotify keeps deleted playlists recoverable for 90 days.")
+                        format!("Delete “{name}”? You can recover it from Spotify for 90 days.")
                     } else {
                         format!("“{name}” will no longer appear in Your Library.")
                     };
-                    ui.add(egui::Label::new(egui::RichText::new(body).font(theme::regular(14.0)).color(palette.secondary)).wrap());
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(body)
+                                .font(theme::regular(14.0))
+                                .color(palette.secondary),
+                        )
+                        .wrap(),
+                    );
                     ui.add_space(20.0);
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if theme::pill_button(ui, &palette, if owned { "Delete" } else { "Remove" }, true).clicked() {
+                        if theme::pill_button(
+                            ui,
+                            &palette,
+                            if owned { "Delete" } else { "Remove" },
+                            true,
+                        )
+                        .clicked()
+                        {
                             app.actions.push(Action::DeletePlaylist(id.clone()));
+                        }
+                        if theme::pill_button(ui, &palette, "Cancel", false).clicked() {
+                            app.actions.push(Action::CloseDialog);
+                        }
+                    });
+                }
+                Dialog::ConfirmPlaylistDuplicates {
+                    playlist_id,
+                    playlist_name,
+                    items,
+                    duplicate_uris,
+                } => {
+                    let multiple = items.len() > 1;
+                    theme::text(
+                        ui,
+                        if multiple {
+                            "Songs already in this playlist"
+                        } else {
+                            "Song already in this playlist"
+                        },
+                        theme::bold(20.0),
+                        palette.text,
+                    );
+                    ui.add_space(8.0);
+                    let body = duplicate_message(&playlist_name, &items, &duplicate_uris);
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(body)
+                                .font(theme::regular(14.0))
+                                .color(palette.secondary),
+                        )
+                        .wrap(),
+                    );
+                    ui.add_space(20.0);
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if theme::pill_button(ui, &palette, "Add anyway", true).clicked() {
+                            app.actions.push(Action::ConfirmAddToPlaylist {
+                                playlist_id: playlist_id.clone(),
+                                playlist_name: playlist_name.clone(),
+                                items: items.clone(),
+                            });
                         }
                         if theme::pill_button(ui, &palette, "Cancel", false).clicked() {
                             app.actions.push(Action::CloseDialog);
@@ -63,15 +131,29 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                                 .selectable(false),
                         );
                     };
-                    egui::Grid::new("shortcuts")
-                        .num_columns(2)
-                        .spacing([24.0, 8.0])
+                    // The list is longer than a small screen is tall, so it
+                    // scrolls inside the dialog rather than running off the
+                    // bottom with the Done button beyond reach.
+                    let room = ui.ctx().content_rect().height() - 190.0;
+                    egui::ScrollArea::vertical()
+                        .max_height(room.max(120.0))
+                        .auto_shrink([false, true])
                         .show(ui, |ui| {
-                            for (keys, description) in super::keys::SHORTCUTS {
-                                cell(ui, keys, theme::semibold(13.0), palette.text);
-                                cell(ui, description, theme::regular(13.5), palette.secondary);
-                                ui.end_row();
-                            }
+                            egui::Grid::new("shortcuts")
+                                .num_columns(2)
+                                .spacing([24.0, 8.0])
+                                .show(ui, |ui| {
+                                    for (keys, description) in super::keys::SHORTCUTS {
+                                        cell(ui, keys, theme::semibold(13.0), palette.text);
+                                        cell(
+                                            ui,
+                                            description,
+                                            theme::regular(13.5),
+                                            palette.secondary,
+                                        );
+                                        ui.end_row();
+                                    }
+                                });
                         });
                     ui.add_space(16.0);
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -91,10 +173,8 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     ui.add(
                         egui::Label::new(
                             egui::RichText::new(
-                                "Spotify only lets Premium accounts play through another \
-                                 app, on this computer or on any other device. With a Free \
-                                 account Fastpotify can show your library and search, but \
-                                 play, pause, and skip will not work.",
+                                "Playback needs Spotify Premium. Free accounts can browse \
+                                 and search, but cannot play music through Fastpotify.",
                             )
                             .font(theme::regular(14.0))
                             .color(palette.secondary),
@@ -110,9 +190,39 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 }
             }
         });
+    app.dialog_rect = Some(response.response.rect);
     if response.should_close() {
         app.actions.push(Action::CloseDialog);
     }
+}
+
+fn duplicate_message(
+    playlist_name: &str,
+    items: &[crate::api::models::PlayableItem],
+    duplicate_uris: &[String],
+) -> String {
+    let mut seen = std::collections::HashSet::new();
+    let names: Vec<&str> = items
+        .iter()
+        .filter(|item| duplicate_uris.iter().any(|uri| uri == item.uri()))
+        .map(crate::api::models::PlayableItem::name)
+        .filter(|name| seen.insert(*name))
+        .collect();
+    let named = match names.as_slice() {
+        [] => "This song".to_string(),
+        [name] => format!("“{name}”"),
+        [first, second] => format!("“{first}” and “{second}”"),
+        [first, second, rest @ ..] => {
+            format!("“{first}”, “{second}”, and {} more", rest.len())
+        }
+    };
+    let verb = if names.len() <= 1 { "is" } else { "are" };
+    let question = if items.len() == 1 {
+        "Add it again?"
+    } else {
+        "Add all selected songs anyway?"
+    };
+    format!("{named} {verb} already in “{playlist_name}”. {question}")
 }
 
 fn text_field(
@@ -227,9 +337,7 @@ fn edit_playlist(app: &mut App, ui: &mut egui::Ui) {
             ui.add(
                 egui::TextEdit::multiline(description)
                     .id(egui::Id::new("edit-description"))
-                    .hint_text(
-                        egui::RichText::new("Add an optional description").color(palette.dim),
-                    )
+                    .hint_text(egui::RichText::new("Optional description").color(palette.dim))
                     .font(theme::regular(14.0))
                     .frame(egui::Frame::NONE)
                     .desired_rows(3)
@@ -263,4 +371,51 @@ fn edit_playlist(app: &mut App, ui: &mut egui::Ui) {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::duplicate_message;
+    use crate::api::models::{PlayableItem, Track};
+
+    fn song(uri: &str, name: &str) -> PlayableItem {
+        PlayableItem::Track(Track {
+            uri: uri.into(),
+            name: name.into(),
+            ..Default::default()
+        })
+    }
+
+    #[test]
+    fn duplicate_dialog_names_the_song() {
+        let items = vec![song("spotify:track:honey", "Honey")];
+        let message = duplicate_message(
+            "The best music ever",
+            &items,
+            &["spotify:track:honey".into()],
+        );
+
+        assert_eq!(
+            message,
+            "“Honey” is already in “The best music ever”. Add it again?"
+        );
+    }
+
+    #[test]
+    fn duplicate_dialog_names_only_the_duplicates_in_a_selection() {
+        let items = vec![
+            song("spotify:track:honey", "Honey"),
+            song("spotify:track:new", "New song"),
+        ];
+        let message = duplicate_message(
+            "The best music ever",
+            &items,
+            &["spotify:track:honey".into()],
+        );
+
+        assert_eq!(
+            message,
+            "“Honey” is already in “The best music ever”. Add all selected songs anyway?"
+        );
+    }
 }

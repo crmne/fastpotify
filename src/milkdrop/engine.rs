@@ -1,14 +1,9 @@
-//! projectM itself, behind the MilkDrop window.
+//! projectM rendering inside the MilkDrop window.
 //!
-//! Everything here happens inside egui's paint callback, the one place the
-//! window's OpenGL context is known to be current: projectM is started
-//! there, fed the sound, told which preset to load, and asked to draw.
-//! libprojectM 4.1 draws into the window's own framebuffer at its
-//! bottom-left corner (it cannot yet be handed another), so the frame is
-//! copied from that corner into the window's picture, and the corner is
-//! painted over by the frame's sprites, which egui draws after the
-//! callback. The engine is dropped from eframe's exit hook, while the
-//! context still exists to free what it made.
+//! Rendering runs inside egui's paint callback, where the OpenGL context is
+//! current. libprojectM 4.1 draws into the bottom-left of the window framebuffer,
+//! so the result is copied into the display area before egui draws the frame.
+//! The engine is dropped from eframe's exit hook while the context is current.
 
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::path::Path;

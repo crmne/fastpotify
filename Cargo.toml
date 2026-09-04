@@ -1,10 +1,10 @@
 [package]
 name = "fastpotify"
-version = "0.4.1"
+version = "0.6.0"
 edition = "2024"
 rust-version = "1.95"
 license = "MIT"
-description = "A fast, lightweight, native Spotify client built with Rust and egui"
+description = "A native Spotify client"
 repository = "https://github.com/crmne/fastpotify"
 keywords = ["spotify", "music", "egui", "librespot", "player"]
 categories = ["multimedia::audio"]
@@ -117,16 +117,23 @@ souvlaki = { version = "0.8", default-features = false }
 # callback live on the main thread.
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSEvent", "NSMenu", "NSMenuItem", "NSResponder", "NSRunningApplication"] }
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSDate", "NSObjCRuntime", "NSRunLoop", "NSString"] }
+# NSAppleEventManager and NSAppleEventDescriptor carry the Spotify links
+# macOS hands an app registered for the scheme (src/mac_links.rs).
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSAppleEventDescriptor", "NSAppleEventManager", "NSDate", "NSObjCRuntime", "NSRunLoop", "NSString"] }
 
 [target.'cfg(windows)'.dependencies]
 # A hidden window for the media controls to belong to, and message loops.
-windows-sys = { version = "0.60", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_System_Com", "Win32_System_LibraryLoader", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.60", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_LibraryLoader", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 ksni = { version = "0.3", features = ["blocking"] }
 librespot-playback = { version = "0.8", default-features = false, features = ["rodio-backend", "pulseaudio-backend", "rustls-tls-native-roots"] }
 mpris-server = { version = "0.10", features = ["tokio"] }
+# The bus mpris-server already speaks, named directly so its interface macro
+# resolves: the running instance answers `Open` on its own name for the
+# launch a Spotify link makes (src/single_instance.rs). Same version, so
+# nothing new is compiled.
+zbus = { version = "5", default-features = false, features = ["tokio"] }
 
 # The icon and version information Windows shows for the executable.
 [target.'cfg(windows)'.build-dependencies]
@@ -165,10 +172,10 @@ opt-level = 0
 # explicit CMAKE_GENERATOR win. Drop when upstream takes the change.
 [patch.crates-io]
 projectm-sys = { git = "https://github.com/crmne/projectm-rs", branch = "respect-cmake-generator" }
-# librespot 0.8.0 plus one patch: the loaded track's normalisation factor
-# is reported through PlayerConfig, so the visualisers can undo it the way
-# Winamp's analyser did. Every librespot crate comes from the fork so one
-# copy exists. Drop when upstream takes the change.
+# librespot 0.8.0 plus the small patches Fastpotify needs: queue controls,
+# normalisation-factor reporting for the visualisers, and a distinct event
+# when Spotify refuses an audio key. Every librespot crate comes from the
+# fork so one copy exists. Drop patches as upstream takes them.
 librespot-audio = { git = "https://github.com/crmne/librespot", branch = "fastpotify-0.8" }
 librespot-connect = { git = "https://github.com/crmne/librespot", branch = "fastpotify-0.8" }
 librespot-core = { git = "https://github.com/crmne/librespot", branch = "fastpotify-0.8" }

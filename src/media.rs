@@ -1,8 +1,9 @@
-//! What the desktop's own media controls say and hear.
+//! Shared state and commands for desktop media controls.
 //!
-//! MPRIS on Linux, the System Media Transport Controls on Windows and Now
-//! Playing on macOS answer the same questions, so the interface speaks this
-//! vocabulary and each platform module translates it.
+//! Platform modules translate this interface to MPRIS on Linux, System Media
+//! Transport Controls on Windows, and Now Playing on macOS.
+
+use std::path::PathBuf;
 
 use crate::player::{Playback, RepeatMode};
 
@@ -31,6 +32,11 @@ pub struct MediaTrack {
     pub artists: Vec<String>,
     pub album: String,
     pub art_url: Option<String>,
+    /// The same artwork on disk, once the art cache holds it. Windows and
+    /// macOS take this rather than `art_url`, because they load the image
+    /// themselves; MPRIS only passes the URL along, so Linux keeps using
+    /// `art_url`.
+    pub art_file: Option<PathBuf>,
     pub duration_ms: u32,
 }
 

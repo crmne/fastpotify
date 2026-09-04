@@ -11,25 +11,21 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, page: Page) {
     let palette = app.palette;
     ui.add_space(8.0);
     let (title, empty_title, empty_body) = match page {
-        Page::Albums => (
-            "Albums",
-            "No saved albums",
-            "Albums you save will appear here.",
-        ),
+        Page::Albums => ("Albums", "No saved albums", "Saved albums appear here."),
         Page::Artists => (
             "Artists",
             "No followed artists",
-            "Artists you follow will appear here.",
+            "Followed artists appear here.",
         ),
         Page::Podcasts => (
             "Podcasts",
             "No podcasts yet",
-            "Podcasts you follow will appear here.",
+            "Followed podcasts appear here.",
         ),
         _ => (
             "Episodes",
             "No saved episodes",
-            "Episodes you save will appear here.",
+            "Saved episodes appear here.",
         ),
     };
     theme::text(ui, title, theme::bold(28.0), palette.text);

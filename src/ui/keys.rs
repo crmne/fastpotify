@@ -5,6 +5,15 @@ use egui::{Key, Modifiers};
 use crate::app::App;
 use crate::model::{Action, Dialog, Page};
 
+pub(super) const fn platform_shortcut(ctrl: &'static str, cmd: &'static str) -> &'static str {
+    if cfg!(target_os = "macos") { cmd } else { ctrl }
+}
+
+pub(super) const SIDEBAR_SHORTCUT: &str = platform_shortcut("Ctrl+B", "Cmd+B");
+pub(super) const QUIT_SHORTCUT: &str = platform_shortcut("Ctrl+Q", "Cmd+Q");
+pub(super) const WINAMP_SHORTCUT: &str = platform_shortcut("Ctrl+M", "Cmd+Shift+M");
+pub(super) const MILKDROP_SHORTCUT: &str = platform_shortcut("Ctrl+Shift+K", "Cmd+Shift+K");
+
 pub fn handle(app: &mut App, ctx: &egui::Context) {
     let typing = ctx.memory(|memory| memory.focused().is_some());
     let mut actions = Vec::new();
@@ -126,7 +135,7 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
             other => app.actions.push(other),
         }
     }
-    // A mouse's back and forward buttons, the way a browser takes them.
+    // Map mouse back and forward buttons to navigation.
     let (back, forward) = ctx.input(|input| {
         (
             input.pointer.button_pressed(egui::PointerButton::Extra1),
@@ -150,44 +159,98 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
 
 pub const SHORTCUTS: &[(&str, &str)] = &[
     ("Space", "Play or pause"),
-    ("Ctrl+←  /  Ctrl+→", "Previous or next"),
+    (
+        platform_shortcut("Ctrl+←  /  Ctrl+→", "Cmd+←  /  Cmd+→"),
+        "Previous or next",
+    ),
     ("Shift+←  /  Shift+→", "Seek 10 seconds"),
-    ("Ctrl+↑  /  Ctrl+↓", "Volume up or down"),
+    (
+        platform_shortcut("Ctrl+↑  /  Ctrl+↓", "Cmd+↑  /  Cmd+↓"),
+        "Volume up or down",
+    ),
     ("M", "Mute or unmute"),
     ("S", "Toggle shuffle"),
     ("R", "Cycle repeat"),
     ("Q", "Show the queue"),
     ("L", "Show the lyrics"),
-    ("Ctrl+F  or  /", "Search"),
-    ("Ctrl+B", "Show or hide the sidebar"),
+    (platform_shortcut("Ctrl+F  or  /", "Cmd+F  or  /"), "Search"),
+    (SIDEBAR_SHORTCUT, "Show or hide the sidebar"),
     ("Alt+←  /  Alt+→", "Back or forward"),
+    (platform_shortcut("Ctrl+H", "Cmd+Shift+H"), "Home"),
+    (platform_shortcut("Ctrl+L", "Cmd+L"), "Liked Songs"),
     (
-        if cfg!(target_os = "macos") {
-            "Ctrl+Shift+H"
-        } else {
-            "Ctrl+H"
-        },
-        "Home",
+        platform_shortcut("Ctrl+Shift+A", "Cmd+Shift+A"),
+        "Go to the playing artist",
     ),
-    ("Ctrl+L", "Liked Songs"),
-    ("Ctrl+Shift+A", "Go to the playing artist"),
-    ("Ctrl+Shift+B", "Go to the playing album"),
     (
-        if cfg!(target_os = "macos") {
-            "Ctrl+Shift+M"
-        } else {
-            "Ctrl+M"
-        },
-        "Winamp mini player",
+        platform_shortcut("Ctrl+Shift+B", "Cmd+Shift+B"),
+        "Go to the playing album",
     ),
-    ("Ctrl+Shift+K", "MilkDrop, under the mini player"),
+    (WINAMP_SHORTCUT, "Winamp mini player"),
+    (MILKDROP_SHORTCUT, "MilkDrop, under the mini player"),
     ("F  or  double-click", "MilkDrop: fill the screen"),
     ("→  /  N", "MilkDrop: next preset"),
     ("←  /  P", "MilkDrop: previous preset"),
     ("L", "MilkDrop: keep this preset"),
     ("Esc", "MilkDrop: leave full screen, or close"),
-    ("Ctrl+,", "Settings"),
-    ("Ctrl+/ or ?", "Keyboard shortcuts"),
-    ("Ctrl+W", "Close the window"),
-    ("Ctrl+Q", "Quit"),
+    (platform_shortcut("Ctrl+,", "Cmd+,"), "Settings"),
+    (
+        platform_shortcut("Ctrl+/ or ?", "Cmd+/ or ?"),
+        "Keyboard shortcuts",
+    ),
+    (platform_shortcut("Ctrl+W", "Cmd+W"), "Close the window"),
+    (QUIT_SHORTCUT, "Quit"),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shortcut_constants_name_the_platform_modifier() {
+        let expected = if cfg!(target_os = "macos") {
+            ["Cmd+B", "Cmd+Q", "Cmd+Shift+M", "Cmd+Shift+K"]
+        } else {
+            ["Ctrl+B", "Ctrl+Q", "Ctrl+M", "Ctrl+Shift+K"]
+        };
+        assert_eq!(
+            [
+                SIDEBAR_SHORTCUT,
+                QUIT_SHORTCUT,
+                WINAMP_SHORTCUT,
+                MILKDROP_SHORTCUT,
+            ],
+            expected
+        );
+    }
+
+    #[test]
+    fn shortcut_dialog_never_names_the_other_command_modifier() {
+        let other = if cfg!(target_os = "macos") {
+            "Ctrl+"
+        } else {
+            "Cmd+"
+        };
+        for (keys, _) in SHORTCUTS {
+            assert!(!keys.contains(other), "wrong modifier in {keys}");
+        }
+    }
+
+    #[test]
+    fn shortcut_dialog_names_platform_reserved_alternatives() {
+        let label = |description| {
+            SHORTCUTS
+                .iter()
+                .find(|(_, candidate)| *candidate == description)
+                .map(|(keys, _)| *keys)
+                .unwrap()
+        };
+        if cfg!(target_os = "macos") {
+            assert_eq!(label("Home"), "Cmd+Shift+H");
+            assert_eq!(label("Winamp mini player"), "Cmd+Shift+M");
+        } else {
+            assert_eq!(label("Home"), "Ctrl+H");
+            assert_eq!(label("Winamp mini player"), "Ctrl+M");
+        }
+    }
+}

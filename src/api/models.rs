@@ -250,6 +250,12 @@ pub struct Track {
     #[serde(default)]
     pub popularity: Option<u8>,
     #[serde(default)]
+    pub external_ids: ExternalIds,
+    /// The originally requested track when Spotify substituted a playable
+    /// release for the account's market.
+    #[serde(default)]
+    pub linked_from: Option<LinkedTrack>,
+    #[serde(default)]
     pub external_urls: ExternalUrls,
 }
 
@@ -263,6 +269,36 @@ impl Track {
             .as_ref()
             .and_then(|album| pick_image(&album.images, target))
     }
+
+    /// Stable identity shared by market-specific releases of one recording.
+    pub fn recording_key(&self) -> Option<String> {
+        self.external_ids
+            .isrc
+            .as_ref()
+            .filter(|isrc| !isrc.is_empty())
+            .map(|isrc| format!("isrc:{isrc}"))
+            .or_else(|| {
+                self.linked_from
+                    .as_ref()
+                    .filter(|track| !track.uri.is_empty())
+                    .map(|track| format!("linked:{}", track.uri))
+            })
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+pub struct ExternalIds {
+    #[serde(default)]
+    pub isrc: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+pub struct LinkedTrack {
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    #[serde(deserialize_with = "null_default")]
+    pub uri: String,
 }
 
 pub fn join_names<'a>(names: impl Iterator<Item = &'a str>) -> String {
@@ -531,7 +567,7 @@ pub struct FollowedArtists {
     pub artists: CursorPage<Artist>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
 pub struct PlayHistory {
     pub track: Track,
     #[serde(default)]
@@ -779,6 +815,19 @@ mod tests {
         assert_eq!(track.artists.len(), 2);
         assert_eq!(track.artists[0].name, "Tyler, the Creator");
         assert_eq!(track.artists[1].id.as_deref(), Some("guest"));
+    }
+
+    #[test]
+    fn track_keeps_spotifys_recording_and_relink_identities() {
+        let json = r#"{"id":"playable","uri":"spotify:track:playable","external_ids":{"isrc":"GBUM71029604"},"linked_from":{"id":"original","uri":"spotify:track:original"}}"#;
+        let track: Track = serde_json::from_str(json).unwrap();
+
+        assert_eq!(track.external_ids.isrc.as_deref(), Some("GBUM71029604"));
+        assert_eq!(
+            track.linked_from.as_ref().map(|track| track.uri.as_str()),
+            Some("spotify:track:original")
+        );
+        assert_eq!(track.recording_key().as_deref(), Some("isrc:GBUM71029604"));
     }
 
     #[test]

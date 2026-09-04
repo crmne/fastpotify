@@ -301,8 +301,7 @@ pub fn populate(app: &mut App) {
                     // unit; the rest remain absolute dates.
                     added_at: Some(demo_added_at(index, demo_now)),
                     is_local: false,
-                    // A second pair of hands, so the page reads as made
-                    // together: the Added By column and the byline show.
+                    // Use multiple contributors so Added By and the byline render.
                     added_by: Some(crate::api::models::UserRef {
                         id: Some(if index % 3 == 1 { "kasia" } else { "sam" }.into()),
                     }),
@@ -442,6 +441,28 @@ pub fn populate(app: &mut App) {
             })
             .collect(),
     );
+    // Recents tab (queue sidebar) – deduped, timestamped, paginated.
+    let recents_now = Timestamp::now();
+    app.recents.items = tracks
+        .iter()
+        .skip(2)
+        .take(24)
+        .enumerate()
+        .map(|(index, track)| PlayHistory {
+            track: track.clone(),
+            played_at: Some(demo_added_at(index, recents_now)),
+            context: None,
+        })
+        .collect();
+    app.recents.loaded_once = true;
+    app.recents.loading = false;
+    app.recents.error = None;
+    // Has more to load (before cursor of oldest item).
+    let oldest = recents_now - SignedDuration::from_hours(48);
+    // Cursor is unix millis; jiff Timestamp exposes seconds + nanos.
+    let millis = oldest.as_second() * 1000 + i64::from(oldest.subsec_nanosecond() / 1_000_000);
+    app.recents.after = Some(millis.to_string());
+    app.recents.complete = false;
     app.home.top_artists = Loadable::Loaded((0..8).map(artist).collect());
     app.home.top_tracks = Loadable::Loaded(tracks.iter().skip(10).take(10).cloned().collect());
     app.home.top_songs = Loadable::Loaded(tracks.iter().skip(10).cloned().collect());
@@ -511,9 +532,7 @@ pub fn populate(app: &mut App) {
             kind: "smartphone".into(),
         },
     ];
-    // A speaker announcing itself over ZeroConf that the account has not
-    // adopted yet, so the device picker shows the row that offers to hand it
-    // the account.
+    // Include an unsigned ZeroConf receiver in the device picker.
     app.receivers = vec![crate::zeroconf::Receiver {
         name: "House Spotify".into(),
         address: std::net::IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 1, 42)),
@@ -546,7 +565,7 @@ pub fn populate(app: &mut App) {
 
 /// Words to go with the sample track, timed so that the one being sung
 /// sits mid-panel at the demo's playback position.
-#[cfg(feature = "demo")]
+#[cfg(any(test, feature = "demo"))]
 fn sample_lyrics() -> crate::lyrics::Lyrics {
     let lines = [
         (40_000, "Streetlights blinking down the river road"),
@@ -580,8 +599,7 @@ fn sample_lyrics() -> crate::lyrics::Lyrics {
 /// Applies `--demo-page` and `--demo-show`.
 #[cfg(feature = "demo")]
 pub fn apply_flags(app: &mut App, page: Option<&str>, show: Option<&str>) {
-    // Whatever the settings on this machine say, a shot is of the big
-    // window unless the mini player is asked for.
+    // Default screenshots to the main window regardless of saved settings.
     app.settings.winamp_window = false;
     if let Some(page) = page.and_then(Page::decode) {
         app.open(page);
@@ -589,6 +607,10 @@ pub fn apply_flags(app: &mut App, page: Option<&str>, show: Option<&str>) {
     for surface in show.unwrap_or("").split(',').map(str::trim) {
         match surface {
             "queue" => app.show_queue_panel = true,
+            "recents" => {
+                app.show_queue_panel = true;
+                app.queue_tab = QueueTab::Recents;
+            }
             "devices" => app.show_devices = true,
             "shortcuts" => app.dialog = Some(Dialog::Shortcuts),
             "premium" => app.dialog = Some(Dialog::PremiumNeeded),
@@ -597,6 +619,14 @@ pub fn apply_flags(app: &mut App, page: Option<&str>, show: Option<&str>) {
                     name: "Autumn drives".into(),
                     public: false,
                     add_uris: vec!["spotify:track:trk1".into()],
+                })
+            }
+            "duplicate" => {
+                app.dialog = Some(Dialog::ConfirmPlaylistDuplicates {
+                    playlist_id: "pl1".into(),
+                    playlist_name: "Long Way Home".into(),
+                    items: vec![PlayableItem::Track(track(1))],
+                    duplicate_uris: vec!["spotify:track:trk1".into()],
                 })
             }
             "light" => {
@@ -621,8 +651,7 @@ pub fn apply_flags(app: &mut App, page: Option<&str>, show: Option<&str>) {
                 app.resume_position_ms = 19_566;
                 app.actions.push(Action::Next);
             }
-            // The built-in skin, whatever the settings say, so shots are
-            // the same everywhere and never show someone else's art.
+            // Use the built-in skin for deterministic screenshots.
             "winamp" => {
                 app.settings.winamp_window = true;
                 app.settings.skin = None;
@@ -814,9 +843,7 @@ mod tests {
         output.textures_delta.clear();
     }
 
-    /// A toast lays its words out in a line. The anchored area it lives
-    /// in starts out narrow, and a label left to wrap at the area's width
-    /// broke on every word.
+    /// A toast is wide enough to avoid wrapping every word.
     #[test]
     fn a_toast_is_wide_enough_to_read() {
         let root =
@@ -887,6 +914,313 @@ mod tests {
         app.backend.shutdown();
     }
 
+    /// The shortcuts are longer than a small window is tall, so the
+    /// dialog scrolls them rather than running off the bottom with the
+    /// Done button somewhere past the edge of the screen.
+    #[test]
+    fn the_shortcuts_dialog_fits_a_small_window() {
+        let root =
+            std::env::temp_dir().join(format!("fastpotify-shortcuts-test-{}", std::process::id()));
+        let dirs = AppDirs {
+            config: root.join("config"),
+            state: root.join("state"),
+            cache: root.join("cache"),
+        };
+        let ctx = egui::Context::default();
+        let waker = crate::backend::Waker::default();
+        waker.attach(&ctx);
+        let mut app = App::new(
+            &waker,
+            dirs,
+            Settings::default(),
+            AppOptions {
+                media_controls: false,
+                tray: false,
+            },
+        );
+        app.attach(&ctx);
+        populate(&mut app);
+        app.dialog = Some(Dialog::Shortcuts);
+
+        let height = 420.0;
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(900.0, height),
+            )),
+            ..Default::default()
+        };
+        // Two frames: the dialog sizes itself on the first.
+        let mut first = ctx.run_ui(input.clone(), |ui| app.frame_ui(ui));
+        first.textures_delta.clear();
+        let mut output = ctx.run_ui(input, |ui| app.frame_ui(ui));
+        output.textures_delta.clear();
+
+        let dialog = app.dialog_rect.expect("the dialog drew itself");
+        let bottom = dialog.max.y;
+        assert!(
+            bottom <= height + 1.0,
+            "the dialog runs {} pixels past the bottom of a {height}-tall window",
+            bottom - height
+        );
+        app.backend.shutdown();
+    }
+
+    /// Rule: the interface zoom control puts minus on the left and plus
+    /// on the right. The setting row's control is right-to-left, which
+    /// used to reverse the two buttons.
+    #[test]
+    fn interface_zoom_puts_minus_on_the_left() {
+        let root =
+            std::env::temp_dir().join(format!("fastpotify-zoom-order-test-{}", std::process::id()));
+        let dirs = AppDirs {
+            config: root.join("config"),
+            state: root.join("state"),
+            cache: root.join("cache"),
+        };
+        let ctx = egui::Context::default();
+        let waker = crate::backend::Waker::default();
+        waker.attach(&ctx);
+        let mut app = App::new(
+            &waker,
+            dirs,
+            Settings::default(),
+            AppOptions {
+                media_controls: false,
+                tray: false,
+            },
+        );
+        app.attach(&ctx);
+        populate(&mut app);
+        app.settings.zoom = 1.0;
+        app.open(Page::Settings);
+
+        let mut placed: Vec<(String, f32, f32)> = Vec::new();
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1280.0, 4000.0),
+            )),
+            ..Default::default()
+        };
+        for _ in 0..2 {
+            placed.clear();
+            let mut output = ctx.run_ui(input.clone(), |ui| app.frame_ui(ui));
+            output.textures_delta.clear();
+            fn walk(shape: &egui::epaint::Shape, placed: &mut Vec<(String, f32, f32)>) {
+                match shape {
+                    egui::epaint::Shape::Text(text) => {
+                        placed.push((text.galley.job.text.clone(), text.pos.x, text.pos.y))
+                    }
+                    egui::epaint::Shape::Vec(shapes) => {
+                        shapes.iter().for_each(|shape| walk(shape, placed))
+                    }
+                    _ => {}
+                }
+            }
+            for clipped in &output.shapes {
+                walk(&clipped.shape, &mut placed);
+            }
+        }
+        let percent = placed
+            .iter()
+            .find(|(text, _, _)| text == "100%")
+            .unwrap_or_else(|| panic!("the zoom percent was never drawn: {placed:?}"));
+        let on_row = |label: &str| -> f32 {
+            placed
+                .iter()
+                .filter(|(text, _, y)| text == label && (y - percent.2).abs() < 8.0)
+                .min_by(|a, b| (a.1 - percent.1).abs().total_cmp(&(b.1 - percent.1).abs()))
+                .unwrap_or_else(|| panic!("{label} was never drawn next to 100%: {placed:?}"))
+                .1
+        };
+        let minus = on_row("-");
+        let plus = on_row("+");
+        assert!(
+            minus < percent.1 && percent.1 < plus,
+            "zoom control should read minus, percent, plus; got - at {minus}, 100% at {}, + at {plus}",
+            percent.1
+        );
+        app.backend.shutdown();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// The frame rate is a dial with detents: it stops at the rates
+    /// worth having, names the one it is on, and moving it one notch
+    /// lands on the next of them rather than somewhere in between.
+    #[cfg(feature = "milkdrop")]
+    #[test]
+    fn the_frame_rate_dial_steps_between_its_stops() {
+        let root =
+            std::env::temp_dir().join(format!("fastpotify-fps-dial-test-{}", std::process::id()));
+        let dirs = AppDirs {
+            config: root.join("config"),
+            state: root.join("state"),
+            cache: root.join("cache"),
+        };
+        let ctx = egui::Context::default();
+        let waker = crate::backend::Waker::default();
+        waker.attach(&ctx);
+        let mut app = App::new(
+            &waker,
+            dirs,
+            Settings::default(),
+            AppOptions {
+                media_controls: false,
+                tray: false,
+            },
+        );
+        app.attach(&ctx);
+        populate(&mut app);
+        app.settings.milkdrop_screen_hz = 144;
+        app.settings.milkdrop_fps = 60;
+        app.open(Page::Settings);
+
+        // Read labels from the real Settings page.
+        let drawn = |app: &mut App, ctx: &egui::Context| -> Vec<String> {
+            let input = egui::RawInput {
+                // Draw the full Settings page, including MilkDrop.
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1280.0, 4000.0),
+                )),
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(input, |ui| app.frame_ui(ui));
+            output.textures_delta.clear();
+            let mut said = Vec::new();
+            fn walk(shape: &egui::epaint::Shape, said: &mut Vec<String>) {
+                match shape {
+                    egui::epaint::Shape::Text(text) => said.push(text.galley.job.text.clone()),
+                    egui::epaint::Shape::Vec(shapes) => {
+                        shapes.iter().for_each(|shape| walk(shape, said))
+                    }
+                    _ => {}
+                }
+            }
+            for clipped in &output.shapes {
+                walk(&clipped.shape, &mut said);
+            }
+            said
+        };
+
+        for _ in 0..3 {
+            let said = drawn(&mut app, &ctx);
+            assert!(
+                said.iter().any(|text| text.contains("60 fps")),
+                "the dial names the rate it is on: {said:?}"
+            );
+        }
+
+        // Every stop can be reached, and each names itself.
+        for (rate, expected) in [
+            (144, "144 fps, your screen"),
+            (0, "Uncapped"),
+            (30, "30 fps"),
+        ] {
+            app.settings.milkdrop_fps = rate;
+            let said = drawn(&mut app, &ctx);
+            assert!(
+                said.iter().any(|text| text == expected),
+                "the dial on {rate} should read {expected}: {said:?}"
+            );
+        }
+        app.backend.shutdown();
+    }
+
+    /// Rule: side-panel headers stay on one line at their narrowest width.
+    #[test]
+    fn the_narrowest_panels_keep_their_headers_on_one_row() {
+        let root = std::env::temp_dir().join(format!(
+            "fastpotify-queue-header-test-{}",
+            std::process::id()
+        ));
+        let dirs = AppDirs {
+            config: root.join("config"),
+            state: root.join("state"),
+            cache: root.join("cache"),
+        };
+        let ctx = egui::Context::default();
+        let waker = crate::backend::Waker::default();
+        waker.attach(&ctx);
+        let mut app = App::new(
+            &waker,
+            dirs,
+            Settings::default(),
+            AppOptions {
+                media_controls: false,
+                tray: false,
+            },
+        );
+        app.attach(&ctx);
+        populate(&mut app);
+        app.settings.queue_width = crate::theme::SIDE_PANEL_MIN_WIDTH;
+        app.settings.lyrics_width = crate::theme::SIDE_PANEL_MIN_WIDTH;
+        app.lyrics = Loadable::Loaded(Some(sample_lyrics()));
+        app.lyrics_following = false;
+
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1280.0, 800.0),
+            )),
+            ..Default::default()
+        };
+        let drawn = |app: &mut App| {
+            let mut placed = Vec::new();
+            // A panel applies its requested width after the first frame.
+            for _ in 0..2 {
+                placed.clear();
+                let mut output = ctx.run_ui(input.clone(), |ui| app.frame_ui(ui));
+                output.textures_delta.clear();
+                fn walk(shape: &egui::epaint::Shape, placed: &mut Vec<(String, egui::Rect)>) {
+                    match shape {
+                        egui::epaint::Shape::Text(text) => {
+                            placed.push((text.galley.job.text.clone(), text.visual_bounding_rect()))
+                        }
+                        egui::epaint::Shape::Vec(shapes) => {
+                            shapes.iter().for_each(|shape| walk(shape, placed))
+                        }
+                        _ => {}
+                    }
+                }
+                for clipped in &output.shapes {
+                    walk(&clipped.shape, &mut placed);
+                }
+            }
+            placed
+        };
+        let assert_same_row = |placed: &[(String, egui::Rect)], left: &str, right: &str| {
+            let at = |label: &str| {
+                placed
+                    .iter()
+                    .find(|(text, _)| text == label)
+                    .unwrap_or_else(|| panic!("{label} was never drawn: {placed:?}"))
+                    .1
+            };
+            let (left_rect, right_rect) = (at(left), at(right));
+            assert!(
+                (left_rect.center().y - right_rect.center().y).abs() < 10.0
+                    && (left_rect.right() <= right_rect.left()
+                        || right_rect.right() <= left_rect.left()),
+                "{left} and {right} should share a clear row at minimum width: {left_rect:?} vs {right_rect:?}"
+            );
+        };
+
+        for (queue, lyrics) in [(false, false), (true, false), (false, true), (true, true)] {
+            app.show_queue_panel = queue;
+            app.show_lyrics_panel = lyrics;
+            let placed = drawn(&mut app);
+            if queue {
+                assert_same_row(&placed, "Queue", "Recent");
+            }
+            if lyrics {
+                assert_same_row(&placed, "Lyrics", "Follow");
+            }
+        }
+        app.backend.shutdown();
+    }
+
     /// Every page, panel, and dialog lays out without panicking.
     #[test]
     fn every_surface_renders_headless() {
@@ -942,8 +1276,7 @@ mod tests {
         app.show_queue_panel = true;
         app.show_devices = true;
         frame(&ctx, &mut app);
-        // The drawer again with a hand-queued song, so the Playing next
-        // section lays out too.
+        // Draw the Playing next section with a manual queue row.
         if let Loadable::Loaded(queue) = &app.queue
             && let Some(first) = queue.queue.first()
         {
@@ -968,6 +1301,12 @@ mod tests {
                 id: "pl1".into(),
                 name: "x".into(),
                 owned: true,
+            },
+            Dialog::ConfirmPlaylistDuplicates {
+                playlist_id: "pl1".into(),
+                playlist_name: "x".into(),
+                items: vec![PlayableItem::Track(track(1))],
+                duplicate_uris: vec!["spotify:track:trk1".into()],
             },
         ] {
             app.dialog = Some(dialog);
@@ -1025,9 +1364,15 @@ mod tests {
             egui::DragAndDrop::set_payload(
                 &ctx,
                 DragTrack {
-                    uri: "spotify:track:trk0".into(),
-                    title: "Fragments".into(),
+                    uri: "spotify:track:not-in-demo-playlists".into(),
+                    title: "A new song".into(),
                     image: None,
+                    item: PlayableItem::Track(Track {
+                        id: Some("not-in-demo-playlists".into()),
+                        uri: "spotify:track:not-in-demo-playlists".into(),
+                        name: "A new song".into(),
+                        ..Default::default()
+                    }),
                     from: None,
                 },
             );
@@ -1049,6 +1394,79 @@ mod tests {
             }
         }
         assert!(dropped, "no sweep position landed on an owned playlist row");
+        app.backend.shutdown();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// The cover and title in the bottom-left player are a song source, not
+    /// just links. The sidebar can therefore receive the same complete row it
+    /// receives when a table song is dragged.
+    #[test]
+    fn dragging_the_now_playing_song_supplies_a_playlist_row() {
+        let root = std::env::temp_dir().join(format!(
+            "fastpotify-now-playing-drag-test-{}",
+            std::process::id()
+        ));
+        let dirs = AppDirs {
+            config: root.join("config"),
+            state: root.join("state"),
+            cache: root.join("cache"),
+        };
+        let ctx = egui::Context::default();
+        let waker = crate::backend::Waker::default();
+        waker.attach(&ctx);
+        let mut app = App::new(
+            &waker,
+            dirs,
+            Settings::default(),
+            AppOptions {
+                media_controls: false,
+                tray: false,
+            },
+        );
+        app.attach(&ctx);
+        populate(&mut app);
+        for _ in 0..3 {
+            frame(&ctx, &mut app);
+        }
+
+        let start = egui::pos2(40.0, 755.0);
+        frame_events(
+            &ctx,
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(start),
+                egui::Event::PointerButton {
+                    pos: start,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        frame_events(
+            &ctx,
+            &mut app,
+            vec![egui::Event::PointerMoved(start + egui::vec2(20.0, -10.0))],
+        );
+
+        let payload = egui::DragAndDrop::payload::<DragTrack>(&ctx)
+            .expect("dragging the bottom-left song should create a song payload");
+        assert_eq!(payload.uri, "spotify:track:trk0");
+        assert_eq!(payload.item.uri(), "spotify:track:trk0");
+        assert_eq!(payload.from, None, "this is an add, not a playlist move");
+
+        egui::DragAndDrop::clear_payload(&ctx);
+        frame_events(
+            &ctx,
+            &mut app,
+            vec![egui::Event::PointerButton {
+                pos: start,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
         app.backend.shutdown();
         let _ = std::fs::remove_dir_all(root);
     }
@@ -1131,9 +1549,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
-    /// A drop between two unpinned playlists creates the custom order too:
-    /// nothing was pinned, so the snapshot is simply the shelf as shown
-    /// with the moved row in its new place.
+    /// Reordering unpinned playlists creates a custom sidebar order.
     #[test]
     fn dropping_between_unpinned_playlists_creates_the_custom_order() {
         let root =
@@ -1250,6 +1666,11 @@ mod tests {
             uri: uri.to_string(),
             title: "Closer".into(),
             image: None,
+            item: PlayableItem::Track(Track {
+                uri: uri.to_string(),
+                name: "Closer".into(),
+                ..Default::default()
+            }),
             from: Some(("pl1".into(), from as u32)),
         };
 
@@ -1349,5 +1770,101 @@ mod tests {
         assert_eq!(restored.sidebar_order, settings.sidebar_order);
         let older: Settings = serde_json::from_str("{}").unwrap();
         assert!(older.sidebar_order.is_empty());
+    }
+
+    /// Clicking the search icon in the library header reveals and focuses
+    /// the sidebar search field.
+    #[test]
+    fn clicking_search_in_library_shelf_focuses_search_field() {
+        let root = std::env::temp_dir().join(format!(
+            "fastpotify-sidebar-search-focus-test-{}",
+            std::process::id()
+        ));
+        let dirs = AppDirs {
+            config: root.join("config"),
+            state: root.join("state"),
+            cache: root.join("cache"),
+        };
+        let ctx = egui::Context::default();
+        let waker = crate::backend::Waker::default();
+        waker.attach(&ctx);
+        let mut app = App::new(
+            &waker,
+            dirs,
+            Settings::default(),
+            AppOptions {
+                media_controls: false,
+                tray: false,
+            },
+        );
+        app.attach(&ctx);
+        populate(&mut app);
+
+        // Find the Y position of the Library header.
+        let mut library_y = None;
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1280.0, 800.0),
+            )),
+            ..Default::default()
+        };
+        for _ in 0..2 {
+            let mut output = ctx.run_ui(input.clone(), |ui| app.frame_ui(ui));
+            output.textures_delta.clear();
+            fn walk(shape: &egui::epaint::Shape, found: &mut Option<f32>) {
+                match shape {
+                    egui::epaint::Shape::Text(text) => {
+                        if text.galley.job.text == "Library" {
+                            *found = Some(text.pos.y);
+                        }
+                    }
+                    egui::epaint::Shape::Vec(shapes) => {
+                        shapes.iter().for_each(|shape| walk(shape, found));
+                    }
+                    _ => {}
+                }
+            }
+            for clipped in &output.shapes {
+                walk(&clipped.shape, &mut library_y);
+            }
+        }
+        let y = library_y.expect("Library label was not found");
+        let search_pos = egui::pos2(168.0, y + 4.0);
+
+        // Click on the search button in the Library shelf header.
+        frame_events(
+            &ctx,
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(search_pos),
+                egui::Event::PointerButton {
+                    pos: search_pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+                egui::Event::PointerButton {
+                    pos: search_pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+
+        // Advance one frame so the focused widget processes events.
+        frame(&ctx, &mut app);
+
+        // Verify the search field is shown and has keyboard focus.
+        let search_id = egui::Id::new("sidebar-search");
+        let has_focus = ctx.memory(|m| m.has_focus(search_id));
+        assert!(
+            has_focus,
+            "sidebar-search must have keyboard focus after clicking the search icon"
+        );
+
+        app.backend.shutdown();
+        let _ = std::fs::remove_dir_all(root);
     }
 }

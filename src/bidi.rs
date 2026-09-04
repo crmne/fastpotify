@@ -1,19 +1,11 @@
-//! Right-to-left text in an engine that lays glyphs out left to right.
+//! Right-to-left text support for egui's left-to-right layout.
 //!
-//! epaint keeps characters in the order they arrive, so an Arabic or Hebrew
-//! line comes out with its words backwards: the first word lands on the
-//! left, where a right-to-left reader looks last. The letters inside each
-//! word are already right, since the shaper handles a word on its own. What
-//! is missing is the word order, and the alignment, which should hug the
-//! right edge.
+//! epaint shapes letters within Arabic and Hebrew words but does not reorder
+//! the words or align the line to the right.
 //!
-//! [`display_text`] reorders a line's words for display: the bidi
-//! algorithm's visual order, with each right-to-left word's letters put back
-//! in logical order so the shaper mirrors them once more. Mixed lines keep
-//! their Latin runs readable. [`layout`] does the same for wrapped or
-//! truncated text row by row: the rows are found on the logical text first,
-//! so the first row still holds the first words, and an ellipsis sits at the
-//! reading end, on the left.
+//! [`display_text`] applies visual word order while preserving logical letter
+//! order for shaping. [`layout`] handles wrapped and truncated text one row at
+//! a time and places ellipses at the left reading edge.
 
 use std::borrow::Cow;
 use std::sync::Arc;

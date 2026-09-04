@@ -14,6 +14,12 @@ struct Cli {
     #[command(subcommand)]
     control: Option<Control>,
 
+    /// A Spotify link to open: spotify:track:…, or an open.spotify.com
+    /// address. The running Fastpotify opens it when there is one, which
+    /// is how the desktop hands links over.
+    #[arg(value_name = "LINK")]
+    link: Option<String>,
+
     /// Spotify Connect device name for this session.
     #[arg(long)]
     device_name: Option<String>,
@@ -203,7 +209,7 @@ fn run_control(control: Control) -> i32 {
             0
         }
         Err(error) => {
-            eprintln!("Fastpotify is not running, or predates remote control: {error}");
+            eprintln!("Fastpotify is not running or does not support remote control: {error}");
             1
         }
     }
@@ -290,6 +296,18 @@ fn main() -> eframe::Result<()> {
     if let Some(control) = cli.control {
         std::process::exit(run_control(control));
     }
+    // A link is read before anything starts: one that is not a Spotify
+    // link ends the launch here rather than reaching the running instance.
+    let link = cli
+        .link
+        .as_deref()
+        .map(|text| match fastpotify::link::parse(text) {
+            Some(uri) => uri,
+            None => {
+                eprintln!("not a Spotify link: {text}");
+                std::process::exit(2);
+            }
+        });
     let default_filter = if cli.verbose {
         "info,librespot=info,fastpotify=debug"
     } else {
@@ -332,7 +350,7 @@ fn main() -> eframe::Result<()> {
     #[cfg(not(feature = "demo"))]
     let guarded = true;
     let instance = if guarded {
-        match single_instance::acquire(&waker) {
+        match single_instance::acquire(&waker, link.as_deref()) {
             single_instance::Outcome::Only(guard) => Some(guard),
             single_instance::Outcome::Surfaced => {
                 log::info!("Fastpotify is already running; asked it to show its window");
@@ -342,6 +360,13 @@ fn main() -> eframe::Result<()> {
     } else {
         None
     };
+    // macOS hands links to an app as Apple Events, the one it was launched
+    // for included, so the handler is in place before the event loop that
+    // delivers them starts.
+    #[cfg(target_os = "macos")]
+    if let Some(guard) = &instance {
+        fastpotify::mac_links::install(guard.commands(), waker.clone());
+    }
 
     // A demo run is a throwaway process next to the real one, whether it
     // stays for a screenshot or for hands on it: no tray icon of its own,
@@ -360,6 +385,9 @@ fn main() -> eframe::Result<()> {
     if let Some(guard) = &instance {
         app.set_remote_control(guard);
     }
+    if let Some(uri) = link {
+        app.open_link(uri);
+    }
     #[cfg(feature = "demo")]
     if demo {
         fastpotify::demo::populate(&mut app);
@@ -372,7 +400,6 @@ fn main() -> eframe::Result<()> {
         asked: false,
     });
     let slot = std::sync::Arc::new(std::sync::Mutex::new(Some(app)));
-
     loop {
         let creator_slot = std::sync::Arc::clone(&slot);
         let creator_waker = waker.clone();
@@ -540,6 +567,10 @@ impl MiniWindow {
     }
 }
 
+const fn main_window_decorated(on_windows: bool) -> bool {
+    !on_windows
+}
+
 fn native_options(fullscreen: bool, mini: Option<MiniWindow>) -> eframe::NativeOptions {
     let icon = if cfg!(target_os = "macos") {
         // macOS takes the dock icon from the bundle's .icns, which is the
@@ -555,11 +586,7 @@ fn native_options(fullscreen: bool, mini: Option<MiniWindow>) -> eframe::NativeO
         .with_icon(icon);
     let viewport = match mini {
         Some(mini) => {
-            let level = if mini.on_top {
-                egui::WindowLevel::AlwaysOnTop
-            } else {
-                egui::WindowLevel::Normal
-            };
+            let level = app::on_top_window_level(mini.on_top);
             // See-through, for skins that are not rectangles; the skin
             // paints every pixel that is the window. MilkDrop runs in its own
             // process, so nothing else shares this window's surface.
@@ -585,6 +612,9 @@ fn native_options(fullscreen: bool, mini: Option<MiniWindow>) -> eframe::NativeO
             .with_fullsize_content_view(true)
             .with_titlebar_shown(false)
             .with_title_shown(false)
+            // Windows has no equivalent to macOS's floating traffic lights.
+            // Removing its decorations lets the app surface fill the window.
+            .with_decorations(main_window_decorated(cfg!(windows)))
             .with_inner_size([1240.0, 800.0])
             .with_min_inner_size([760.0, 520.0])
             .with_fullscreen(fullscreen),
@@ -599,6 +629,26 @@ fn native_options(fullscreen: bool, mini: Option<MiniWindow>) -> eframe::NativeO
             ..Default::default()
         },
         ..Default::default()
+    }
+}
+
+#[cfg(test)]
+mod native_window_tests {
+    use super::*;
+
+    #[test]
+    fn main_window_uses_the_platform_decoration_policy() {
+        let options = native_options(false, None);
+        assert_eq!(options.viewport.decorations, Some(!cfg!(windows)));
+        assert_eq!(options.viewport.fullsize_content_view, Some(true));
+        assert_eq!(options.viewport.titlebar_shown, Some(false));
+        assert_eq!(options.viewport.title_shown, Some(false));
+    }
+
+    #[test]
+    fn only_windows_removes_the_native_frame() {
+        assert!(!main_window_decorated(true));
+        assert!(main_window_decorated(false));
     }
 }
 
@@ -779,5 +829,40 @@ fn app_icon() -> egui::IconData {
         rgba: util::app_icon_rgba(SIZE),
         width: SIZE as u32,
         height: SIZE as u32,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A link on the command line is a link, and a control verb is still a
+    /// verb: the two do not get in each other's way.
+    #[test]
+    fn a_link_and_a_verb_are_told_apart() {
+        // #given / #when / #then
+        let launch = Cli::try_parse_from(["fastpotify", "spotify:track:4uLU6hMCjMI75M1A2tKUQC"])
+            .expect("a link parses");
+        assert_eq!(
+            launch.link.as_deref(),
+            Some("spotify:track:4uLU6hMCjMI75M1A2tKUQC")
+        );
+        assert!(launch.control.is_none());
+
+        let launch = Cli::try_parse_from([
+            "fastpotify",
+            "https://open.spotify.com/album/1DFixLWuPkv3KT3TnV35m3?si=x",
+            "--verbose",
+        ])
+        .expect("a web address parses");
+        assert!(launch.link.is_some());
+        assert!(launch.verbose);
+
+        let verb = Cli::try_parse_from(["fastpotify", "next"]).expect("a verb parses");
+        assert!(matches!(verb.control, Some(Control::Next)));
+        assert!(verb.link.is_none());
+
+        let bare = Cli::try_parse_from(["fastpotify"]).expect("a plain launch parses");
+        assert!(bare.link.is_none() && bare.control.is_none());
     }
 }

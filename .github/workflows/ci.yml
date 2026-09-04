@@ -32,11 +32,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libasound2-dev libpulse-dev libxkbcommon-dev \
             libwayland-dev libgl1-mesa-dev cmake libclang-dev
+      # Only main writes the cache. A pull request reads it and builds on
+      # top; letting every branch save its own copy filled the repository's
+      # ten-gigabyte cache in a few days, and a full cache evicts the entry
+      # the next build wanted.
       - uses: Swatinem/rust-cache@v2
         with:
           # v2: caches from before the projectm-sys fork replay its stale
           # build output instead of compiling the fork.
           prefix-key: v2
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Formatting
         run: cargo fmt --all --check
       - name: Clippy (default features)
@@ -68,10 +73,10 @@ jobs:
           sudo apt-get install -y libasound2-dev libpulse-dev libxkbcommon-dev \
             libwayland-dev libgl1-mesa-dev cmake libclang-dev
       # libprojectM reads OpenGL through GLEW on Windows; projectm-sys builds
-      # against vcpkg's, and the binary links the same copy.
+      # against vcpkg's static-CRT triplet, matching .cargo/config.toml.
       - name: GLEW for libprojectM
         if: runner.os == 'Windows'
-        run: vcpkg install glew:x64-windows-static-md
+        run: vcpkg install glew:x64-windows-static
       # projectm-sys asks CMake for the Visual Studio generator, which the
       # runner image no longer satisfies; Ninja inside the MSVC environment
       # builds the same thing without caring which Visual Studio is on. The
@@ -81,6 +86,8 @@ jobs:
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # The demo feature carries the headless render test that lays out every
       # page, panel, and dialog without a display.
       - name: Tests (default features)
@@ -89,6 +96,30 @@ jobs:
         run: cargo test --locked --all-targets --all-features
       - name: Documentation tests
         run: cargo test --locked --all-features --doc
+      # A build can pass while importing Microsoft's C++ runtime, then fail on
+      # a clean user's machine. Inspect the executable CI actually produced.
+      - name: Standalone Windows runtime
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cargo build --locked
+          $imports = & dumpbin /dependents target\debug\fastpotify.exe | Out-String
+          $runtime = $imports | Select-String -Pattern 'MSVCP[0-9_]*\.dll|VCRUNTIME[0-9_]*\.dll'
+          if ($runtime) { throw "Fastpotify imports an MSVC runtime:`n$runtime" }
+
+  nix:
+    name: Nix package
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: wimpysworld/nothing-but-nix@v9
+      - uses: cachix/install-nix-action@v31
+      - uses: nix-community/cache-nix-action@v7
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('**/flake.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+      - run: nix build .#default
 
   docs:
     name: docs

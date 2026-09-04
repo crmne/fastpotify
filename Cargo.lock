@@ -1577,7 +1577,7 @@ dependencies = [
 
 [[package]]
 name = "fastpotify"
-version = "0.4.1"
+version = "0.6.0"
 dependencies = [
  "aes",
  "anyhow",
@@ -1633,6 +1633,7 @@ dependencies = [
  "windows-sys 0.60.2",
  "winit",
  "winresource",
+ "zbus",
 ]
 
 [[package]]
@@ -2864,7 +2865,7 @@ dependencies = [
 [[package]]
 name = "librespot-audio"
 version = "0.8.0"
-source = "git+https://github.com/crmne/librespot?branch=fastpotify-0.8#784036dc8a49aafd46f107caed43e2d2b9d0bf78"
+source = "git+https://github.com/crmne/librespot?branch=fastpotify-0.8#5604d0c47673b09b3b18b1f625538ca0f60d63bc"
 dependencies = [
  "aes",
  "bytes",
@@ -2883,7 +2884,7 @@ dependencies = [
 [[package]]
 name = "librespot-connect"
 version = "0.8.0"
-source = "git+https://github.com/crmne/librespot?branch=fastpotify-0.8#784036dc8a49aafd46f107caed43e2d2b9d0bf78"
+source = "git+https://github.com/crmne/librespot?branch=fastpotify-0.8#5604d0c47673b09b3b18b1f625538ca0f60d63bc"
 dependencies = [
  "futures-util",
  "librespot-core",
@@ -2902,7 +2903,7 @@ dependencies = [
 [[package]]
 name = "librespot-core"
 version = "0.8.0"
-source = "git+https://github.com/crmne/librespot?branch=fastpotify-0.8#784036dc8a49aafd46f107caed43e2d2b9d0bf78"
+source = "git+https://github.com/crmne/librespot?branch=fastpotify-0.8#5604d0c47673b09b3b18b1f625538ca0f60d63bc"
 dependencies = [
  "aes",
  "base64",
@@ -2958,7 +2959,7 @@ dependencies = [
 [[package]]
 name = "librespot-metadata"
 version = "0.8.0"
-source = "git+https://github.com/crmne/librespot?branch=fastpotify-0.8#784036dc8a49aafd46f107caed43e2d2b9d0bf78"
+source = "git+https://github.com/crmne/librespot?branch=fastpotify-0.8#5604d0c47673b09b3b18b1f625538ca0f60d63bc"
 dependencies = [
  "async-trait",
  "bytes",
@@ -2975,7 +2976,7 @@ dependencies = [
 [[package]]
 name = "librespot-oauth"
 version = "0.8.0"
-source = "git+https://github.com/crmne/librespot?branch=fastpotify-0.8#784036dc8a49aafd46f107caed43e2d2b9d0bf78"
+source = "git+https://github.com/crmne/librespot?branch=fastpotify-0.8#5604d0c47673b09b3b18b1f625538ca0f60d63bc"
 dependencies = [
  "log",
  "oauth2",
@@ -2988,7 +2989,7 @@ dependencies = [
 [[package]]
 name = "librespot-playback"
 version = "0.8.0"
-source = "git+https://github.com/crmne/librespot?branch=fastpotify-0.8#784036dc8a49aafd46f107caed43e2d2b9d0bf78"
+source = "git+https://github.com/crmne/librespot?branch=fastpotify-0.8#5604d0c47673b09b3b18b1f625538ca0f60d63bc"
 dependencies = [
  "cpal",
  "form_urlencoded",
@@ -3013,7 +3014,7 @@ dependencies = [
 [[package]]
 name = "librespot-protocol"
 version = "0.8.0"
-source = "git+https://github.com/crmne/librespot?branch=fastpotify-0.8#784036dc8a49aafd46f107caed43e2d2b9d0bf78"
+source = "git+https://github.com/crmne/librespot?branch=fastpotify-0.8#5604d0c47673b09b3b18b1f625538ca0f60d63bc"
 dependencies = [
  "protobuf",
  "protobuf-codegen",
@@ -4185,7 +4186,7 @@ checksum = "3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5"
 [[package]]
 name = "projectm-sys"
 version = "1.2.3"
-source = "git+https://github.com/crmne/projectm-rs?branch=respect-cmake-generator#a2c01c3bd743700b8dd288238a6fe57f7e717ef8"
+source = "git+https://github.com/crmne/projectm-rs?branch=respect-cmake-generator#454f38c50a968b13028ab6716d33647b3e99388c"
 dependencies = [
  "bindgen",
  "cmake",
@@ -5508,7 +5509,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.4",
  "windows-sys 0.61.2",

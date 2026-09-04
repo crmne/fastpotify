@@ -382,6 +382,8 @@ fn track_list(
                 compact: false,
                 thin: app.settings.tracklist_compact,
                 shift: 0.0,
+                picked: false,
+                picked_songs: &[],
             },
         );
     }

@@ -1,20 +1,14 @@
 //! Spotify Connect receivers on the local network.
 //!
-//! Spotify's Web API lists only devices already logged in to the account. A
-//! librespot, spotifyd, or hardware receiver sitting on the LAN waiting to be
-//! handed an account is invisible to it, which is why a speaker you can see
-//! in the official client is missing from `/me/player/devices`.
+//! Spotify's Web API lists only devices already signed in. Receivers waiting
+//! for an account are therefore absent from `/me/player/devices`.
 //!
-//! Those receivers announce themselves over mDNS as `_spotify-connect._tcp`
-//! and expose a small HTTP interface. `getInfo` describes the device and
-//! offers its Diffie-Hellman public key; `addUser` accepts an account,
-//! encrypted so that only that receiver can read it. Once a receiver accepts
-//! an account it logs in and appears in the ordinary device list, so the rest
-//! of the app needs to know nothing about any of this.
+//! Receivers advertise `_spotify-connect._tcp` over mDNS. `getInfo` returns
+//! device details and a Diffie-Hellman public key; `addUser` sends encrypted
+//! account data. After sign-in, the receiver appears in the normal device list.
 //!
-//! The credential that travels is the reusable blob librespot already stores
-//! for local playback. It is encrypted to the receiver's key and never
-//! written anywhere; nothing here logs it.
+//! The transferred librespot credential is encrypted to the receiver's key,
+//! never written, and never logged.
 
 use std::collections::HashMap;
 use std::time::Duration;

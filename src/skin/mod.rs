@@ -1,14 +1,9 @@
 //! Classic Winamp skins.
 //!
-//! A `.wsz` file is a zip of bitmaps (`main.bmp`, `cbuttons.bmp`, and so on)
-//! cut into sprites at coordinates every skin honours, plus two small text
-//! files. This module reads one into RGBA bitmaps the window can upload as
-//! textures; [`sprites`] says where each piece is inside its bitmap and
-//! [`layout`] where it goes in the window. A skin may leave files out, and
-//! Winamp filled the gaps from its base skin; here the gaps are filled from
-//! Fastpotify's own skin, a `.wsz` like any other that ships inside the
-//! binary. Modern (Winamp 3 and 5, `.wal`) skins are a different format
-//! entirely and are refused.
+//! A `.wsz` file contains bitmap sprite sheets and two small text files. This
+//! module decodes them to RGBA textures. [`sprites`] defines source coordinates;
+//! [`layout`] defines window positions. Missing files fall back to Fastpotify's
+//! built-in classic skin. Modern `.wal` skins are unsupported.
 
 pub mod config;
 pub mod font;

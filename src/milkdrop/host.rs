@@ -1,10 +1,7 @@
 //! The app's side of the MilkDrop child process.
 //!
-//! `Host` spawns the child (this same binary with `--milkdrop-child`),
-//! points the audio tap at a shared-memory ring the child reads, sends it
-//! settings and a close on its stdin, and reads back on its stdout where the
-//! window sits and when it closes. It hides all of that behind open/close and
-//! a per-frame poll, so the app treats MilkDrop like any other window.
+//! `Host` starts this binary with `--milkdrop-child`, connects the audio tap to
+//! shared memory, sends settings over stdin, and reads window state from stdout.
 
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
@@ -28,6 +25,9 @@ struct Reported {
     closed: bool,
     pos: Option<[f32; 2]>,
     size: Option<[f32; 2]>,
+    /// What the window's keys asked of the player, oldest first.
+    commands: Vec<String>,
+    screen_hz: Option<u32>,
 }
 
 /// One line of what the child says on its stdout.
@@ -36,6 +36,8 @@ struct Event {
     closed: Option<bool>,
     pos: Option<[f32; 2]>,
     size: Option<[f32; 2]>,
+    command: Option<String>,
+    screen_hz: Option<u32>,
 }
 
 /// What the app takes from the window each frame.
@@ -44,6 +46,10 @@ pub struct Poll {
     pub closed: bool,
     pub pos: Option<[f32; 2]>,
     pub size: Option<[f32; 2]>,
+    /// What its keys asked of the player since the last look.
+    pub commands: Vec<String>,
+    /// How often the screen it is on refreshes, when it has said.
+    pub screen_hz: Option<u32>,
 }
 
 struct Running {
@@ -105,6 +111,11 @@ impl Host {
         if self.running.is_some() {
             return;
         }
+        // Old builds accidentally saved Retina physical pixels as logical
+        // points. Do not reopen an enormous, unreachable window from that
+        // corrupt geometry.
+        let size = sane_size(size).unwrap_or(super::DEFAULT_SIZE);
+        let pos = pos.filter(|pos| sane_position(*pos));
         let ring = match Ring::create(&self.shm_path) {
             Ok(ring) => Arc::new(ring),
             Err(error) => {
@@ -318,22 +329,32 @@ impl Host {
                 closed: false,
                 pos: None,
                 size: None,
+                commands: Vec::new(),
+                screen_hz: None,
             };
         };
         // The child exiting is a close, even if it said nothing.
         let exited = matches!(running.process.try_wait(), Ok(Some(_)));
-        let (closed, pos, size) = {
+        let (closed, pos, size, commands, screen_hz) = {
             let mut reported = running.reported.lock().unwrap_or_else(|p| p.into_inner());
             (
                 reported.closed || exited,
                 reported.pos.take(),
                 reported.size.take(),
+                std::mem::take(&mut reported.commands),
+                reported.screen_hz.take(),
             )
         };
         if closed {
             self.stop();
         }
-        Poll { closed, pos, size }
+        Poll {
+            closed,
+            pos,
+            size,
+            commands,
+            screen_hz,
+        }
     }
 
     /// Closes the window and reaps the child.
@@ -394,6 +415,16 @@ fn spawn_reader(stdout: std::process::ChildStdout, reported: Arc<Mutex<Reported>
                 if event.size.is_some() {
                     reported.size = event.size;
                 }
+                if event.screen_hz.is_some() {
+                    reported.screen_hz = event.screen_hz;
+                }
+                if let Some(command) = event.command {
+                    // A key held down cannot pile up more than a moment's
+                    // worth before the app takes them.
+                    if reported.commands.len() < 64 {
+                        reported.commands.push(command);
+                    }
+                }
             }
             // Stdout closed: the child is gone.
             reported.lock().unwrap_or_else(|p| p.into_inner()).closed = true;
@@ -403,4 +434,29 @@ fn spawn_reader(stdout: std::process::ChildStdout, reported: Arc<Mutex<Reported>
 
 fn pid() -> u32 {
     std::process::id()
+}
+
+fn sane_size([width, height]: [f32; 2]) -> Option<[f32; 2]> {
+    (width.is_finite()
+        && height.is_finite()
+        && (super::MIN_SIZE[0]..=8192.0).contains(&width)
+        && (super::MIN_SIZE[1]..=8192.0).contains(&height))
+    .then_some([width, height])
+}
+
+fn sane_position([x, y]: [f32; 2]) -> bool {
+    x.is_finite() && y.is_finite() && x.abs() <= 100_000.0 && y.abs() <= 100_000.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn corrupt_saved_window_geometry_is_rejected() {
+        assert_eq!(sane_size([640.0, 480.0]), Some([640.0, 480.0]));
+        assert_eq!(sane_size([2_621_440.0, 1_966_080.0]), None);
+        assert!(sane_position([-1920.0, 40.0]));
+        assert!(!sane_position([553_984.0, 1_042_432.0]));
+    }
 }

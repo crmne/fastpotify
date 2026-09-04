@@ -1,13 +1,9 @@
 //! The equalizer window, between the main window and the playlist.
 //!
-//! Winamp's graphic equalizer: a preamp and ten bands on sliders cut from
-//! `eqmain.bmp`, the ON switch, a PRESETS button, and the little graph of
-//! the curve. AUTO loaded a preset per song from a file Fastpotify has no
-//! equivalent of, so it stays painted and off. The sound itself is shaped
-//! in `eq`, on the player's thread; this only moves the numbers.
+//! Draws Winamp's preamp, ten bands, power switch, presets, and response graph
+//! from `eqmain.bmp`. Audio processing runs in `eq` on the player thread.
 //!
-//! Its shade button rolls it up to a bar that keeps the volume and balance
-//! on it as tiny sliders, the way Winamp 2.9 drew it from `eq_ex.bmp`.
+//! Shade mode uses the compact volume and balance controls from `eq_ex.bmp`.
 
 use egui::Sense;
 
@@ -125,9 +121,7 @@ pub(super) fn show(app: &mut App, view: &mut View, now: Option<&NowPlaying>, foc
     }
 }
 
-/// The equalizer rolled up: its bar, with the volume and balance riding
-/// along it. Each slider is only its thumb, which takes one of three looks
-/// as it goes, as the skin's frames say.
+/// Compact equalizer bar with volume and balance controls.
 fn shade(app: &mut App, view: &mut View, now: Option<&NowPlaying>, focused: bool) {
     let bar = if focused {
         sprites::EQ_SHADE_BAR_ACTIVE

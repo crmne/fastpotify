@@ -41,6 +41,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     if !signed_in {
         login::show(app, ui, connecting);
         toasts(app, ctx, 20.0);
+        window_controls(ui, &app.palette);
+        window_resize(ui);
         return;
     }
     player_bar::show(app, ui);
@@ -58,6 +60,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     dialogs::show(app, ctx);
     widgets::drag_ghost(ctx, &app.palette);
     toasts(app, ctx, theme::PLAYER_BAR_HEIGHT + 16.0);
+    window_controls(ui, &app.palette);
+    window_resize(ui);
 }
 
 fn page_tint(app: &mut App) -> Option<Color32> {
@@ -155,11 +159,13 @@ fn central(app: &mut App, ui: &mut egui::Ui) {
         });
 }
 
-/// Makes `rect` behave like the titlebar that is no longer there: dragging it
-/// moves the window. Register it before the widgets that sit on top of it, so
-/// they keep the clicks that are theirs.
+/// Makes `rect` drag the borderless window. Register it before child widgets so
+/// they keep their clicks.
 pub fn titlebar_drag(ui: &mut egui::Ui, rect: egui::Rect) {
-    if theme::titlebar_inset(ui.ctx()) == 0.0 {
+    let fullscreen = ui
+        .ctx()
+        .input(|input| input.viewport().fullscreen.unwrap_or(false));
+    if !cfg!(any(target_os = "macos", windows)) || fullscreen {
         return;
     }
     let response = ui.interact(
@@ -167,14 +173,188 @@ pub fn titlebar_drag(ui: &mut egui::Ui, rect: egui::Rect) {
         ui.id().with("titlebar-drag"),
         egui::Sense::click_and_drag(),
     );
-    // AppKit begins the move from the mouse-down event that is still live, so
-    // the command has to go out on the press itself. Waiting for egui's drag
-    // threshold leaves the event stale by the time it arrives, and the window
-    // stays put ("Window move completed without beginning"). There is no
-    // double-click-to-zoom to go with it: the press hands the rest of the
-    // gesture to the native drag loop, so a second click never comes back.
-    if response.is_pointer_button_down_on() && ui.input(|input| input.pointer.primary_pressed()) {
+    if cfg!(windows) && response.double_clicked() {
+        let maximized = ui
+            .ctx()
+            .input(|input| input.viewport().maximized.unwrap_or(false));
+        ui.ctx()
+            .send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+    } else if cfg!(windows) && response.drag_started() {
         ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+    } else if cfg!(target_os = "macos")
+        && response.is_pointer_button_down_on()
+        && ui.input(|input| input.pointer.primary_pressed())
+    {
+        // macOS needs the live mouse-down event rather than egui's drag threshold.
+        ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+    }
+}
+
+const WINDOW_RESIZE_BORDER: f32 = 5.0;
+const WINDOW_RESIZE_CORNER: f32 = 10.0;
+const WINDOWS_WINDOW_CONTROLS_WIDTH: f32 = 3.0 * 36.0 + WINDOW_RESIZE_BORDER;
+const WINDOWS_WINDOW_CONTROLS_HEIGHT: f32 = 36.0 + WINDOW_RESIZE_BORDER;
+// The 760-point minimum with the default 250-point sidebar leaves 510 points.
+const WINDOWS_MIN_INLINE_TOPBAR_WIDTH: f32 = 510.0 + WINDOWS_WINDOW_CONTROLS_WIDTH;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct WindowControlsReservation {
+    pub topbar_width: f32,
+    pub topbar_top: f32,
+    pub queue_top: f32,
+    pub lyrics_top: f32,
+}
+
+const fn windows_chrome_visible(on_windows: bool, fullscreen: bool) -> bool {
+    on_windows && !fullscreen
+}
+
+fn windows_chrome_visible_here(ctx: &egui::Context) -> bool {
+    let fullscreen = ctx.input(|input| input.viewport().fullscreen.unwrap_or(false));
+    windows_chrome_visible(cfg!(windows), fullscreen)
+}
+
+const fn windows_controls_reservation(
+    on_windows: bool,
+    fullscreen: bool,
+    queue: bool,
+    lyrics: bool,
+    topbar_width: f32,
+) -> WindowControlsReservation {
+    let mut space = WindowControlsReservation {
+        topbar_width: 0.0,
+        topbar_top: 0.0,
+        queue_top: 0.0,
+        lyrics_top: 0.0,
+    };
+    if windows_chrome_visible(on_windows, fullscreen) {
+        if queue {
+            space.queue_top = WINDOWS_WINDOW_CONTROLS_HEIGHT;
+        } else if lyrics {
+            space.lyrics_top = WINDOWS_WINDOW_CONTROLS_HEIGHT;
+        } else if topbar_width < WINDOWS_MIN_INLINE_TOPBAR_WIDTH {
+            space.topbar_top = WINDOWS_WINDOW_CONTROLS_HEIGHT;
+        } else {
+            space.topbar_width = WINDOWS_WINDOW_CONTROLS_WIDTH;
+        }
+    }
+    space
+}
+
+pub(super) fn window_controls_reservation(
+    ctx: &egui::Context,
+    queue: bool,
+    lyrics: bool,
+    topbar_width: f32,
+) -> WindowControlsReservation {
+    let fullscreen = ctx.input(|input| input.viewport().fullscreen.unwrap_or(false));
+    windows_controls_reservation(cfg!(windows), fullscreen, queue, lyrics, topbar_width)
+}
+
+/// Draws the Windows caption controls over the outermost top-right header.
+pub fn window_controls(ui: &mut egui::Ui, palette: &theme::Palette) {
+    if !windows_chrome_visible_here(ui.ctx()) {
+        return;
+    }
+    let maximized = ui
+        .ctx()
+        .input(|input| input.viewport().maximized.unwrap_or(false));
+    egui::Area::new(egui::Id::new("windows-window-controls"))
+        .anchor(
+            Align2::RIGHT_TOP,
+            vec2(-WINDOW_RESIZE_BORDER, WINDOW_RESIZE_BORDER),
+        )
+        .order(egui::Order::Foreground)
+        .show(ui.ctx(), |ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            ui.horizontal(|ui| {
+                for (icon, tooltip, command) in [
+                    (
+                        Icon::Minus,
+                        "Minimize",
+                        egui::ViewportCommand::Minimized(true),
+                    ),
+                    (
+                        if maximized { Icon::Copy } else { Icon::Square },
+                        if maximized { "Restore" } else { "Maximize" },
+                        egui::ViewportCommand::Maximized(!maximized),
+                    ),
+                    (Icon::X, "Close", egui::ViewportCommand::Close),
+                ] {
+                    let image = icon.image(palette.secondary, 14.0).alt_text(tooltip);
+                    let button = egui::Button::image(image).frame_when_inactive(false);
+                    if ui
+                        .add_sized(egui::Vec2::splat(36.0), button)
+                        .on_hover_text(tooltip)
+                        .clicked()
+                    {
+                        ui.ctx().send_viewport_cmd(command);
+                    }
+                }
+            });
+        });
+}
+
+fn window_resize(ui: &mut egui::Ui) {
+    let (fullscreen, maximized) = ui.ctx().input(|input| {
+        (
+            input.viewport().fullscreen.unwrap_or(false),
+            input.viewport().maximized.unwrap_or(false),
+        )
+    });
+    if !window_resize_enabled(cfg!(windows), fullscreen, maximized) {
+        return;
+    }
+
+    let Some(position) = ui.input(|input| input.pointer.hover_pos()) else {
+        return;
+    };
+    let Some(direction) = resize_direction(ui.ctx().content_rect(), position) else {
+        return;
+    };
+    ui.ctx().set_cursor_icon(direction.1);
+    if ui.input(|input| input.pointer.primary_pressed()) {
+        ui.ctx()
+            .send_viewport_cmd(egui::ViewportCommand::BeginResize(direction.0));
+    }
+}
+
+const fn window_resize_enabled(on_windows: bool, fullscreen: bool, maximized: bool) -> bool {
+    on_windows && !fullscreen && !maximized
+}
+
+fn resize_direction(
+    window: Rect,
+    position: egui::Pos2,
+) -> Option<(egui::ResizeDirection, egui::CursorIcon)> {
+    if !window.contains(position) {
+        return None;
+    }
+    let [left, right, top, bottom] = [
+        position.x - window.left(),
+        window.right() - position.x,
+        position.y - window.top(),
+        window.bottom() - position.y,
+    ];
+    let mut x = i8::from(right <= WINDOW_RESIZE_BORDER) - i8::from(left <= WINDOW_RESIZE_BORDER);
+    let mut y = i8::from(bottom <= WINDOW_RESIZE_BORDER) - i8::from(top <= WINDOW_RESIZE_BORDER);
+    if y != 0 {
+        x = i8::from(right <= WINDOW_RESIZE_CORNER) - i8::from(left <= WINDOW_RESIZE_CORNER);
+    }
+    if x != 0 {
+        y = i8::from(bottom <= WINDOW_RESIZE_CORNER) - i8::from(top <= WINDOW_RESIZE_CORNER);
+    }
+    use egui::{CursorIcon as C, ResizeDirection as D};
+    match (x, y) {
+        (-1, -1) => Some((D::NorthWest, C::ResizeNwSe)),
+        (1, -1) => Some((D::NorthEast, C::ResizeNeSw)),
+        (-1, 1) => Some((D::SouthWest, C::ResizeNeSw)),
+        (1, 1) => Some((D::SouthEast, C::ResizeNwSe)),
+        (-1, 0) => Some((D::West, C::ResizeHorizontal)),
+        (1, 0) => Some((D::East, C::ResizeHorizontal)),
+        (0, -1) => Some((D::North, C::ResizeVertical)),
+        (0, 1) => Some((D::South, C::ResizeVertical)),
+        _ => None,
     }
 }
 
@@ -241,4 +421,99 @@ fn toasts(app: &mut App, ctx: &egui::Context, bottom_offset: f32) {
                     });
             }
         });
+}
+
+#[cfg(test)]
+mod window_chrome_tests {
+    use super::*;
+
+    #[test]
+    fn chrome_visibility_matches_window_state() {
+        assert!(windows_chrome_visible(true, false));
+        assert!(!windows_chrome_visible(true, true));
+        assert!(!windows_chrome_visible(false, false));
+        assert!(window_resize_enabled(true, false, false));
+        assert!(!window_resize_enabled(true, false, true));
+        assert!(!window_resize_enabled(true, true, false));
+        assert!(!window_resize_enabled(false, false, false));
+    }
+
+    #[test]
+    fn caption_space_belongs_to_the_outermost_header() {
+        let values = |queue, lyrics| {
+            let space = windows_controls_reservation(true, false, queue, lyrics, f32::INFINITY);
+            [
+                space.topbar_width,
+                space.topbar_top,
+                space.queue_top,
+                space.lyrics_top,
+            ]
+        };
+        assert_eq!(
+            values(false, false),
+            [WINDOWS_WINDOW_CONTROLS_WIDTH, 0.0, 0.0, 0.0]
+        );
+        assert_eq!(
+            values(true, false),
+            [0.0, 0.0, WINDOWS_WINDOW_CONTROLS_HEIGHT, 0.0]
+        );
+        assert_eq!(
+            values(false, true),
+            [0.0, 0.0, 0.0, WINDOWS_WINDOW_CONTROLS_HEIGHT]
+        );
+        assert_eq!(
+            values(true, true),
+            [0.0, 0.0, WINDOWS_WINDOW_CONTROLS_HEIGHT, 0.0]
+        );
+        assert_eq!(
+            windows_controls_reservation(true, true, true, true, f32::INFINITY),
+            WindowControlsReservation {
+                topbar_width: 0.0,
+                topbar_top: 0.0,
+                queue_top: 0.0,
+                lyrics_top: 0.0,
+            }
+        );
+    }
+
+    #[test]
+    fn minimum_windows_window_stacks_caption_space_above_the_topbar() {
+        let available = 760.0 - 250.0;
+        let space = windows_controls_reservation(true, false, false, false, available);
+        assert_eq!(space.topbar_width, 0.0);
+        assert_eq!(space.topbar_top, WINDOWS_WINDOW_CONTROLS_HEIGHT);
+
+        let inline = windows_controls_reservation(
+            true,
+            false,
+            false,
+            false,
+            WINDOWS_MIN_INLINE_TOPBAR_WIDTH,
+        );
+        assert_eq!(inline.topbar_width, WINDOWS_WINDOW_CONTROLS_WIDTH);
+        assert_eq!(inline.topbar_top, 0.0);
+    }
+
+    #[test]
+    fn resize_hit_test_covers_edges_and_corners() {
+        use egui::ResizeDirection as D;
+
+        let window = Rect::from_min_max(egui::pos2(20.0, 30.0), egui::pos2(120.0, 110.0));
+        for (position, expected) in [
+            (egui::pos2(21.0, 31.0), Some(D::NorthWest)),
+            (egui::pos2(70.0, 31.0), Some(D::North)),
+            (egui::pos2(119.0, 31.0), Some(D::NorthEast)),
+            (egui::pos2(21.0, 70.0), Some(D::West)),
+            (egui::pos2(70.0, 70.0), None),
+            (egui::pos2(119.0, 70.0), Some(D::East)),
+            (egui::pos2(21.0, 109.0), Some(D::SouthWest)),
+            (egui::pos2(70.0, 109.0), Some(D::South)),
+            (egui::pos2(119.0, 109.0), Some(D::SouthEast)),
+        ] {
+            assert_eq!(
+                resize_direction(window, position).map(|hit| hit.0),
+                expected
+            );
+        }
+    }
 }

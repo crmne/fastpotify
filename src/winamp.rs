@@ -1,11 +1,8 @@
-//! The Winamp window's state: the skin it wears, where it sits, and what
-//! its display is up to. The drawing is in `ui::winamp`.
+//! Winamp window, skin, and display state. Drawing lives in `ui::winamp`.
 //!
-//! Skins live in a folder of the config directory and are read on a thread
-//! of their own, since a museum skin is a megabyte of bitmaps to inflate
-//! and decode; the built-in skin is ready without reading anything. The
-//! settings name the skin to wear and `App::tick` keeps the window in step
-//! with them, so choosing a skin is a matter of writing the setting.
+//! Skins are loaded from the config directory on a worker thread. The built-in
+//! skin is immediately available. `App::tick` keeps the loaded skin in sync
+//! with settings.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -72,7 +69,7 @@ pub struct Loaded {
 pub struct WinampState {
     /// The skin on screen.
     pub skin: Arc<Skin>,
-    /// The setting the worn skin answers to; `None` is the built-in.
+    /// Active skin setting. `None` means the built-in skin.
     pub worn: Option<String>,
     /// The skin's sheets on the graphics card, made on demand and dropped
     /// with the window, since textures belong to a window's context.
@@ -110,9 +107,7 @@ pub struct WinampState {
     pub playlist_resize: f32,
     /// The playlist's rows as Winamp drew them, kept once drawn.
     pub playlist_text: crate::ui::winamp::PixelText,
-    /// MilkDrop's presets, for Settings to list and fetch. MilkDrop itself is
-    /// a window in a child process; this rides along here with the rest of
-    /// the visualiser's state.
+    /// MilkDrop presets listed and downloaded from Settings.
     pub presets: crate::milkdrop::Presets,
 }
 

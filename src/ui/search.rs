@@ -340,6 +340,8 @@ fn songs(app: &mut App, ui: &mut egui::Ui, results: &SearchResults, limit: usize
                 compact: limit != usize::MAX,
                 thin: false,
                 shift: 0.0,
+                picked: false,
+                picked_songs: &[],
             },
         );
     }

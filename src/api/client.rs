@@ -1,10 +1,10 @@
 //! An authenticated, rate-limited transport for the Spotify Web API.
 //!
-//! The client is deliberately small: a handful of typed calls over one
-//! `request` helper that injects the bearer token, bounds concurrency,
-//! honours `Retry-After`, and maps error bodies to messages a person can
-//! read. The gateway supplies capability differences before dispatch.
+//! Typed calls share one `request` helper that adds the bearer token, limits
+//! concurrency, honors `Retry-After`, and formats API errors. The gateway
+//! handles capability differences before dispatch.
 
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -335,6 +335,11 @@ impl ApiClient {
         };
         let provider = self.provider()?;
         let started = Instant::now();
+        // This is one logical request even when it waits for another request
+        // or for a Retry-After cooldown. Keep the interface's activity signal
+        // alive for that whole wait, not only while bytes are on the wire.
+        self.activity.begin();
+        let _activity = ActivityGuard(&self.activity);
 
         let mut attempt = 0;
         loop {
@@ -345,8 +350,6 @@ impl ApiClient {
                 .acquire()
                 .await
                 .map_err(|_| ApiError::NotSignedIn)?;
-            self.activity.begin();
-            let activity = ActivityGuard(&self.activity);
             let token = provider.access_token().await?;
             let mut request = self
                 .http
@@ -362,7 +365,6 @@ impl ApiClient {
             let status = response.status();
 
             if status == StatusCode::UNAUTHORIZED && attempt == 1 {
-                drop(activity);
                 drop(permit);
                 provider.invalidate().await;
                 continue;
@@ -385,13 +387,11 @@ impl ApiClient {
                     self.source,
                     wait.as_millis()
                 );
-                drop(activity);
                 drop(permit);
                 self.extend_cooldown(wait).await;
                 continue;
             }
             if status.is_server_error() && method == Method::GET && attempt == 1 {
-                drop(activity);
                 drop(permit);
                 tokio::time::sleep(Duration::from_millis(800)).await;
                 continue;
@@ -502,12 +502,20 @@ impl ApiClient {
         self.get("/me/player/queue", &[]).await
     }
 
-    pub async fn recently_played(&self, limit: u32) -> Result<CursorPage<PlayHistory>> {
-        self.get(
-            "/me/player/recently-played",
-            &[("limit", limit.to_string())],
-        )
-        .await
+    pub async fn recently_played(
+        &self,
+        limit: u32,
+        after: Option<&str>,
+        before: Option<&str>,
+    ) -> Result<CursorPage<PlayHistory>> {
+        let mut query = vec![("limit", limit.to_string())];
+        if let Some(after) = after {
+            query.push(("after", after.to_string()));
+        }
+        if let Some(before) = before {
+            query.push(("before", before.to_string()));
+        }
+        self.get("/me/player/recently-played", &query).await
     }
 
     fn device_query(device_id: Option<&str>) -> Vec<(&'static str, String)> {
@@ -638,6 +646,44 @@ impl ApiClient {
             ],
         )
         .await
+    }
+
+    /// Requested songs already present in a playlist.
+    ///
+    /// Spotify has no membership endpoint for playlists, so walk its pages
+    /// until every requested URI has been found or the playlist ends.
+    pub async fn playlist_duplicates(&self, id: &str, uris: &[String]) -> Result<Vec<String>> {
+        let wanted: HashSet<&str> = uris.iter().map(String::as_str).collect();
+        if wanted.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut found = HashSet::new();
+        let mut offset = 0;
+        loop {
+            let page = self.playlist_items(id, offset, 50).await?;
+            for uri in page
+                .items
+                .iter()
+                .filter_map(PlaylistItem::playable)
+                .map(PlayableItem::uri)
+            {
+                if wanted.contains(uri) {
+                    found.insert(uri.to_string());
+                }
+            }
+            if found.len() == wanted.len() {
+                break;
+            }
+            let Some(next) = page.next_offset() else {
+                break;
+            };
+            offset = next;
+        }
+        Ok(uris
+            .iter()
+            .filter(|uri| found.contains(uri.as_str()))
+            .cloned()
+            .collect())
     }
 
     pub async fn create_playlist(
@@ -950,6 +996,10 @@ impl ApiClient {
 
     pub async fn track(&self, id: &str) -> Result<Track> {
         self.get(&format!("/tracks/{id}"), &[]).await
+    }
+
+    pub async fn episode(&self, id: &str) -> Result<Episode> {
+        self.get(&format!("/episodes/{id}"), &[]).await
     }
 
     pub async fn recommendations(
