@@ -40,7 +40,7 @@ struct Cli {
 
     /// Extra demo surfaces: a comma-separated list of `queue`, `playing-next`,
     /// `devices`, `shortcuts`, `create`, `light`, `focus`, `update`, `personal-app`,
-    /// `windows-taskbar`, `german`.
+    /// `windows-taskbar`, `german`, `lyrics`, `lyrics-fullscreen`.
     #[cfg(feature = "demo")]
     #[arg(long)]
     demo_show: Option<String>,

@@ -71,6 +71,8 @@ everyday use, and connection details.
 - **Queue** as a side panel or a page; it names what is playing from, and
   anything can be added to it from a row menu. **Add to queue** places songs
   after those already queued and before the context continues.
+- **Lyrics.** Follow synced lyrics in a side panel or full-screen view, or read
+  unsynced lyrics when timestamps are unavailable.
 - **Resumes the last session.** On startup, the last song is paused where it
   stopped. Play resumes it, and the other playback controls work before it
   starts.
