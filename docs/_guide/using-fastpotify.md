@@ -40,6 +40,19 @@ Paused time and seeking do not count.
 The local list is stored in `history.json` and is never uploaded. Settings →
 Storage shows its location and has a **Clear history** button.
 
+## Lyrics
+
+Choose the microphone button in the player bar, or press **L**, to open lyrics.
+Synced lyrics follow the playing line automatically. Scroll to pause following,
+choose **Follow** to resume it, or choose a line to seek there. The expand
+button opens the full-screen view; press **Esc** or choose the shrink button to
+return to the previous window mode. The waveform button reduces or restores
+scroll and highlight motion.
+
+| Dark theme | Light theme |
+| --- | --- |
+| ![Full-screen lyrics with the dark player bar](/assets/images/lyrics-fullscreen-dark.png) | ![Full-screen lyrics with the light player bar](/assets/images/lyrics-fullscreen-light.png) |
+
 On Windows, the main window's minimize, maximize, and close buttons share the
 top bar with Fastpotify's controls. Drag an empty part of that bar to move or
 snap the window, and drag a window edge or corner to resize it.

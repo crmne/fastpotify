@@ -150,6 +150,16 @@ pub fn install(ctx: &egui::Context) {
 /// fields agree with the custom views.
 pub fn apply(ctx: &egui::Context, palette: &Palette) {
     let mut style = (*ctx.global_style()).clone();
+    apply_to_style(&mut style, palette);
+    ctx.set_global_style(style);
+}
+
+/// Applies a palette to this view and children without changing global style.
+pub fn apply_local(ui: &mut egui::Ui, palette: &Palette) {
+    apply_to_style(ui.style_mut(), palette);
+}
+
+fn apply_to_style(style: &mut egui::Style, palette: &Palette) {
     let visuals = &mut style.visuals;
     *visuals = if palette.dark {
         egui::Visuals::dark()
@@ -245,7 +255,6 @@ pub fn apply(ctx: &egui::Context, palette: &Palette) {
     style.interaction.tooltip_delay = 0.4;
     style.animation_time = 0.12;
     style.url_in_tooltip = false;
-    ctx.set_global_style(style);
 }
 
 fn install_fonts(ctx: &egui::Context) {
@@ -357,6 +366,7 @@ pub enum Icon {
     Copy,
     Disc,
     Ellipsis,
+    Expand,
     ExternalLink,
     Gamepad,
     Globe,
@@ -446,6 +456,7 @@ const ICONS: &[(Icon, &str, &[u8])] = icons! {
     Copy => "copy",
     Disc => "disc-3",
     Ellipsis => "ellipsis",
+    Expand => "expand",
     ExternalLink => "external-link",
     Gamepad => "gamepad-2",
     Globe => "globe",
@@ -880,6 +891,29 @@ pub fn subtle(ui: &mut egui::Ui, palette: &Palette, label: &str) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_local_palette_keeps_fastpotifys_widget_style_local() {
+        let ctx = egui::Context::default();
+        apply(&ctx, &Palette::light());
+        let dark = Palette::dark();
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            apply_local(ui, &dark);
+            let style = ui.style();
+            assert!(style.visuals.dark_mode);
+            assert_eq!(
+                style.visuals.widgets.inactive.corner_radius,
+                CornerRadius::same(RADIUS_SMALL + 2)
+            );
+            assert_eq!(
+                style.visuals.selection.stroke,
+                Stroke::new(1.0, dark.accent)
+            );
+            assert_eq!(style.spacing.button_padding, Vec2::new(12.0, 6.0));
+        });
+        output.textures_delta.clear();
+        assert!(!ctx.global_style().visuals.dark_mode);
+    }
 
     #[test]
     fn fonts_install_and_layout_emojis() {

@@ -312,9 +312,116 @@ pub fn accent_color(bytes: &[u8]) -> Option<[u8; 3]> {
     ])
 }
 
+#[derive(Default)]
+pub struct LyricsBackdrop {
+    uri: Option<String>,
+    requested: bool,
+    pending: Option<std::sync::mpsc::Receiver<Option<egui::ColorImage>>>,
+    texture: Option<egui::TextureHandle>,
+}
+
+impl LyricsBackdrop {
+    pub fn texture(
+        &mut self,
+        ctx: &egui::Context,
+        loader: &ArtLoader,
+        uri: Option<&str>,
+    ) -> Option<&egui::TextureHandle> {
+        if self.uri.as_deref() != uri {
+            *self = Self {
+                uri: uri.map(str::to_owned),
+                ..Default::default()
+            };
+        }
+        let uri = uri?;
+        if !self.requested {
+            match ctx.try_load_bytes(uri) {
+                Ok(BytesPoll::Ready { bytes, .. }) => {
+                    self.requested = true;
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    self.pending = Some(rx);
+                    let ctx = ctx.clone();
+                    loader.inner.runtime.spawn_blocking(move || {
+                        let _ = tx.send(lyrics_background(&bytes));
+                        ctx.request_repaint();
+                    });
+                }
+                Err(error) => self.requested = terminal_lyrics_backdrop_error(&error),
+                Ok(BytesPoll::Pending { .. }) => {}
+            }
+        }
+        if let Some(receiver) = &self.pending {
+            match receiver.try_recv() {
+                Ok(image) => {
+                    self.texture = image.map(|image| {
+                        ctx.load_texture("lyrics-backdrop", image, egui::TextureOptions::LINEAR)
+                    });
+                    self.pending = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.pending = None,
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
+        }
+        self.texture.as_ref()
+    }
+}
+
+fn terminal_lyrics_backdrop_error(error: &LoadError) -> bool {
+    matches!(error, LoadError::NotSupported)
+}
+
+fn lyrics_background(bytes: &[u8]) -> Option<egui::ColorImage> {
+    let image = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?
+        .decode()
+        .ok()?;
+    let image = image.thumbnail(256, 256).blur(9.0).to_rgba8();
+    Some(egui::ColorImage::from_rgba_unmultiplied(
+        [image.width() as usize, image.height() as usize],
+        image.as_raw(),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transient_backdrop_load_errors_remain_retryable() {
+        assert!(!terminal_lyrics_backdrop_error(&LoadError::Loading(
+            "temporary network failure".into()
+        )));
+        assert!(!terminal_lyrics_backdrop_error(
+            &LoadError::NoMatchingBytesLoader
+        ));
+        assert!(terminal_lyrics_backdrop_error(&LoadError::NotSupported));
+    }
+
+    #[test]
+    fn lyrics_background_blurs_edges_and_bounds_texture_size() {
+        let image = image::RgbImage::from_fn(640, 320, |x, _| {
+            if x < 320 {
+                image::Rgb([255, 0, 0])
+            } else {
+                image::Rgb([0, 0, 255])
+            }
+        });
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        image.write_to(&mut bytes, image::ImageFormat::Png).unwrap();
+        let background = lyrics_background(bytes.get_ref()).expect("valid artwork");
+        assert_eq!(background.size, [256, 128]);
+        let center = background.pixels[64 * 256 + 128];
+        assert!(
+            center.r() > 40 && center.b() > 40,
+            "the edge must be blurred: {center:?}"
+        );
+        assert!(
+            background.pixels[0].r() > 240,
+            "the cover's colors remain recognizable"
+        );
+        assert!(lyrics_background(b"broken artwork").is_none());
+    }
 
     /// The media controls ask for a file rather than a URL, and have to be
     /// told "not yet" rather than handed a path to nothing: macOS loads cover

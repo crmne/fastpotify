@@ -729,6 +729,11 @@ pub enum Action {
     ToggleSidebar,
     ToggleQueuePanel,
     ToggleLyricsPanel,
+    SetLyricsFullscreen(bool),
+    FollowLyrics,
+    PauseLyricsFollow,
+    RetryLyrics,
+    ToggleLyricsMotion,
     ToggleDevicesPopup,
     /// Ask GitHub for the latest release and report the result to the user.
     CheckForUpdates,

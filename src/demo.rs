@@ -711,11 +711,14 @@ pub fn apply_flags(app: &mut App, page: Option<&str>, show: Option<&str>) {
                     },
                 );
             }
-            "lyrics" => {
+            "lyrics" | "lyrics-fullscreen" => {
                 app.lyrics_uri = app.now_playing().map(|now| now.uri);
                 app.lyrics = Loadable::Loaded(Some(sample_lyrics()));
                 app.lyrics_following = true;
                 app.show_lyrics_panel = true;
+                if surface == "lyrics-fullscreen" {
+                    app.actions.push(Action::SetLyricsFullscreen(true));
+                }
             }
             // Titles in scripts the interface font does not cover.
             "scripts" => {
@@ -1665,6 +1668,73 @@ mod tests {
         app.backend.shutdown();
     }
 
+    #[test]
+    fn lyrics_highlight_preserves_line_layout() {
+        let root =
+            std::env::temp_dir().join(format!("fastpotify-lyrics-layout-{}", std::process::id()));
+        let ctx = egui::Context::default();
+        let waker = crate::backend::Waker::default();
+        waker.attach(&ctx);
+        let mut app = App::new(
+            &waker,
+            AppDirs {
+                config: root.join("config"),
+                state: root.join("state"),
+                cache: root.join("cache"),
+            },
+            Settings::default(),
+            AppOptions {
+                media_controls: false,
+                tray: false,
+            },
+        );
+        app.attach(&ctx);
+        populate(&mut app);
+        app.show_lyrics_panel = true;
+        app.lyrics = Loadable::Loaded(Some(sample_lyrics()));
+        app.lyrics_following = false;
+        let mut sizes = Vec::new();
+        for (step, position) in [0, 41_000].into_iter().enumerate() {
+            let remote = app.remote.as_mut().unwrap();
+            remote.state.is_playing = false;
+            remote.state.progress_ms = Some(position);
+            for frame in 0..30 {
+                let input = egui::RawInput {
+                    time: Some(step as f64 + f64::from(frame) / 30.0),
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1280.0, 800.0),
+                    )),
+                    ..Default::default()
+                };
+                let mut output = ctx.run_ui(input, |ui| app.frame_ui(ui));
+                output.textures_delta.clear();
+                if frame == 29 {
+                    let line = output
+                        .shapes
+                        .iter()
+                        .find_map(|shape| {
+                            if let egui::Shape::Text(text) = &shape.shape
+                                && text.galley.job.text
+                                    == "Streetlights blinking down the river road"
+                            {
+                                Some(text.galley.size())
+                            } else {
+                                None
+                            }
+                        })
+                        .expect("the lyric line is rendered");
+                    sizes.push(line);
+                }
+            }
+        }
+        app.backend.shutdown();
+        assert_eq!(
+            sizes[0], sizes[1],
+            "highlighting must not rewrap or resize a line"
+        );
+    }
+
     /// Every page, panel, and dialog lays out without panicking.
     #[test]
     fn every_surface_renders_headless() {
@@ -1728,6 +1798,14 @@ mod tests {
         }
         frame(&ctx, &mut app);
         app.manual_queue.clear();
+        app.lyrics_uri = app.now_playing().map(|now| now.uri);
+        app.lyrics = Loadable::Loaded(Some(sample_lyrics()));
+        app.show_lyrics_panel = true;
+        frame(&ctx, &mut app);
+        app.lyrics_fullscreen = Some(false);
+        frame(&ctx, &mut app);
+        app.lyrics_fullscreen = None;
+        app.show_lyrics_panel = false;
         for dialog in [
             Dialog::Shortcuts,
             Dialog::CreatePlaylist {
@@ -1763,6 +1841,8 @@ mod tests {
             frame(&ctx, &mut app);
         }
         assert!(!app.palette.dark);
+        app.lyrics_fullscreen = Some(false);
+        frame(&ctx, &mut app);
         app.backend.shutdown();
         let _ = std::fs::remove_dir_all(root);
     }
