@@ -241,9 +241,7 @@ fn contents(app: &mut App, ui: &mut egui::Ui, compact: bool) {
 }
 
 fn queue_is_empty(app: &App) -> bool {
-    app.queue
-        .get()
-        .is_none_or(|queue| queue.queue.is_empty())
+    app.queue.get().is_none_or(|queue| queue.queue.is_empty())
 }
 
 fn recents_contents(app: &mut App, ui: &mut egui::Ui) {

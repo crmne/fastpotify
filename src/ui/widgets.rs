@@ -159,8 +159,9 @@ pub fn virtual_wrapped_cards(
     }
     let spacing = CARD_GAP / 2.0;
     let row_width = ui.available_width().max(CARD_WIDTH);
-    let cards_per_row =
-        ((row_width + spacing) / (CARD_WIDTH + spacing)).floor().max(1.0) as usize;
+    let cards_per_row = ((row_width + spacing) / (CARD_WIDTH + spacing))
+        .floor()
+        .max(1.0) as usize;
     let row_count = count.div_ceil(cards_per_row);
     virtual_rows(ui, row_count, card_height + CARD_GAP, |ui, row| {
         ui.horizontal_wrapped(|ui| {

@@ -38,8 +38,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, page: Page) {
                 let album = app.library.albums.items[index].album.clone();
                 let id = album.id.clone();
                 let uri = album.uri.clone();
-                let subtitle =
-                    join_names(album.artists.iter().map(|artist| artist.name.as_str()));
+                let subtitle = join_names(album.artists.iter().map(|artist| artist.name.as_str()));
                 let card = widgets::card(
                     ui,
                     app,
