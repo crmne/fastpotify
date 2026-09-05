@@ -5207,7 +5207,7 @@ impl App {
         }
     }
 
-    fn apply(&mut self, action: Action, ctx: &egui::Context) {
+    pub(crate) fn apply(&mut self, action: Action, ctx: &egui::Context) {
         match action {
             Action::Open(page) => self.open(page),
             Action::OpenUri(uri) => {
@@ -5304,7 +5304,7 @@ impl App {
                     self.note_recent_context(&context_uri);
                     self.assumed_context = Some(AssumedContext {
                         uri: context_uri,
-                        shuffle: None,
+                        shuffle: self.shuffle_wanted.then_some(true),
                         at: Instant::now(),
                     });
                 }
