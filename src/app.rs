@@ -261,6 +261,8 @@ pub struct App {
     pub show_pages: HashMap<String, ShowPage>,
     pub track_cache: HashMap<String, Track>,
     track_requests: HashSet<String>,
+    page_used: HashMap<Page, Instant>,
+    track_used: HashMap<String, Instant>,
 
     pub history: Vec<Page>,
     pub history_index: usize,
@@ -563,6 +565,8 @@ impl App {
             show_pages: HashMap::new(),
             track_cache: HashMap::new(),
             track_requests: HashSet::new(),
+            page_used: HashMap::new(),
+            track_used: HashMap::new(),
             history: vec![first_page],
             history_index: 0,
             saved: HashMap::new(),
@@ -1652,6 +1656,7 @@ impl App {
         if let Some(track) = found {
             self.remember_track_recording(&track);
             self.track_cache.insert(id.to_owned(), track);
+            self.track_used.insert(id.to_owned(), Instant::now());
         }
     }
 
@@ -1903,6 +1908,7 @@ impl App {
         if self.last_eviction.elapsed() > Duration::from_secs(20) {
             self.last_eviction = now;
             self.backend.art().evict(ctx);
+            self.evict_stale_pages();
         }
         self.sync_skin(ctx);
         if self.settings_dirty && self.last_settings_save.elapsed() > Duration::from_secs(2) {
@@ -4094,7 +4100,8 @@ impl App {
                     Ok(track) => {
                         self.remember_track_recording(&track);
                         self.request_recording_candidates(&track);
-                        self.track_cache.insert(id, track);
+                        self.track_cache.insert(id.clone(), track);
+                        self.track_used.insert(id, Instant::now());
                     }
                     Err(error) => {
                         if self.pending_link.as_deref()
@@ -4174,6 +4181,7 @@ impl App {
     // ---- navigation ------------------------------------------------------------
 
     pub fn open(&mut self, page: Page) {
+        self.page_used.insert(page.clone(), Instant::now());
         if *self.page() == page {
             self.ensure_loaded(page);
             return;
@@ -4186,6 +4194,7 @@ impl App {
         self.history_index = self.history.len() - 1;
         self.show_devices = false;
         self.ensure_loaded(page);
+        self.evict_stale_pages();
     }
 
     /// Hands the app a Spotify link from outside, a canonical URI as
@@ -4247,6 +4256,114 @@ impl App {
 
     pub fn can_go_forward(&self) -> bool {
         self.history_index + 1 < self.history.len()
+    }
+
+    /// Drops page caches that exceed the cap, keeping the open page, the
+    /// playing context, and the most recently used pages. History does not
+    /// protect a page from the cap. Track metadata is an LRU of 800.
+    fn evict_stale_pages(&mut self) {
+        const MAX_PLAYLIST_PAGES: usize = 12;
+        const MAX_ALBUM_PAGES: usize = 16;
+        const MAX_ARTIST_PAGES: usize = 10;
+        const MAX_SHOW_PAGES: usize = 8;
+        const MAX_TRACK_CACHE: usize = 800;
+
+        let mut protected_playlists = HashSet::new();
+        let mut protected_albums = HashSet::new();
+        let mut protected_artists = HashSet::new();
+        let mut protected_shows = HashSet::new();
+        match self.page() {
+            Page::Playlist(id) => {
+                protected_playlists.insert(id.clone());
+            }
+            Page::Album(id) => {
+                protected_albums.insert(id.clone());
+            }
+            Page::Artist(id) => {
+                protected_artists.insert(id.clone());
+            }
+            Page::Show(id) => {
+                protected_shows.insert(id.clone());
+            }
+            _ => {}
+        }
+        if let Some(uri) = self.playing_context_uri()
+            && let Some(kind) = util::uri_kind(&uri)
+            && let Some(id) = util::uri_id(&uri)
+        {
+            match kind {
+                "playlist" => {
+                    protected_playlists.insert(id.to_string());
+                }
+                "album" => {
+                    protected_albums.insert(id.to_string());
+                }
+                "artist" => {
+                    protected_artists.insert(id.to_string());
+                }
+                "show" => {
+                    protected_shows.insert(id.to_string());
+                }
+                _ => {}
+            }
+        }
+        evict_lru_map(
+            &mut self.playlist_pages,
+            &self.page_used,
+            |id| Page::Playlist(id.to_string()),
+            &protected_playlists,
+            MAX_PLAYLIST_PAGES,
+        );
+        evict_lru_map(
+            &mut self.album_pages,
+            &self.page_used,
+            |id| Page::Album(id.to_string()),
+            &protected_albums,
+            MAX_ALBUM_PAGES,
+        );
+        evict_lru_map(
+            &mut self.artist_pages,
+            &self.page_used,
+            |id| Page::Artist(id.to_string()),
+            &protected_artists,
+            MAX_ARTIST_PAGES,
+        );
+        evict_lru_map(
+            &mut self.show_pages,
+            &self.page_used,
+            |id| Page::Show(id.to_string()),
+            &protected_shows,
+            MAX_SHOW_PAGES,
+        );
+        self.page_used.retain(|page, _| match page {
+            Page::Playlist(id) => self.playlist_pages.contains_key(id),
+            Page::Album(id) => self.album_pages.contains_key(id),
+            Page::Artist(id) => self.artist_pages.contains_key(id),
+            Page::Show(id) => self.show_pages.contains_key(id),
+            _ => true,
+        });
+        if self.track_cache.len() > MAX_TRACK_CACHE {
+            let playing = self.now_playing().and_then(|now| now.id);
+            let overflow = self.track_cache.len() - MAX_TRACK_CACHE;
+            let mut victims: Vec<(Instant, String)> = self
+                .track_cache
+                .keys()
+                .filter(|id| playing.as_ref() != Some(*id))
+                .map(|id| {
+                    let used = self
+                        .track_used
+                        .get(id)
+                        .copied()
+                        .unwrap_or(Instant::now() - Duration::from_secs(86_400));
+                    (used, id.clone())
+                })
+                .collect();
+            victims.sort_by_key(|(used, _)| *used);
+            for (_, id) in victims.into_iter().take(overflow) {
+                self.track_cache.remove(&id);
+                self.track_used.remove(&id);
+            }
+        }
     }
 
     // ---- playback --------------------------------------------------------------
@@ -5225,6 +5342,7 @@ impl App {
                     self.history_index -= 1;
                     let page = self.page().clone();
                     self.ensure_loaded(page);
+                    self.evict_stale_pages();
                 }
             }
             Action::Forward => {
@@ -5232,6 +5350,7 @@ impl App {
                     self.history_index += 1;
                     let page = self.page().clone();
                     self.ensure_loaded(page);
+                    self.evict_stale_pages();
                 }
             }
             Action::PlayContext {
@@ -6568,6 +6687,34 @@ fn cap_uris(uris: Vec<String>, index: u32) -> (Vec<String>, u32) {
     let start = (index as usize).min(uris.len() - 1);
     let end = (start + MAX).min(uris.len());
     (uris[start..end].to_vec(), 0)
+}
+
+fn evict_lru_map<V>(
+    map: &mut HashMap<String, V>,
+    used: &HashMap<Page, Instant>,
+    to_page: impl Fn(&str) -> Page,
+    protected: &HashSet<String>,
+    max: usize,
+) {
+    if map.len() <= max {
+        return;
+    }
+    let overflow = map.len() - max;
+    let mut victims: Vec<(Instant, String)> = map
+        .keys()
+        .filter(|id| !protected.contains(*id))
+        .map(|id| {
+            let used = used
+                .get(&to_page(id))
+                .copied()
+                .unwrap_or(Instant::now() - Duration::from_secs(86_400));
+            (used, id.clone())
+        })
+        .collect();
+    victims.sort_by_key(|(used, _)| *used);
+    for (_, id) in victims.into_iter().take(overflow) {
+        map.remove(&id);
+    }
 }
 
 #[cfg(test)]
@@ -8043,6 +8190,88 @@ mod tests {
         );
         app.local_ready = true;
         app
+    }
+
+    #[test]
+    fn page_cache_stays_bounded_when_history_is_long() {
+        let mut app = headless_app();
+        let now = Instant::now();
+        for i in 0..20 {
+            let id = format!("pl{i}");
+            app.playlist_pages
+                .insert(id.clone(), PlaylistPage::default());
+            app.history.push(Page::Playlist(id.clone()));
+            app.page_used
+                .insert(Page::Playlist(id), now - Duration::from_secs(20 - i));
+        }
+        app.history_index = app.history.len() - 1;
+        app.evict_stale_pages();
+        assert!(
+            app.playlist_pages.len() <= 12,
+            "history must not protect more pages than the cap: {}",
+            app.playlist_pages.len()
+        );
+        assert!(
+            app.playlist_pages.contains_key("pl19"),
+            "the open page stays"
+        );
+        assert!(
+            !app.playlist_pages.contains_key("pl0"),
+            "the oldest page is dropped"
+        );
+    }
+
+    #[test]
+    fn page_cache_trims_data_that_arrives_after_navigation() {
+        let mut app = headless_app();
+        app.open(Page::Playlist("current".into()));
+        for i in 0..12 {
+            let id = format!("pl{i}");
+            app.playlist_pages
+                .insert(id.clone(), PlaylistPage::default());
+            app.page_used
+                .insert(Page::Playlist(id), Instant::now() - Duration::from_secs(30));
+        }
+        app.playlist_pages
+            .insert("current".into(), PlaylistPage::default());
+        app.page_used
+            .insert(Page::Playlist("current".into()), Instant::now());
+        app.playlist_pages
+            .insert("late".into(), PlaylistPage::default());
+        app.page_used.insert(
+            Page::Playlist("late".into()),
+            Instant::now() - Duration::from_secs(60),
+        );
+        app.evict_stale_pages();
+        assert!(app.playlist_pages.len() <= 12);
+        assert!(app.playlist_pages.contains_key("current"));
+        assert!(
+            !app.playlist_pages.contains_key("late"),
+            "a page that arrived after browsing still counts toward the cap"
+        );
+    }
+
+    #[test]
+    fn track_cache_is_an_lru_of_eight_hundred() {
+        let mut app = headless_app();
+        let now = Instant::now();
+        for i in 0..900 {
+            let id = format!("t{i}");
+            app.track_cache.insert(
+                id.clone(),
+                Track {
+                    id: Some(id.clone()),
+                    uri: format!("spotify:track:{id}"),
+                    ..Track::default()
+                },
+            );
+            app.track_used
+                .insert(id, now - Duration::from_secs(900 - i));
+        }
+        app.evict_stale_pages();
+        assert_eq!(app.track_cache.len(), 800);
+        assert!(app.track_cache.contains_key("t899"));
+        assert!(!app.track_cache.contains_key("t0"));
     }
 
     #[test]
