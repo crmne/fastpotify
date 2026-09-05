@@ -599,16 +599,36 @@ fn raise_running_instance(
 mod bus_tests {
     use super::*;
 
-    /// A link handed to the running instance's `Open` lands on its command
-    /// queue as the one URI the app navigates by; what is not a link is
-    /// refused, so the caller knows to fall back to showing the window.
+    #[test]
+    fn the_open_interface_accepts_only_spotify_links() {
+        let commands: std::sync::Arc<std::sync::Mutex<Vec<ControlCommand>>> = Default::default();
+        let instance = Instance {
+            commands: std::sync::Arc::clone(&commands),
+            waker: crate::backend::Waker::default(),
+        };
+
+        let opened = instance.open("https://open.spotify.com/album/1DFixLWuPkv3KT3TnV35m3?si=x");
+        let refused = instance.open("https://example.com/album/1DFixLWuPkv3KT3TnV35m3");
+
+        assert!(opened.is_ok(), "{opened:?}");
+        assert!(refused.is_err());
+        assert_eq!(
+            *commands.lock().expect("the queue"),
+            vec![ControlCommand::OpenLink(
+                "spotify:album:1DFixLWuPkv3KT3TnV35m3".to_owned()
+            )]
+        );
+    }
+
+    /// A usable session bus carries `Open` to the running instance. The
+    /// runner's bus is external test infrastructure, so bound the call and
+    /// leave the interface behaviour to the deterministic test above if it
+    /// accepts a connection but does not answer.
     #[test]
     fn a_link_reaches_the_running_instance_over_the_bus() {
-        use zbus::blocking::Connection;
-
         // #given an instance answering on its own connection, not the
         // shared name, so a Fastpotify already running is left alone
-        let Ok(server) = Connection::session() else {
+        let Ok(server) = zbus::blocking::Connection::session() else {
             eprintln!("no session bus here; nothing to test");
             return;
         };
@@ -619,24 +639,31 @@ mod bus_tests {
         };
         serve_links(server.clone(), instance).expect("the interface is served");
         let name = server.unique_name().expect("a unique name").to_string();
-        let client = Connection::session().expect("a second connection");
-        let open = |link: &str| {
-            client.call_method(
-                Some(name.as_str()),
-                INSTANCE_PATH,
-                Some("rocks.fastpotify.Instance"),
-                "Open",
-                &(link,),
-            )
-        };
+        let client = zbus::blocking::connection::Builder::session()
+            .expect("a session bus address")
+            .method_timeout(std::time::Duration::from_secs(2))
+            .build()
+            .expect("a second connection");
 
         // #when
-        let opened = open("https://open.spotify.com/album/1DFixLWuPkv3KT3TnV35m3?si=x");
-        let refused = open("https://example.com/album/1DFixLWuPkv3KT3TnV35m3");
+        let opened = client.call_method(
+            Some(name.as_str()),
+            INSTANCE_PATH,
+            Some("rocks.fastpotify.Instance"),
+            "Open",
+            &("spotify:album:1DFixLWuPkv3KT3TnV35m3",),
+        );
+        if matches!(
+            &opened,
+            Err(zbus::Error::InputOutput(error))
+                if error.kind() == std::io::ErrorKind::TimedOut
+        ) {
+            eprintln!("the session bus did not answer in time; nothing to test");
+            return;
+        };
 
         // #then
         assert!(opened.is_ok(), "{opened:?}");
-        assert!(refused.is_err());
         assert_eq!(
             *commands.lock().expect("the queue"),
             vec![ControlCommand::OpenLink(

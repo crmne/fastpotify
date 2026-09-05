@@ -45,8 +45,9 @@ adds a separate Development Mode quota. See
 - Fastpotify has no telemetry, analytics, or hosted service. When the lyrics
   panel is open and Spotify has no lyrics, it sends the track's artist, title,
   album, and length to [lrclib.net](https://lrclib.net). It also checks
-  api.github.com once a day for updates. You can turn off update checks in
-  Settings.
+  api.github.com once a day for updates. You can turn off automatic checks in
+  Settings, or request one there at any time. On macOS, **Check for Updates**
+  is also in the application menu.
 
 ## When Spotify pushes back
 
@@ -91,3 +92,8 @@ The engine discovers access points through `apresolve.spotify.com` and
 connects over TCP in the resolver's preference order: port 4070 first,
 falling back to 443 and 80. Only outbound connections are needed; no
 inbound ports have to be open.
+
+Each access-point attempt gives socket setup and the handshake a combined
+five seconds. A stalled TCP connection or HTTP proxy tunnel therefore lets
+librespot retry and move on to another endpoint instead of waiting for the
+operating system's longer connection timeout.

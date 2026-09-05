@@ -112,3 +112,43 @@ handling `spotify:` links.
 The binary needs ALSA, PulseAudio or PipeWire, and Wayland or X11.
 
 Or build from source: see [Getting Started](/getting-started/).
+
+## Nix
+
+Add the repository [flake](https://github.com/crmne/fastpotify) to your
+inputs:
+
+```nix
+inputs.fastpotify.url = "github:crmne/fastpotify";
+```
+
+On NixOS, install the default package:
+
+```nix
+environment.systemPackages = [
+  inputs.fastpotify.packages."${pkgs.stdenv.hostPlatform.system}".default
+];
+```
+
+### nix-darwin
+
+On macOS, use the `fastpotify-app` package instead. It is a `Fastpotify.app`
+bundle built and signed locally, so it is never quarantined and the
+first-open steps above do not apply:
+
+```nix
+environment.systemPackages = [
+  inputs.fastpotify.packages."${pkgs.stdenv.hostPlatform.system}".fastpotify-app
+];
+environment.pathsToLink = [ "/Applications" ];
+```
+
+The bundle appears in `/Applications/Nix Apps`. With Home Manager,
+`home.packages` is enough; its darwin support links app bundles into
+`~/Applications`:
+
+```nix
+home.packages = [
+  inputs.fastpotify.packages."${pkgs.stdenv.hostPlatform.system}".fastpotify-app
+];
+```

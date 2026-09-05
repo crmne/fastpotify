@@ -21,6 +21,8 @@ everyday use, and connection details.
   device. Select it from your phone or play music in the app. Playback is
   gapless and supports up to 320 kbps, with
   optional volume normalisation and an on-disk audio cache.
+  Stalled Spotify connections time out after five seconds per attempt so
+  playback can try another endpoint.
 - **Controls other devices.** Move playback to a speaker, a phone, or
   another computer from the device picker, and keep controlling it: play,
   pause, skip, seek, shuffle, repeat, volume.
@@ -139,6 +141,13 @@ vcpkg (`vcpkg install glew:x64-windows-static`, with
 With [Nix](https://nixos.org), `nix develop` provides all of it, along with
 the exact toolchain `rust-toolchain.toml` pins.
 
+On macOS, the flake also exposes `packages.<system>.fastpotify-app`, an
+ad-hoc signed `Fastpotify.app` bundle for the Dock, Launch Services, and
+`spotify:` links. With nix-darwin, add it to `environment.systemPackages`
+and link `"/Applications"` through `environment.pathsToLink`; with Home
+Manager, `home.packages` is enough, as its darwin support links the bundle
+into `~/Applications`.
+
 Fastpotify uses system fonts for scripts not covered by its interface font,
 including Chinese, Japanese, Korean, Arabic, Hebrew, Thai, and Indic scripts.
 macOS and Windows include common fonts. On Linux, install `noto-fonts` and
@@ -181,6 +190,13 @@ those things, and [CONTRIBUTING.md](CONTRIBUTING.md) prohibits them.
 
 ## Keyboard shortcuts
 
+The main window exposes named playback controls, library and song rows,
+menus, sliders, and settings switches to screen readers. Use `Tab` and
+`Shift+Tab` to move focus, then `Enter` or `Space` to activate a control or
+play a focused song. Left and right arrows adjust a focused volume or seek
+slider. Windows testing with NVDA and accessibility for Winamp skins are
+still in progress.
+
 | Shortcut | What it does |
 | --- | --- |
 | `Space` | Play or pause |
@@ -188,6 +204,7 @@ those things, and [CONTRIBUTING.md](CONTRIBUTING.md) prohibits them.
 | `Shift+←` / `Shift+→` | Seek 10 seconds |
 | `Ctrl+↑` / `Ctrl+↓` | Volume |
 | `M` | Mute |
+| `B` | Like or unlike the playing song |
 | `S` / `R` | Shuffle / cycle repeat |
 | `Q` | Queue panel |
 | `Ctrl+F` or `/` | Search |
@@ -253,6 +270,8 @@ autoplay, gapless playback, the audio backend (PulseAudio/PipeWire or ALSA on
 Linux), audio cache size, theme, sidebar state, whether pages take colour
 from artwork, and the mini player's skin and size.
 Playback settings apply when you press **Apply and restart playback**.
+You can also check for a new release from Settings. On macOS, the same command
+is in the application menu.
 
 Caches (audio, artwork) live under the cache directory and can be deleted at
 any time without signing you out.

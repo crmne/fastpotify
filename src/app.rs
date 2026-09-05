@@ -413,6 +413,7 @@ pub struct App {
     /// A newer release than this build, once GitHub has said so.
     pub update: Option<crate::updates::Release>,
     last_update_check: Option<Instant>,
+    pub update_checking: bool,
     /// Winamp window state and active skin.
     pub winamp: crate::winamp::WinampState,
     /// The WMP skin the skin window wears, read like the Winamp skin.
@@ -681,6 +682,7 @@ impl App {
             collapsed_folders: session.collapsed_folders.clone(),
             update: None,
             last_update_check: None,
+            update_checking: false,
             winamp: crate::winamp::WinampState::new(session.winamp_pos, tap, eq),
             wmp: crate::wmp::WmpState::default(),
             restore_watch: RestoreWatch::None,
@@ -775,15 +777,13 @@ impl App {
                 )));
             }
         }
-        if let Some(pos) = self.session_window_pos.take() {
-            // On Wayland this is a no-op. Validate against a large virtual
-            // desktop so a window that was on a now-disconnected monitor
-            // doesn't open off-screen.
-            if (-1000.0..=5000.0).contains(&pos[0]) && (-1000.0..=5000.0).contains(&pos[1]) {
-                ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(
-                    pos[0], pos[1],
-                )));
-            }
+        // If the saved position is off-screen, leave the window where eframe put it.
+        if let Some(pos) = self.session_window_pos.take()
+            && crate::window::can_restore(pos, ctx.pixels_per_point())
+        {
+            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(
+                pos[0], pos[1],
+            )));
         }
         // egui's consensus wheel speed is 40 points per line, about a third
         // of what every other player scrolls per notch; trackpads report
@@ -1391,12 +1391,30 @@ impl App {
                     self.set_user_name(id, name);
                 }
                 Event::WebApp { client_id } => self.web_app = client_id,
-                Event::UpdateAvailable { version, url } => {
-                    let notice = crate::updates::Release { version, url };
-                    if self.update.as_ref() != Some(&notice) {
-                        self.toast(format!("Fastpotify {} is available", notice.version));
+                Event::UpdateChecked { manual, result } => {
+                    self.update_checking = false;
+                    match result {
+                        Ok(Some(notice)) => {
+                            if manual || self.update.as_ref() != Some(&notice) {
+                                self.toast(format!("Fastpotify {} is available", notice.version));
+                            }
+                            self.update = Some(notice);
+                        }
+                        Ok(None) => {
+                            self.update = None;
+                            if manual {
+                                self.toast("Fastpotify is up to date");
+                            } else {
+                                log::debug!("this is the newest release");
+                            }
+                        }
+                        Err(error) if manual => {
+                            self.toast_error(format!("Couldn't check for updates: {error}"));
+                        }
+                        Err(error) => {
+                            log::debug!("could not check for a newer release: {error}");
+                        }
                     }
-                    self.update = Some(notice);
                 }
             }
         }
@@ -1897,8 +1915,7 @@ impl App {
                 .last_update_check
                 .is_none_or(|at| at.elapsed() >= crate::updates::CHECK_INTERVAL)
         {
-            self.last_update_check = Some(now);
-            self.backend.send(Command::CheckForUpdates);
+            self.check_for_updates(false);
         }
 
         if self.is_connected() && !self.offline {
@@ -2177,6 +2194,11 @@ impl App {
             "next" => self.actions.push(Action::Next),
             "play-pause" => self.actions.push(Action::TogglePlay),
             "mute" => self.actions.push(Action::ToggleMute),
+            "save-toggle" => {
+                if let Some(now) = self.now_playing().filter(|now| !now.is_episode) {
+                    self.actions.push(Action::ToggleSaved(now.uri));
+                }
+            }
             "shuffle" => self.actions.push(Action::ToggleShuffle),
             "volume-up" => self.actions.push(Action::VolumeBy(5)),
             "volume-down" => self.actions.push(Action::VolumeBy(-5)),
@@ -4077,7 +4099,6 @@ impl App {
                                         } else {
                                             self.library
                                                 .liked
-                                                .items
                                                 .retain(|item| item.track.uri != *uri);
                                             if let Some(total) = self.library.liked.total.as_mut() {
                                                 *total = total.saturating_sub(1);
@@ -5879,6 +5900,7 @@ impl App {
                     self.backend.send(Command::DiscoverReceivers);
                 }
             }
+            Action::CheckForUpdates => self.check_for_updates(true),
             Action::SettingsChanged => {
                 self.settings_dirty = true;
                 ctx.set_theme(match self.settings.theme {
@@ -6174,6 +6196,15 @@ impl App {
             kind: ToastKind::Error,
             created: Instant::now(),
         });
+    }
+
+    fn check_for_updates(&mut self, manual: bool) {
+        if self.update_checking || self.offline {
+            return;
+        }
+        self.update_checking = true;
+        self.last_update_check = Some(Instant::now());
+        self.backend.send(Command::CheckForUpdates { manual });
     }
 
     fn maybe_suggest_personal_app(&mut self, spotify_slow: bool, now: jiff::Timestamp) {
@@ -8137,6 +8168,7 @@ mod tests {
             "next",
             "previous",
             "mute",
+            "save-toggle",
             "shuffle",
             "volume-up",
             "volume-down",
@@ -8150,6 +8182,12 @@ mod tests {
             );
         }
 
+        app.actions.clear();
+        app.milkdrop_command("save-toggle");
+        assert!(matches!(
+            app.actions.first(),
+            Some(Action::ToggleSaved(uri)) if uri == "spotify:track:a"
+        ));
         app.actions.clear();
         app.milkdrop_command("next");
         assert!(matches!(app.actions.first(), Some(Action::Next)));
@@ -8271,6 +8309,76 @@ mod tests {
         );
         app.local_ready = true;
         app
+    }
+
+    #[test]
+    fn a_manual_update_check_reports_its_result() {
+        let mut app = headless_app();
+        app.update = Some(crate::updates::Release {
+            version: "1.2.3".into(),
+            url: "https://github.com/crmne/fastpotify/releases/tag/v1.2.3".into(),
+        });
+        app.update_checking = true;
+        app.handle_backend_events(vec![Event::UpdateChecked {
+            manual: true,
+            result: Ok(None),
+        }]);
+
+        assert!(!app.update_checking);
+        assert_eq!(app.update, None);
+        assert_eq!(
+            app.toasts.last().map(|toast| toast.message.as_str()),
+            Some("Fastpotify is up to date")
+        );
+
+        app.toasts.clear();
+        app.update_checking = true;
+        app.handle_backend_events(vec![Event::UpdateChecked {
+            manual: true,
+            result: Err("GitHub is unavailable".into()),
+        }]);
+
+        assert!(!app.update_checking);
+        assert_eq!(
+            app.toasts.last().map(|toast| toast.message.as_str()),
+            Some("Couldn't check for updates: GitHub is unavailable")
+        );
+        assert_eq!(
+            app.toasts.last().map(|toast| &toast.kind),
+            Some(&ToastKind::Error)
+        );
+    }
+
+    #[test]
+    fn the_daily_update_check_only_announces_a_new_release() {
+        let mut app = headless_app();
+        app.update_checking = true;
+        app.handle_backend_events(vec![Event::UpdateChecked {
+            manual: false,
+            result: Ok(None),
+        }]);
+        assert!(
+            app.toasts.is_empty(),
+            "the current release needs no daily toast"
+        );
+
+        app.update_checking = true;
+        app.handle_backend_events(vec![Event::UpdateChecked {
+            manual: false,
+            result: Ok(Some(crate::updates::Release {
+                version: "1.2.3".into(),
+                url: "https://github.com/crmne/fastpotify/releases/tag/v1.2.3".into(),
+            })),
+        }]);
+
+        assert_eq!(
+            app.update.as_ref().map(|release| release.version.as_str()),
+            Some("1.2.3")
+        );
+        assert_eq!(
+            app.toasts.last().map(|toast| toast.message.as_str()),
+            Some("Fastpotify 1.2.3 is available")
+        );
     }
 
     fn cached_playlist_row(uri: &str) -> crate::api::models::PlaylistItem {
@@ -10011,6 +10119,47 @@ mod tests {
                 100.0, 150.0
             ))),
             "attach restored the main window position: {commands:?}"
+        );
+    }
+
+    /// Unliking a song shortens Liked Songs. The table caches its row order
+    /// against the list's revision, so a silent removal leaves the cache
+    /// pointing past the end of the rows and the next frame panics.
+    #[test]
+    fn unliking_a_song_moves_the_liked_revision() {
+        use crate::api::models::SavedTrack;
+
+        let saved = |uri: &str| SavedTrack {
+            added_at: None,
+            track: Track {
+                uri: uri.into(),
+                ..Default::default()
+            },
+        };
+        let mut app = headless_app();
+        app.library.liked.items = vec![saved("spotify:track:stays"), saved("spotify:track:goes")];
+        app.library.liked.total = Some(2);
+        app.library.liked.loaded_once = true;
+        let before = app.library.liked.revision;
+
+        app.handle_api(ApiResponse::SavedChanged {
+            uris: vec!["spotify:track:goes".into()],
+            saved: false,
+            result: Ok(()),
+        });
+
+        let uris: Vec<&str> = app
+            .library
+            .liked
+            .items
+            .iter()
+            .map(|item| item.track.uri.as_str())
+            .collect();
+        assert_eq!(uris, vec!["spotify:track:stays"], "the song is gone");
+        assert_eq!(app.library.liked.total, Some(1));
+        assert_ne!(
+            app.library.liked.revision, before,
+            "the shorter list must invalidate the table's cached row order"
         );
     }
 }

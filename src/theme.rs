@@ -546,6 +546,21 @@ pub fn paint_icon(ui: &egui::Ui, icon: Icon, rect: egui::Rect, size: f32, color:
     icon.image(color, size).paint_at(ui, icon_rect);
 }
 
+/// Make keyboard focus visible without changing the control's layout.
+pub fn focus_ring(ui: &egui::Ui, response: &Response) {
+    if response.has_focus() {
+        ui.painter().rect_stroke(
+            response.rect.expand(2.0),
+            4.0,
+            ui.visuals().selection.stroke,
+            egui::StrokeKind::Outside,
+        );
+    }
+    if response.gained_focus() {
+        response.scroll_to_me(None);
+    }
+}
+
 /// A frameless icon control whose colour lifts on hover.
 pub fn icon_button(
     ui: &mut egui::Ui,
@@ -557,6 +572,9 @@ pub fn icon_button(
 ) -> Response {
     let edge = size + 12.0;
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(edge), Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), tooltip)
+    });
     if ui.is_rect_visible(rect) {
         let tint = if response.hovered() || response.has_focus() {
             hover
@@ -570,6 +588,7 @@ pub fn icon_button(
         };
         paint_icon(ui, icon, rect, size * scale, tint);
     }
+    focus_ring(ui, &response);
     let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
     if tooltip.is_empty() {
         response
@@ -614,6 +633,9 @@ pub fn circle_button(
     tooltip: &str,
 ) -> Response {
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(diameter), Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), tooltip)
+    });
     if ui.is_rect_visible(rect) {
         let hovered = response.hovered();
         let grow = if hovered { 1.05 } else { 1.0 };
@@ -626,6 +648,7 @@ pub fn circle_button(
             egui::Rect::from_center_size(rect.center() + offset, Vec2::splat(icon_size));
         icon.image(icon_color, icon_size).paint_at(ui, icon_rect);
     }
+    focus_ring(ui, &response);
     let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
     if tooltip.is_empty() {
         response
@@ -644,6 +667,13 @@ pub fn circle_spinner(
     tooltip: &str,
 ) -> Response {
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(diameter), Sense::hover());
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(
+            egui::WidgetType::ProgressIndicator,
+            ui.is_enabled(),
+            tooltip,
+        )
+    });
     if ui.is_rect_visible(rect) {
         ui.painter()
             .circle_filled(rect.center(), diameter / 2.0, fill);
@@ -671,6 +701,9 @@ pub fn pill_button(ui: &mut egui::Ui, palette: &Palette, label: &str, primary: b
     let padding = Vec2::new(18.0, 8.0);
     let size = galley.size() + padding * 2.0;
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)
+    });
     if ui.is_rect_visible(rect) {
         let hovered = response.hovered();
         let radius = rect.height() / 2.0;
@@ -693,6 +726,7 @@ pub fn pill_button(ui: &mut egui::Ui, palette: &Palette, label: &str, primary: b
         let pos = rect.center() - galley.size() / 2.0;
         ui.painter().galley(pos, galley, color);
     }
+    focus_ring(ui, &response);
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
@@ -714,6 +748,9 @@ pub fn soft_button(
     let padding = Vec2::new(12.0, 7.0);
     let size = Vec2::new(galley.size().x + icon_width, galley.size().y) + padding * 2.0;
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)
+    });
     if ui.is_rect_visible(rect) {
         let hovered = response.hovered();
         let fill = if active {
@@ -736,6 +773,7 @@ pub fn soft_button(
         let pos = egui::pos2(x, rect.center().y - galley.size().y / 2.0);
         ui.painter().galley(pos, galley, color);
     }
+    focus_ring(ui, &response);
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
@@ -814,12 +852,15 @@ pub fn link(
         )
     } else {
         ui.add(
-            egui::Label::new(egui::RichText::new(text).font(font).color(color))
+            egui::Label::new(egui::RichText::new(text.clone()).font(font).color(color))
                 .truncate()
                 .selectable(false)
                 .sense(Sense::click()),
         )
     };
+    response
+        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Link, ui.is_enabled(), &text));
+    focus_ring(ui, &response);
     if response.hovered() {
         let rect = response.rect;
         ui.painter()

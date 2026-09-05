@@ -657,6 +657,7 @@ impl Child {
             Key::Named(NamedKey::ArrowUp) if control => command("volume-up"),
             Key::Named(NamedKey::ArrowDown) if control => command("volume-down"),
             Key::Character("m") | Key::Character("M") if plain => command("mute"),
+            Key::Character("b") | Key::Character("B") if plain => command("save-toggle"),
             Key::Character("s") | Key::Character("S") if plain => command("shuffle"),
             // The window itself.
             Key::Named(NamedKey::Enter) if self.modifiers.alt_key() => {
@@ -712,6 +713,7 @@ impl Child {
             keys("Ctrl+\u{2190}  /  Ctrl+\u{2192}", "Previous or next song"),
             keys("Ctrl+\u{2191}  /  Ctrl+\u{2193}", "Volume up or down"),
             keys("M", "Mute or unmute"),
+            keys("B", "Like or unlike the playing song"),
             keys("S", "Shuffle"),
             Row::Gap(9.0),
             heading("WINDOW"),

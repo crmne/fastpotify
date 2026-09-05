@@ -1,4 +1,4 @@
-//! Formatting helpers shared by every view.
+//! Small helpers shared across the application.
 
 /// `3:45` for track lengths, `1:02:03` past an hour.
 pub fn format_duration_ms(ms: u32) -> String {
@@ -218,6 +218,42 @@ pub fn strip_html(text: &str) -> String {
         .replace("&#x2F;", "/")
         .replace("&lt;", "<")
         .replace("&gt;", ">")
+}
+
+/// Atomically replaces `path` with `temporary` on the current platform.
+#[cfg(not(windows))]
+pub(crate) fn replace_file(
+    temporary: &std::path::Path,
+    path: &std::path::Path,
+) -> std::io::Result<()> {
+    std::fs::rename(temporary, path)
+}
+
+/// Atomically replaces `path` with `temporary` on Windows.
+#[cfg(windows)]
+pub(crate) fn replace_file(
+    temporary: &std::path::Path,
+    path: &std::path::Path,
+) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
+    };
+
+    let temporary: Vec<u16> = temporary.as_os_str().encode_wide().chain(Some(0)).collect();
+    let path: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let moved = unsafe {
+        MoveFileExW(
+            temporary.as_ptr(),
+            path.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if moved == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
 }
 
 #[cfg(test)]

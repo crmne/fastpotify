@@ -125,7 +125,10 @@ pub fn virtual_rows(
     let clip = ui.clip_rect();
     let start_y = ui.cursor().top();
     let width = ui.available_width();
-    let first = (((clip.top() - start_y) / row_height).floor().max(0.0) as usize).min(count);
+    // Retain a neighbour on either side so Tab can focus it and scroll it in.
+    let first = (((clip.top() - start_y) / row_height).floor().max(0.0) as usize)
+        .min(count)
+        .saturating_sub(1);
     let last = (((clip.bottom() - start_y) / row_height).ceil().max(0.0) as usize + 1).min(count);
     if first > 0 {
         ui.allocate_space(vec2(width, first as f32 * row_height));
@@ -211,6 +214,10 @@ pub fn menu_item_enabled(
         ui.painter()
             .galley(crate::bidi::galley_pos(text_rect, &galley), galley, color);
     }
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled && ui.is_enabled(), label)
+    });
+    theme::focus_ring(ui, &response);
     let clicked = enabled && response.clicked();
     if clicked {
         ui.close();
@@ -627,6 +634,23 @@ fn columns(width: f32, row: &TrackRow<'_>) -> Columns {
 /// Returns the selection behavior for a row-body click. The caller supplies
 /// the display index because sorting and filtering change row positions.
 pub fn track_row(ui: &mut Ui, app: &mut App, row: TrackRow<'_>) -> Option<RowPick> {
+    // Virtual lists reuse the visible slots as they scroll. Keep focus and
+    // accessibility actions attached to the song and its occurrence instead.
+    // Now playing and Next up can both contain the same song at index zero.
+    // Their actions have different meanings, so they must not share an ID.
+    let id = ui.unique_id().with((
+        "track-row",
+        std::mem::discriminant(row.context),
+        row.item.uri(),
+        row.index,
+    ));
+    ui.scope_builder(UiBuilder::new().id(id), |ui| {
+        track_row_contents(ui, app, row)
+    })
+    .inner
+}
+
+fn track_row_contents(ui: &mut Ui, app: &mut App, row: TrackRow<'_>) -> Option<RowPick> {
     let palette = app.palette;
     let row_height = if row.thin {
         theme::THIN_ROW_HEIGHT
@@ -638,7 +662,22 @@ pub fn track_row(ui: &mut Ui, app: &mut App, row: TrackRow<'_>) -> Option<RowPic
     let width = ui.available_width();
     let (rect, response) = ui.allocate_exact_size(vec2(width, row_height), Sense::click_and_drag());
     let rect = rect.translate(vec2(0.0, row.shift));
-    if !ui.is_rect_visible(rect) {
+    let unavailable = match row.item {
+        PlayableItem::Track(track) => track.is_playable == Some(false) || track.is_local,
+        PlayableItem::Episode(_) => false,
+    };
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::WidgetType::Button,
+            ui.is_enabled() && !unavailable,
+            row.picked,
+            format!("Play {}, {}", row.item.name(), row.item.subtitle()),
+        )
+    });
+    if response.gained_focus() {
+        response.scroll_to_me(None);
+    }
+    if !ui.is_rect_visible(rect) && !response.has_focus() && !response.clicked() {
         return None;
     }
     // Start a sidebar drag only after egui's drag threshold.
@@ -670,12 +709,7 @@ pub fn track_row(ui: &mut Ui, app: &mut App, row: TrackRow<'_>) -> Option<RowPic
             .current_track_uri()
             .is_some_and(|uri| uri == row.item.uri());
     let playing = is_current && app.believed_playing();
-    let hovered = ui.rect_contains_pointer(rect);
-    let unavailable = match row.item {
-        PlayableItem::Track(track) => track.is_playable == Some(false) || track.is_local,
-        PlayableItem::Episode(_) => false,
-    };
-
+    let hovered = ui.rect_contains_pointer(rect) || response.has_focus();
     if row.picked {
         // Picked rows read as a block, so a run of them looks like one
         // thing rather than a stack of hovers. Hovering one still lifts
@@ -696,6 +730,7 @@ pub fn track_row(ui: &mut Ui, app: &mut App, row: TrackRow<'_>) -> Option<RowPic
                 .gamma_multiply(if palette.dark { 0.7 } else { 1.0 }),
         );
     }
+    theme::focus_ring(ui, &response);
     let cols = columns(width, &row);
     let painter = ui.painter().clone();
     let mut x = rect.left() + 8.0;
@@ -1055,12 +1090,18 @@ pub fn track_row(ui: &mut Ui, app: &mut App, row: TrackRow<'_>) -> Option<RowPic
     if cols.heart > 0.0 {
         let saved = app.is_saved(row.item.uri());
         let heart_rect = Rect::from_min_size(pos2(x, rect.top()), vec2(cols.heart, row_height));
-        if row.item.is_track() && (hovered || saved == Some(true)) {
+        if row.item.is_track() {
             let mut child = ui.new_child(
                 UiBuilder::new()
                     .max_rect(heart_rect)
                     .layout(Layout::centered_and_justified(egui::Direction::LeftToRight)),
             );
+            if !hovered
+                && saved != Some(true)
+                && !child.memory(|memory| memory.has_focus(child.next_auto_id()))
+            {
+                child.set_opacity(0.0);
+            }
             let (icon, color) = if saved == Some(true) {
                 (Icon::HeartFilled, palette.accent)
             } else {
@@ -1095,13 +1136,19 @@ pub fn track_row(ui: &mut Ui, app: &mut App, row: TrackRow<'_>) -> Option<RowPic
     // only on a hovered row, the pointer's trip to the menu could leave
     // the row and close it before anything was clicked.
     let menu_id = ui.id().with(("row-menu", row.index));
-    if cols.more > 0.0 && (hovered || egui::Popup::is_id_open(ui.ctx(), menu_id)) {
+    if cols.more > 0.0 {
         let more_rect = Rect::from_min_size(pos2(x, rect.top()), vec2(cols.more, row_height));
         let mut child = ui.new_child(
             UiBuilder::new()
                 .max_rect(more_rect)
                 .layout(Layout::centered_and_justified(egui::Direction::LeftToRight)),
         );
+        if !hovered
+            && !egui::Popup::is_id_open(ui.ctx(), menu_id)
+            && !child.memory(|memory| memory.has_focus(child.next_auto_id()))
+        {
+            child.set_opacity(0.0);
+        }
         let more = theme::icon_button(
             &mut child,
             Icon::Ellipsis,
@@ -1118,7 +1165,8 @@ pub fn track_row(ui: &mut Ui, app: &mut App, row: TrackRow<'_>) -> Option<RowPic
 
     // Row interactions.
     let mut pick = None;
-    if response.double_clicked() && !unavailable {
+    let accessible_click = response.clicked() && response.interact_pointer_pos().is_none();
+    if (response.double_clicked() || accessible_click) && !unavailable {
         app.actions.push(Action::PlayFromRow {
             context: row.context.clone(),
             uri: row.item.uri().to_string(),
@@ -1275,6 +1323,14 @@ pub fn table_header(
         let head =
             Rect::from_min_size(top_left, size + vec2(arrow_room, 0.0)).expand2(vec2(4.0, 8.0));
         let response = ui.interact(head, ui.id().with(("table-header", text)), Sense::click());
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::WidgetType::Button,
+                ui.is_enabled(),
+                format!("Sort by {text}"),
+            )
+        });
+        theme::focus_ring(ui, &response);
         let color = if active.is_some() {
             palette.accent
         } else if response.hovered() {
@@ -1318,6 +1374,14 @@ pub fn table_header(
         let natural = sort.is_none();
         let active = sort.filter(|sort| sort.column == SortColumn::Index);
         let response = ui.interact(number, ui.id().with("table-header-number"), Sense::click());
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::WidgetType::Button,
+                ui.is_enabled(),
+                "Sort by playlist order",
+            )
+        });
+        theme::focus_ring(ui, &response);
         let number_color = if natural || active.is_some() {
             palette.accent
         } else if response.hovered() {
@@ -1401,6 +1465,14 @@ pub fn table_header(
         ui.id().with("table-header-duration"),
         Sense::click(),
     );
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(
+            egui::WidgetType::Button,
+            ui.is_enabled(),
+            "Sort by duration",
+        )
+    });
+    theme::focus_ring(ui, &response);
     let clock_color = if duration_active {
         palette.accent
     } else if response.hovered() {
@@ -1499,6 +1571,13 @@ pub fn card(
     let height =
         PAD + image_size + TITLE_GAP + title_row + SUBTITLE_GAP + 2.0 * subtitle_row + BOTTOM_PAD;
     let (rect, response) = ui.allocate_exact_size(vec2(CARD_WIDTH, height), Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(
+            egui::WidgetType::Button,
+            ui.is_enabled(),
+            format!("{title}, {subtitle}"),
+        )
+    });
     let mut play = false;
     if ui.is_rect_visible(rect) {
         let hovered = ui.rect_contains_pointer(rect);
@@ -1577,6 +1656,7 @@ pub fn card(
         }
     }
     let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+    theme::focus_ring(ui, &response);
     CardResponse {
         clicked: response.clicked() && !play,
         play,
@@ -1692,12 +1772,13 @@ pub fn thin_slider(
     ui: &mut Ui,
     palette: &Palette,
     id: egui::Id,
+    label: &str,
     value: f32,
     width: f32,
-    accent: Color32,
     wheel_step: Option<f32>,
 ) -> SliderEvent {
-    let (rect, response) = ui.allocate_exact_size(vec2(width, 16.0), Sense::click_and_drag());
+    let (_, rect) = ui.allocate_space(vec2(width, 16.0));
+    let response = ui.interact(rect, id, Sense::click_and_drag());
     let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
     let dragging_value = ui.data(|data| data.get_temp::<f32>(id));
     let pointer_value = response
@@ -1725,13 +1806,66 @@ pub fn thin_slider(
             event = SliderEvent::Committed((value + step * notches as f32).clamp(0.0, 1.0));
         }
     }
+    let step = wheel_step.unwrap_or(0.01);
+    let focused = response.has_focus();
+    if focused {
+        ui.memory_mut(|memory| {
+            memory.set_focus_lock_filter(
+                response.id,
+                egui::EventFilter {
+                    horizontal_arrows: true,
+                    ..Default::default()
+                },
+            )
+        });
+    }
+    if response.enabled() {
+        ui.input(|input| {
+            use egui::accesskit::{Action, ActionData};
+            let mut change = input.num_accesskit_action_requests(response.id, Action::Increment)
+                as i32
+                - input.num_accesskit_action_requests(response.id, Action::Decrement) as i32;
+            if focused {
+                change += input.num_presses(egui::Key::ArrowRight) as i32
+                    - input.num_presses(egui::Key::ArrowLeft) as i32;
+            }
+            if change != 0 {
+                event = SliderEvent::Committed((value + change as f32 * step).clamp(0.0, 1.0));
+            }
+            for request in input.accesskit_action_requests(response.id, Action::SetValue) {
+                if let Some(ActionData::NumericValue(value)) = request.data
+                    && value.is_finite()
+                {
+                    event = SliderEvent::Committed((value / 100.0).clamp(0.0, 1.0) as f32);
+                }
+            }
+        });
+    }
     let shown = match &event {
         SliderEvent::Dragging(v) => *v,
         SliderEvent::Committed(v) => *v,
         SliderEvent::None => dragging_value.unwrap_or(value),
     };
+    response
+        .widget_info(|| egui::WidgetInfo::slider(ui.is_enabled(), f64::from(shown) * 100.0, label));
+    ui.ctx().accesskit_node_builder(response.id, |node| {
+        use egui::accesskit::Action;
+        node.set_min_numeric_value(0.0);
+        node.set_max_numeric_value(100.0);
+        node.set_numeric_value_step(f64::from(step) * 100.0);
+        node.add_action(Action::SetValue);
+        if shown > 0.0 {
+            node.add_action(Action::Decrement);
+        }
+        if shown < 1.0 {
+            node.add_action(Action::Increment);
+        }
+    });
     if ui.is_rect_visible(rect) {
-        let active = response.hovered() || response.dragged() || dragging_value.is_some();
+        let active = response.hovered()
+            || response.has_focus()
+            || response.dragged()
+            || dragging_value.is_some();
         let bar = Rect::from_center_size(rect.center(), vec2(rect.width(), 4.0));
         let track_color = if palette.dark {
             Color32::from_white_alpha(50)
@@ -1743,7 +1877,7 @@ pub fn thin_slider(
             bar.min,
             pos2(bar.left() + bar.width() * shown.clamp(0.0, 1.0), bar.max.y),
         );
-        let fill = if active { accent } else { palette.text };
+        let fill = if active { palette.accent } else { palette.text };
         ui.painter().rect_filled(filled, 2.0, fill);
         if active {
             ui.painter()
@@ -1835,6 +1969,8 @@ pub fn search_field(
             .vertical_align(Align::Center)
             .layouter(&mut layouter),
     );
+    ui.ctx()
+        .accesskit_node_builder(response.id, |node| node.set_label(hint));
     if !text.is_empty() {
         let clear_rect = Rect::from_center_size(
             pos2(rect.right() - 17.0, rect.center().y),
@@ -1863,7 +1999,7 @@ pub fn search_field(
 }
 
 /// A toggle drawn as a switch.
-pub fn switch(ui: &mut Ui, palette: &Palette, on: &mut bool) -> egui::Response {
+pub fn switch(ui: &mut Ui, palette: &Palette, label: &str, on: &mut bool) -> egui::Response {
     let size = vec2(40.0, 22.0);
     let (rect, mut response) = ui.allocate_exact_size(size, Sense::click());
     if response.clicked() {
@@ -1882,6 +2018,10 @@ pub fn switch(ui: &mut Ui, palette: &Palette, on: &mut bool) -> egui::Response {
         ui.painter()
             .circle_filled(pos2(knob_x, rect.center().y), 8.0, Color32::WHITE);
     }
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), *on, label)
+    });
+    theme::focus_ring(ui, &response);
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 

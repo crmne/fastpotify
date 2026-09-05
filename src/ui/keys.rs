@@ -112,6 +112,12 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
             key(Modifiers::NONE, Key::Slash, Action::FocusSearch);
         }
     });
+    if !typing
+        && ctx.input_mut(|input| input.consume_key(Modifiers::NONE, Key::B))
+        && let Some(now) = app.now_playing().filter(|now| !now.is_episode)
+    {
+        actions.push(Action::ToggleSaved(now.uri));
+    }
     // Resolve the "open current artist/album" placeholders.
     for action in actions {
         match action {
@@ -169,6 +175,7 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
         "Volume up or down",
     ),
     ("M", "Mute or unmute"),
+    ("B", "Like or unlike the playing song"),
     ("S", "Toggle shuffle"),
     ("R", "Cycle repeat"),
     ("Q", "Show the queue"),
@@ -205,6 +212,9 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::AppOptions;
+    use crate::paths::AppDirs;
+    use crate::settings::Settings;
 
     #[test]
     fn shortcut_constants_name_the_platform_modifier() {
@@ -252,5 +262,49 @@ mod tests {
             assert_eq!(label("Home"), "Ctrl+H");
             assert_eq!(label("Winamp mini player"), "Ctrl+M");
         }
+    }
+
+    #[test]
+    fn b_toggles_the_playing_song_in_liked_songs() {
+        let root = std::env::temp_dir().join(format!(
+            "fastpotify-like-shortcut-test-{}",
+            std::process::id()
+        ));
+        let dirs = AppDirs {
+            config: root.join("config"),
+            state: root.join("state"),
+            cache: root.join("cache"),
+        };
+        let mut app = App::new(
+            &crate::backend::Waker::default(),
+            dirs,
+            Settings::default(),
+            AppOptions {
+                media_controls: false,
+                tray: false,
+            },
+        );
+        crate::demo::populate(&mut app);
+
+        let ctx = egui::Context::default();
+        let input = egui::RawInput {
+            events: vec![egui::Event::Key {
+                key: Key::B,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::NONE,
+            }],
+            ..Default::default()
+        };
+        let mut output = ctx.run_ui(input, |_ui| handle(&mut app, &ctx));
+        output.textures_delta.clear();
+
+        assert!(matches!(
+            app.actions.as_slice(),
+            [Action::ToggleSaved(uri)] if uri == "spotify:track:trk0"
+        ));
+        app.backend.shutdown();
+        let _ = std::fs::remove_dir_all(root);
     }
 }

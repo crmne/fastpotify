@@ -745,6 +745,7 @@ impl eframe::App for Shell {
                     MenuCommand::Sidebar => Action::ToggleSidebar,
                     MenuCommand::Queue => Action::ToggleQueuePanel,
                     MenuCommand::Settings => Action::Open(Page::Settings),
+                    MenuCommand::CheckForUpdates => Action::CheckForUpdates,
                     MenuCommand::Shortcuts => Action::ShowDialog(Dialog::Shortcuts),
                     MenuCommand::Back => Action::Back,
                     MenuCommand::Forward => Action::Forward,

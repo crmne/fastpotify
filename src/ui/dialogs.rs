@@ -271,7 +271,7 @@ fn create_playlist(app: &mut App, ui: &mut egui::Ui) {
     let field = text_field(ui, &palette, "playlist-name", name, "My playlist", true);
     ui.add_space(10.0);
     ui.horizontal(|ui| {
-        super::widgets::switch(ui, &palette, public);
+        super::widgets::switch(ui, &palette, "Public playlist", public);
         theme::text(ui, "Public playlist", theme::regular(14.0), palette.text);
     });
     if !add_uris.is_empty() {
@@ -346,7 +346,7 @@ fn edit_playlist(app: &mut App, ui: &mut egui::Ui) {
         });
     ui.add_space(10.0);
     ui.horizontal(|ui| {
-        super::widgets::switch(ui, &palette, public);
+        super::widgets::switch(ui, &palette, "Public playlist", public);
         theme::text(ui, "Public playlist", theme::regular(14.0), palette.text);
     });
     ui.add_space(20.0);
