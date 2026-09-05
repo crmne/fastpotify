@@ -338,6 +338,7 @@ pub struct Bar {
 pub struct Analyser {
     fft: Fft,
     spectrum: [f32; SPECTRUM_BINS],
+    wave: [f32; FFT_SAMPLES],
     /// Where each bar is, falling at a fixed rate towards the sound.
     falloff: [f32; BARS],
     /// Each peak, in 256ths of a row, and how fast it is dropping.
@@ -353,6 +354,7 @@ impl Default for Analyser {
         Self {
             fft: Fft::new(),
             spectrum: [0.0; SPECTRUM_BINS],
+            wave: [0.0; FFT_SAMPLES],
             falloff: [0.0; BARS],
             peaks: [0; BARS],
             peak_speed: [0.0; BARS],
@@ -373,8 +375,10 @@ impl Analyser {
             return self.bars;
         }
         self.last_step = Some(due.max(now - STEP));
-        let wave: Vec<f32> = samples.iter().map(|sample| sample * CHANNEL_SUM).collect();
-        self.fft.spectrum(&wave, &mut self.spectrum);
+        for (slot, sample) in self.wave.iter_mut().zip(samples.iter()) {
+            *slot = sample * CHANNEL_SUM;
+        }
+        self.fft.spectrum(&self.wave, &mut self.spectrum);
         let columns = self.bands();
         let mut bars = [Bar::default(); BARS];
         for (bar, slot) in bars.iter_mut().enumerate() {
