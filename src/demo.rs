@@ -607,6 +607,17 @@ pub fn apply_flags(app: &mut App, page: Option<&str>, show: Option<&str>) {
     for surface in show.unwrap_or("").split(',').map(str::trim) {
         match surface {
             "queue" => app.show_queue_panel = true,
+            "playing-next" => {
+                app.show_queue_panel = true;
+                if let Loadable::Loaded(queue) = &app.queue {
+                    app.manual_queue = queue
+                        .queue
+                        .iter()
+                        .take(6)
+                        .map(|item| item.uri().to_string())
+                        .collect();
+                }
+            }
             "recents" => {
                 app.show_queue_panel = true;
                 app.queue_tab = QueueTab::Recents;
@@ -1763,6 +1774,62 @@ mod tests {
             frame(&ctx, &mut app);
         }
         assert!(!app.palette.dark);
+        app.backend.shutdown();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Virtual queue rows and library cards still draw a long list, and the
+    /// library still asks for the next page when the end is near.
+    #[test]
+    fn a_long_virtual_queue_and_library_still_draw() {
+        let root =
+            std::env::temp_dir().join(format!("fastpotify-virtual-long-{}", std::process::id()));
+        let dirs = AppDirs {
+            config: root.join("config"),
+            state: root.join("state"),
+            cache: root.join("cache"),
+        };
+        let ctx = egui::Context::default();
+        let waker = crate::backend::Waker::default();
+        waker.attach(&ctx);
+        let mut app = App::new(
+            &waker,
+            dirs,
+            Settings::default(),
+            AppOptions {
+                media_controls: false,
+                tray: false,
+            },
+        );
+        app.attach(&ctx);
+        populate(&mut app);
+        if let Loadable::Loaded(queue) = &mut app.queue {
+            let seed = queue.queue.clone();
+            queue.queue = seed.iter().cloned().cycle().take(200).collect();
+            app.manual_queue = queue
+                .queue
+                .iter()
+                .take(80)
+                .map(|item| item.uri().to_string())
+                .collect();
+        }
+        app.show_queue_panel = true;
+        for _ in 0..3 {
+            frame(&ctx, &mut app);
+        }
+        app.library.albums.items = (0..80)
+            .map(|index| SavedAlbum {
+                added_at: None,
+                album: album(index % 8),
+            })
+            .collect();
+        app.library.albums.next_offset = Some(80);
+        app.library.albums.loaded_once = true;
+        app.open(Page::Albums);
+        app.actions.clear();
+        for _ in 0..3 {
+            frame(&ctx, &mut app);
+        }
         app.backend.shutdown();
         let _ = std::fs::remove_dir_all(root);
     }

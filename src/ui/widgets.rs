@@ -24,7 +24,7 @@ pub fn cover(
     fallback: Icon,
 ) -> Rect {
     let (rect, _) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
-    paint_cover(ui, palette, url, rect, radius, fallback);
+    paint_cover(ui, palette, url, rect, radius, fallback, None);
     rect
 }
 
@@ -35,9 +35,13 @@ pub fn paint_cover(
     rect: Rect,
     radius: f32,
     fallback: Icon,
+    art: Option<&crate::images::ArtLoader>,
 ) {
     if !ui.is_rect_visible(rect) {
         return;
+    }
+    if let (Some(url), Some(art)) = (url, art) {
+        art.touch(url);
     }
     let corner = CornerRadius::same(radius.min(127.0) as u8);
     let painter = ui.painter();
@@ -48,6 +52,9 @@ pub fn paint_cover(
         else {
             return false;
         };
+        if let Some(art) = art {
+            art.release_bytes(url);
+        }
 
         let image_aspect = texture.size.x / texture.size.y;
         let rect_aspect = rect.width() / rect.height();
@@ -140,6 +147,36 @@ pub fn virtual_rows(
         ui.allocate_space(vec2(width, (count - last) as f32 * row_height));
     }
     ui.spacing_mut().item_spacing = previous_spacing;
+}
+
+/// A wrapping grid of cards, laid out row by row so only visible cards are
+/// measured and painted.
+pub fn virtual_wrapped_cards(
+    ui: &mut Ui,
+    count: usize,
+    card_height: f32,
+    mut card: impl FnMut(&mut Ui, usize),
+) {
+    if count == 0 {
+        return;
+    }
+    let spacing = CARD_GAP / 2.0;
+    let row_width = ui.available_width().max(CARD_WIDTH);
+    let cards_per_row = ((row_width + spacing) / (CARD_WIDTH + spacing))
+        .floor()
+        .max(1.0) as usize;
+    let row_count = count.div_ceil(cards_per_row);
+    virtual_rows(ui, row_count, card_height + CARD_GAP, |ui, row| {
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = vec2(spacing, CARD_GAP);
+            let start = row * cards_per_row;
+            let end = (start + cards_per_row).min(count);
+            for index in start..end {
+                card(ui, index);
+            }
+        });
+        ui.allocate_space(vec2(row_width, CARD_GAP));
+    });
 }
 
 /// Asks for the next page when the user scrolls near the end of a list.
@@ -789,6 +826,7 @@ fn track_row_contents(ui: &mut Ui, app: &mut App, row: TrackRow<'_>) -> Option<R
             } else {
                 Icon::Mic
             },
+            Some(app.backend.art()),
         );
         // Without a number column the cover carries the play control:
         // hover shows it, a click uses it, and what plays shows there.
@@ -1539,6 +1577,24 @@ pub struct CardResponse {
     pub play: bool,
 }
 
+/// Fixed height of a [`card`] row for virtualised grids.
+pub fn card_row_height(ui: &mut Ui) -> f32 {
+    const PAD: f32 = 12.0;
+    const TITLE_GAP: f32 = 10.0;
+    const SUBTITLE_GAP: f32 = 2.0;
+    const BOTTOM_PAD: f32 = 8.0;
+    let image_size = CARD_WIDTH - 2.0 * PAD;
+    let title_font = theme::semibold(14.0);
+    let subtitle_font = theme::regular(12.5);
+    let (title_row, subtitle_row) = ui.fonts_mut(|fonts| {
+        (
+            fonts.row_height(&title_font),
+            fonts.row_height(&subtitle_font),
+        )
+    });
+    PAD + image_size + TITLE_GAP + title_row + SUBTITLE_GAP + 2.0 * subtitle_row + BOTTOM_PAD
+}
+
 /// A cover-and-title card for grids and shelves.
 pub fn card(
     ui: &mut Ui,
@@ -1600,6 +1656,7 @@ pub fn card(
             image_rect,
             radius,
             if round { Icon::User } else { Icon::Music },
+            Some(app.backend.art()),
         );
         let text_left = rect.left() + PAD;
         let title_galley = ellipsized(ui, title, title_font, palette.text, text_width, 1);
@@ -2053,4 +2110,224 @@ pub fn setting_row(
         ui.with_layout(Layout::right_to_left(Align::Center), control);
     });
     ui.add_space(10.0);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::{App, AppOptions};
+    use crate::model::{Action, Page};
+    use crate::paths::AppDirs;
+    use crate::settings::Settings;
+
+    fn test_app() -> App {
+        let root = std::env::temp_dir().join(format!(
+            "fastpotify-virtual-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        App::new(
+            &crate::backend::Waker::default(),
+            AppDirs {
+                config: root.join("config"),
+                state: root.join("state"),
+                cache: root.join("cache"),
+            },
+            Settings::default(),
+            AppOptions {
+                media_controls: false,
+                tray: false,
+            },
+        )
+    }
+
+    fn run_on(
+        ctx: &egui::Context,
+        size: Vec2,
+        clip: Rect,
+        events: Vec<egui::Event>,
+        mut f: impl FnMut(&mut Ui),
+    ) {
+        let input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), size)),
+            events,
+            ..Default::default()
+        };
+        let mut output = ctx.run_ui(input, |ui| {
+            ui.set_clip_rect(clip);
+            f(ui);
+        });
+        output.textures_delta.clear();
+    }
+
+    fn run(size: Vec2, clip: Rect, events: Vec<egui::Event>, f: impl FnMut(&mut Ui)) {
+        run_on(&egui::Context::default(), size, clip, events, f);
+    }
+
+    #[test]
+    fn virtual_rows_only_build_visible_indices() {
+        let mut painted = Vec::new();
+        let size = vec2(400.0, 240.0);
+        let clip = Rect::from_min_size(pos2(0.0, 0.0), size);
+        run(size, clip, Vec::new(), |ui| {
+            virtual_rows(ui, 10_000, 40.0, |_, index| painted.push(index));
+        });
+        assert!(
+            painted.len() < 20,
+            "a long list must not build every row: {} painted",
+            painted.len()
+        );
+        assert!(!painted.is_empty());
+        assert_eq!(painted[0], 0);
+        assert!(
+            painted.windows(2).all(|pair| pair[1] == pair[0] + 1),
+            "visible indices must be consecutive"
+        );
+    }
+
+    #[test]
+    fn virtual_rows_keep_full_height_when_scrolled() {
+        let mut painted = Vec::new();
+        let mut span = 0.0;
+        let size = vec2(400.0, 800.0);
+        let clip = Rect::from_min_max(pos2(0.0, 400.0), pos2(400.0, 600.0));
+        run(size, clip, Vec::new(), |ui| {
+            let start = ui.cursor().top();
+            virtual_rows(ui, 10_000, 40.0, |ui, index| {
+                painted.push(index);
+                ui.allocate_exact_size(vec2(ui.available_width(), 40.0), Sense::hover());
+            });
+            span = ui.cursor().top() - start;
+        });
+        assert!(
+            (span - 10_000.0 * 40.0).abs() < 1.0,
+            "scroll height must match the full list, got {span}"
+        );
+        assert!(
+            painted.first().copied().unwrap_or(0) >= 8,
+            "rows above the clip must be skipped: {painted:?}"
+        );
+        assert!(
+            painted.last().copied().unwrap_or(0) < 20,
+            "rows below the clip must be skipped: {painted:?}"
+        );
+        assert!(painted.len() < 20);
+    }
+
+    #[test]
+    fn a_click_on_a_visible_virtual_row_still_fires() {
+        let ctx = egui::Context::default();
+        let size = vec2(400.0, 240.0);
+        let clip = Rect::from_min_size(pos2(0.0, 0.0), size);
+        let mut row0 = Rect::NOTHING;
+        run_on(&ctx, size, clip, Vec::new(), |ui| {
+            virtual_rows(ui, 500, 40.0, |ui, index| {
+                let (rect, _) =
+                    ui.allocate_exact_size(vec2(ui.available_width(), 40.0), Sense::click());
+                if index == 0 {
+                    row0 = rect;
+                }
+            });
+        });
+        let pos = row0.center();
+        let mut clicked = None;
+        let events = vec![
+            egui::Event::PointerMoved(pos),
+            egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+            egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ];
+        run_on(&ctx, size, clip, events, |ui| {
+            virtual_rows(ui, 500, 40.0, |ui, index| {
+                let (_, response) =
+                    ui.allocate_exact_size(vec2(ui.available_width(), 40.0), Sense::click());
+                if response.clicked() {
+                    clicked = Some(index);
+                }
+            });
+        });
+        assert_eq!(clicked, Some(0));
+    }
+
+    #[test]
+    fn load_more_asks_when_the_list_end_is_near() {
+        let mut app = test_app();
+        let size = vec2(400.0, 800.0);
+        let clip = Rect::from_min_size(pos2(0.0, 0.0), size);
+        run(size, clip, Vec::new(), |ui| {
+            virtual_rows(ui, 5, 40.0, |ui, _| {
+                ui.allocate_exact_size(vec2(ui.available_width(), 40.0), Sense::hover());
+            });
+            load_more_when_near_end(ui, &mut app, Page::Albums, true);
+        });
+        assert!(
+            app.actions
+                .iter()
+                .any(|action| matches!(action, Action::LoadMore(Page::Albums))),
+            "a short list must request the next page: {:?}",
+            app.actions
+        );
+    }
+
+    #[test]
+    fn load_more_waits_until_a_long_list_is_near_the_end() {
+        let mut app = test_app();
+        let size = vec2(400.0, 200.0);
+        let clip = Rect::from_min_size(pos2(0.0, 0.0), size);
+        run(size, clip, Vec::new(), |ui| {
+            virtual_rows(ui, 10_000, 40.0, |_, _| {});
+            load_more_when_near_end(ui, &mut app, Page::Albums, true);
+        });
+        assert!(
+            app.actions.is_empty(),
+            "the top of a long list must not page: {:?}",
+            app.actions
+        );
+
+        run(
+            size,
+            Rect::from_min_max(pos2(0.0, 399_200.0), pos2(400.0, 400_000.0)),
+            Vec::new(),
+            |ui| {
+                virtual_rows(ui, 10_000, 40.0, |_, _| {});
+                load_more_when_near_end(ui, &mut app, Page::Albums, true);
+            },
+        );
+        assert!(
+            app.actions
+                .iter()
+                .any(|action| matches!(action, Action::LoadMore(Page::Albums))),
+            "scrolling near the end must page: {:?}",
+            app.actions
+        );
+    }
+
+    #[test]
+    fn virtual_wrapped_cards_only_build_visible_rows() {
+        let mut painted = Vec::new();
+        let size = vec2(400.0, 220.0);
+        let clip = Rect::from_min_size(pos2(0.0, 0.0), size);
+        run(size, clip, Vec::new(), |ui| {
+            virtual_wrapped_cards(ui, 200, 180.0, |_, index| painted.push(index));
+        });
+        assert!(
+            painted.len() < 40,
+            "a long grid must not build every card: {} painted",
+            painted.len()
+        );
+        assert!(!painted.is_empty());
+        assert_eq!(painted[0], 0);
+    }
 }

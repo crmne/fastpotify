@@ -1,5 +1,7 @@
 //! The Home page.
 
+use std::sync::Arc;
+
 use egui::{CornerRadius, Rect, Sense, Vec2, pos2, vec2};
 
 use crate::api::models::{PlayableItem, Playlist, pick_image};
@@ -95,6 +97,7 @@ fn quick_access(app: &mut App, ui: &mut egui::Ui) {
                             cover,
                             6.0,
                             Icon::Music,
+                            Some(app.backend.art()),
                         );
                     }
                     let play_room = if hovered && uri.is_some() { 52.0 } else { 12.0 };
@@ -362,17 +365,21 @@ fn track_list(
         theme::section_title(ui, &palette, title);
     }
     ui.add_space(4.0);
-    let uris: Vec<String> = tracks.iter().map(|track| track.uri.clone()).collect();
-    let context = RowContext::Uris(uris);
-    let items: Vec<PlayableItem> = tracks.into_iter().map(PlayableItem::Track).collect();
-    for (index, item) in items.iter().take(limit).enumerate() {
+    let uris: Arc<[String]> = tracks
+        .iter()
+        .map(|track| track.uri.clone())
+        .collect::<Vec<_>>()
+        .into();
+    let context = RowContext::Uris(Arc::clone(&uris));
+    for (index, track) in tracks.iter().take(limit).enumerate() {
+        let item = PlayableItem::Track(track.clone());
         widgets::track_row(
             ui,
             app,
             TrackRow {
                 index,
                 number: None,
-                item,
+                item: &item,
                 context: &context,
                 show_cover: !app.settings.tracklist_compact,
                 show_album: true,
@@ -388,7 +395,7 @@ fn track_list(
         );
     }
     if let Some(label) = more_label
-        && items.len() > limit
+        && tracks.len() > limit
         && theme::link(ui, label, theme::semibold(14.0), palette.secondary).clicked()
     {
         app.actions.push(Action::Open(Page::TopSongs));

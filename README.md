@@ -293,6 +293,7 @@ cargo run --features demo -- --demo --demo-page playlist:pl1 --demo-show queue
 
 Demo mode never writes settings. `--demo-shot <PATH>` writes the window to a
 PNG and exits, which is useful for reproducible interface screenshots.
+`--demo-size WIDTHxHEIGHT` sets the window size for that shot.
 
 ## Contributing
 

@@ -32,37 +32,31 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, page: Page) {
     ui.add_space(14.0);
     match page {
         Page::Albums => {
-            let albums: Vec<_> = app
-                .library
-                .albums
-                .items
-                .iter()
-                .map(|saved| saved.album.clone())
-                .collect();
-            widgets::grid(ui, |ui| {
-                for album in &albums {
-                    let subtitle =
-                        join_names(album.artists.iter().map(|artist| artist.name.as_str()));
-                    let card = widgets::card(
-                        ui,
-                        app,
-                        pick_image(&album.images, 300),
-                        &album.name,
-                        &subtitle,
-                        false,
-                        true,
-                    );
-                    if card.play {
-                        app.actions.push(Action::PlayContext {
-                            uri: album.uri.clone(),
-                            offset_uri: None,
-                            offset_index: None,
-                        });
-                    }
-                    if card.clicked {
-                        app.actions
-                            .push(Action::Open(Page::Album(album.id.clone())));
-                    }
+            let card_height = widgets::card_row_height(ui);
+            let count = app.library.albums.items.len();
+            widgets::virtual_wrapped_cards(ui, count, card_height, |ui, index| {
+                let album = app.library.albums.items[index].album.clone();
+                let id = album.id.clone();
+                let uri = album.uri.clone();
+                let subtitle = join_names(album.artists.iter().map(|artist| artist.name.as_str()));
+                let card = widgets::card(
+                    ui,
+                    app,
+                    pick_image(&album.images, 300),
+                    &album.name,
+                    &subtitle,
+                    false,
+                    true,
+                );
+                if card.play {
+                    app.actions.push(Action::PlayContext {
+                        uri,
+                        offset_uri: None,
+                        offset_index: None,
+                    });
+                }
+                if card.clicked {
+                    app.actions.push(Action::Open(Page::Album(id)));
                 }
             });
             let list = &app.library.albums;
@@ -86,29 +80,30 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, page: Page) {
             );
         }
         Page::Artists => {
-            let artists = app.library.artists.items.clone();
-            widgets::grid(ui, |ui| {
-                for artist in &artists {
-                    let card = widgets::card(
-                        ui,
-                        app,
-                        pick_image(&artist.images, 300),
-                        &artist.name,
-                        "Artist",
-                        true,
-                        true,
-                    );
-                    if card.play {
-                        app.actions.push(Action::PlayContext {
-                            uri: artist.uri.clone(),
-                            offset_uri: None,
-                            offset_index: None,
-                        });
-                    }
-                    if card.clicked {
-                        app.actions
-                            .push(Action::Open(Page::Artist(artist.id.clone())));
-                    }
+            let card_height = widgets::card_row_height(ui);
+            let count = app.library.artists.items.len();
+            widgets::virtual_wrapped_cards(ui, count, card_height, |ui, index| {
+                let artist = app.library.artists.items[index].clone();
+                let id = artist.id.clone();
+                let uri = artist.uri.clone();
+                let card = widgets::card(
+                    ui,
+                    app,
+                    pick_image(&artist.images, 300),
+                    &artist.name,
+                    "Artist",
+                    true,
+                    true,
+                );
+                if card.play {
+                    app.actions.push(Action::PlayContext {
+                        uri,
+                        offset_uri: None,
+                        offset_index: None,
+                    });
+                }
+                if card.clicked {
+                    app.actions.push(Action::Open(Page::Artist(id)));
                 }
             });
             let list = &app.library.artists;
@@ -132,27 +127,22 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, page: Page) {
             );
         }
         Page::Podcasts => {
-            let shows: Vec<_> = app
-                .library
-                .shows
-                .items
-                .iter()
-                .map(|saved| saved.show.clone())
-                .collect();
-            widgets::grid(ui, |ui| {
-                for show in &shows {
-                    let card = widgets::card(
-                        ui,
-                        app,
-                        pick_image(&show.images, 300),
-                        &show.name,
-                        &show.publisher,
-                        false,
-                        false,
-                    );
-                    if card.clicked {
-                        app.actions.push(Action::Open(Page::Show(show.id.clone())));
-                    }
+            let card_height = widgets::card_row_height(ui);
+            let count = app.library.shows.items.len();
+            widgets::virtual_wrapped_cards(ui, count, card_height, |ui, index| {
+                let show = app.library.shows.items[index].show.clone();
+                let id = show.id.clone();
+                let card = widgets::card(
+                    ui,
+                    app,
+                    pick_image(&show.images, 300),
+                    &show.name,
+                    &show.publisher,
+                    false,
+                    false,
+                );
+                if card.clicked {
+                    app.actions.push(Action::Open(Page::Show(id)));
                 }
             });
             let list = &app.library.shows;

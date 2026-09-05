@@ -38,17 +38,16 @@ struct Cli {
     #[arg(long)]
     demo_page: Option<String>,
 
-    /// Extra demo surfaces: a comma-separated list of `queue`, `devices`,
-    /// `shortcuts`, `create`, `light`, `focus`.
+    /// Extra demo surfaces: a comma-separated list of `queue`, `playing-next`,
+    /// `devices`, `shortcuts`, `create`, `light`, `focus`.
     #[cfg(feature = "demo")]
     #[arg(long)]
     demo_show: Option<String>,
 
     /// Write a PNG of the demo window to this path and exit. Implies
-    /// `--demo`. The shot is the window's own frame buffer, so it is however
-    /// large the window is: full screen where that request is honoured, and
-    /// the size of the tile under a tiling window manager, which decides for
-    /// itself.
+    /// `--demo`. Without `--demo-size`, the shot is the window's own frame
+    /// buffer: full screen where that request is honoured, and the size of
+    /// the tile under a tiling window manager, which decides for itself.
     #[cfg(feature = "demo")]
     #[arg(long, value_name = "PATH")]
     demo_shot: Option<std::path::PathBuf>,
@@ -57,6 +56,11 @@ struct Cli {
     #[cfg(feature = "demo")]
     #[arg(long, value_name = "MS", default_value_t = 6000)]
     demo_shot_delay: u64,
+
+    /// Inner window size for `--demo-shot`, as `WIDTHxHEIGHT`.
+    #[cfg(feature = "demo")]
+    #[arg(long, value_name = "WIDTHxHEIGHT", value_parser = parse_demo_size)]
+    demo_size: Option<[f32; 2]>,
 }
 
 /// Remote control of the running instance, for Raycast scripts, launchers,
@@ -388,6 +392,8 @@ fn main() -> eframe::Result<()> {
         due: std::time::Instant::now() + std::time::Duration::from_millis(cli.demo_shot_delay),
         asked: false,
     });
+    #[cfg(feature = "demo")]
+    let demo_inner = cli.demo_size;
     let slot = std::sync::Arc::new(std::sync::Mutex::new(Some(app)));
     loop {
         let creator_slot = std::sync::Arc::clone(&slot);
@@ -399,9 +405,13 @@ fn main() -> eframe::Result<()> {
             MiniWindow::wanted(guard.as_ref().expect("application state present"))
         };
         #[cfg(feature = "demo")]
-        let options = native_options(shot.is_some() && mini.is_none(), mini);
+        let options = native_options(
+            shot.is_some() && mini.is_none() && demo_inner.is_none(),
+            mini,
+            demo_inner,
+        );
         #[cfg(not(feature = "demo"))]
-        let options = native_options(false, mini);
+        let options = native_options(false, mini, None);
         eframe::run_native(
             "Fastpotify",
             options,
@@ -549,7 +559,30 @@ const fn main_window_decorated(on_windows: bool) -> bool {
     !on_windows
 }
 
-fn native_options(fullscreen: bool, mini: Option<MiniWindow>) -> eframe::NativeOptions {
+#[cfg(any(test, feature = "demo"))]
+fn parse_demo_size(spec: &str) -> Result<[f32; 2], String> {
+    let (width, height) = spec
+        .split_once(['x', 'X'])
+        .ok_or_else(|| format!("expected WIDTHxHEIGHT, got {spec}"))?;
+    let width: f32 = width
+        .trim()
+        .parse()
+        .map_err(|_| format!("invalid width in {spec}"))?;
+    let height: f32 = height
+        .trim()
+        .parse()
+        .map_err(|_| format!("invalid height in {spec}"))?;
+    if width < 1.0 || height < 1.0 {
+        return Err(format!("size must be at least 1x1, got {spec}"));
+    }
+    Ok([width, height])
+}
+
+fn native_options(
+    fullscreen: bool,
+    mini: Option<MiniWindow>,
+    inner_size: Option<[f32; 2]>,
+) -> eframe::NativeOptions {
     let icon = if cfg!(target_os = "macos") {
         // macOS takes the dock icon from the bundle's .icns, which is the
         // 1024px drawing with the platform's rounding. Setting a window
@@ -593,8 +626,8 @@ fn native_options(fullscreen: bool, mini: Option<MiniWindow>) -> eframe::NativeO
             // Windows has no equivalent to macOS's floating traffic lights.
             // Removing its decorations lets the app surface fill the window.
             .with_decorations(main_window_decorated(cfg!(windows)))
-            .with_inner_size([1240.0, 800.0])
-            .with_min_inner_size([760.0, 520.0])
+            .with_inner_size(inner_size.unwrap_or([1240.0, 800.0]))
+            .with_min_inner_size(inner_size.unwrap_or([760.0, 520.0]))
             .with_fullscreen(fullscreen),
     };
     eframe::NativeOptions {
@@ -616,11 +649,23 @@ mod native_window_tests {
 
     #[test]
     fn main_window_uses_the_platform_decoration_policy() {
-        let options = native_options(false, None);
+        let options = native_options(false, None, None);
         assert_eq!(options.viewport.decorations, Some(!cfg!(windows)));
         assert_eq!(options.viewport.fullsize_content_view, Some(true));
         assert_eq!(options.viewport.titlebar_shown, Some(false));
         assert_eq!(options.viewport.title_shown, Some(false));
+    }
+
+    #[test]
+    fn demo_size_parses_width_by_height() {
+        assert_eq!(parse_demo_size("760x800").unwrap(), [760.0, 800.0]);
+        assert!(parse_demo_size("wide").is_err());
+        let options = native_options(false, None, Some([760.0, 800.0]));
+        assert_eq!(options.viewport.inner_size, Some(egui::vec2(760.0, 800.0)));
+        assert_eq!(
+            options.viewport.min_inner_size,
+            Some(egui::vec2(760.0, 800.0))
+        );
     }
 
     #[test]

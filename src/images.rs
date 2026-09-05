@@ -1,8 +1,4 @@
 //! Album art: fetched once, kept on disk, decoded by egui on demand.
-//!
-//! [`ArtLoader`] handles `http(s)` URIs in egui's image pipeline. The first
-//! request starts a background download or disk-cache read. A size limit keeps
-//! long sessions from retaining unlimited textures.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -20,12 +16,16 @@ use sha1::{Digest, Sha1};
 ///
 /// Size-based eviction keeps visible images stable.
 const HELD_BYTES: usize = 64 * 1024 * 1024;
+/// After JPEG bytes are dropped, eviction still needs a size. Spotify list
+/// covers are typically 300×300; a GPU texture is RGBA, so 256×256×4 = 256 KiB
+/// is a lower-bound stand-in. Counting them as 0 would stop eviction.
+const TEXTURE_BYTES: usize = 256 * 256 * 4;
 const MAX_ART_BYTES: usize = 8 * 1024 * 1024;
 
 enum Entry {
     Pending,
     Ready {
-        bytes: Arc<[u8]>,
+        bytes: Option<Arc<[u8]>>,
         last_used: Instant,
     },
     Failed(String),
@@ -61,6 +61,19 @@ impl ArtLoader {
         self.inner.fetch(url).await
     }
 
+    /// Marks artwork as visible so size-based eviction keeps it stable.
+    pub fn touch(&self, url: &str) {
+        if let Some(Entry::Ready { last_used, .. }) = self
+            .inner
+            .entries
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get_mut(url)
+        {
+            *last_used = Instant::now();
+        }
+    }
+
     /// Evicts failed entries and the oldest artwork above the memory limit.
     pub fn evict(&self, ctx: &egui::Context) {
         let letting_go: Vec<String> = {
@@ -72,7 +85,8 @@ impl ArtLoader {
                     // Forget failures so a later request can retry.
                     Entry::Failed(_) => failed.push(url.clone()),
                     Entry::Ready { bytes, last_used } => {
-                        held.push((url.clone(), *last_used, bytes.len()))
+                        let size = bytes.as_ref().map_or(TEXTURE_BYTES, |bytes| bytes.len());
+                        held.push((url.clone(), *last_used, size));
                     }
                     Entry::Pending => {}
                 }
@@ -82,6 +96,7 @@ impl ArtLoader {
         };
         for url in letting_go {
             ctx.forget_image(&url);
+            self.inner.drop_bytes(&url);
         }
     }
 
@@ -97,6 +112,12 @@ impl ArtLoader {
         std::fs::metadata(&path)
             .is_ok_and(|meta| meta.is_file() && meta.len() > 0)
             .then_some(path)
+    }
+
+    /// Drops held JPEG bytes once egui has made a texture. The disk cache
+    /// remains for later reloads.
+    pub fn release_bytes(&self, url: &str) {
+        self.inner.drop_bytes(url);
     }
 
     pub fn clear_disk_cache(&self) -> std::io::Result<u64> {
@@ -150,7 +171,9 @@ impl Inner {
     }
 
     async fn fetch(self: &Arc<Self>, url: &str) -> Result<Arc<[u8]>, String> {
-        if let Some(Entry::Ready { bytes, .. }) = self
+        if let Some(Entry::Ready {
+            bytes: Some(bytes), ..
+        }) = self
             .entries
             .lock()
             .unwrap_or_else(|p| p.into_inner())
@@ -204,7 +227,7 @@ impl Inner {
             let result = loader.fetch(&url).await;
             let entry = match result {
                 Ok(bytes) => Entry::Ready {
-                    bytes,
+                    bytes: Some(bytes),
                     last_used: Instant::now(),
                 },
                 Err(error) => Entry::Failed(error),
@@ -216,6 +239,18 @@ impl Inner {
                 .insert(url, entry);
             ctx.request_repaint();
         });
+    }
+
+    fn drop_bytes(&self, url: &str) {
+        if let Some(entry) = self
+            .entries
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get_mut(url)
+            && let Entry::Ready { bytes, .. } = entry
+        {
+            *bytes = None;
+        }
     }
 }
 
@@ -230,13 +265,26 @@ impl BytesLoader for ArtLoader {
         }
         let mut entries = self.inner.entries.lock().unwrap_or_else(|p| p.into_inner());
         match entries.get_mut(uri) {
-            Some(Entry::Ready { bytes, last_used }) => {
+            Some(Entry::Ready {
+                bytes: Some(bytes),
+                last_used,
+            }) => {
                 *last_used = Instant::now();
                 Ok(BytesPoll::Ready {
                     size: None,
                     bytes: Bytes::Shared(Arc::clone(bytes)),
                     mime: None,
                 })
+            }
+            Some(Entry::Ready {
+                bytes: None,
+                last_used,
+            }) => {
+                *last_used = Instant::now();
+                entries.insert(uri.to_string(), Entry::Pending);
+                drop(entries);
+                self.inner.start(ctx, uri.to_string());
+                Ok(BytesPoll::Pending { size: None })
             }
             Some(Entry::Pending) => Ok(BytesPoll::Pending { size: None }),
             Some(Entry::Failed(error)) => Err(LoadError::Loading(error.clone())),
@@ -272,7 +320,9 @@ impl BytesLoader for ArtLoader {
             .unwrap_or_else(|p| p.into_inner())
             .values()
             .map(|entry| match entry {
-                Entry::Ready { bytes, .. } => bytes.len(),
+                Entry::Ready {
+                    bytes: Some(bytes), ..
+                } => bytes.len(),
                 _ => 0,
             })
             .sum()
@@ -315,6 +365,7 @@ pub fn accent_color(bytes: &[u8]) -> Option<[u8; 3]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     /// The media controls ask for a file rather than a URL, and have to be
     /// told "not yet" rather than handed a path to nothing: macOS loads cover
@@ -421,5 +472,76 @@ mod tests {
     #[test]
     fn nothing_held_lets_nothing_go() {
         assert!(over_budget(Vec::new(), 0).is_empty());
+    }
+
+    #[test]
+    fn texture_only_entries_still_count_toward_the_budget() {
+        assert_eq!(TEXTURE_BYTES, 256 * 256 * 4);
+        let many = (0..300)
+            .map(|i| {
+                (
+                    format!("https://i.scdn.co/image/{i}"),
+                    Instant::now() - Duration::from_secs(i),
+                    TEXTURE_BYTES,
+                )
+            })
+            .collect();
+        let dropped = over_budget(many, HELD_BYTES);
+        assert!(
+            !dropped.is_empty(),
+            "256 KiB stand-in must still evict once the 64 MiB budget is full"
+        );
+    }
+
+    #[test]
+    fn releasing_bytes_reloads_from_disk_off_the_ui_thread() {
+        use egui::load::BytesLoader;
+        use std::time::Duration as StdDuration;
+
+        let dir = std::env::temp_dir().join(format!(
+            "fastpotify-art-reload-{}-{}",
+            std::process::id(),
+            Instant::now().elapsed().as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .expect("a runtime for disk reload");
+        let loader = ArtLoader::new(
+            reqwest::Client::new(),
+            runtime.handle().clone(),
+            dir.clone(),
+        );
+        let url = "https://i.scdn.co/image/reload";
+        let path = loader.inner.cache_path(url);
+        std::fs::create_dir_all(path.parent().expect("cache dir")).expect("cache dir");
+        std::fs::write(&path, b"\xff\xd8\xff jpeg-ish").expect("cached jpeg");
+        loader.inner.entries.lock().expect("lock").insert(
+            url.to_string(),
+            Entry::Ready {
+                bytes: None,
+                last_used: Instant::now(),
+            },
+        );
+        let ctx = egui::Context::default();
+        let first = loader.load(&ctx, url).expect("load");
+        assert!(
+            matches!(first, BytesPoll::Pending { .. }),
+            "disk reload must not block the UI thread"
+        );
+        let deadline = Instant::now() + StdDuration::from_secs(2);
+        loop {
+            std::thread::sleep(StdDuration::from_millis(20));
+            match loader.load(&ctx, url) {
+                Ok(BytesPoll::Ready { .. }) => break,
+                Ok(BytesPoll::Pending { .. }) if Instant::now() < deadline => continue,
+                _ => panic!("reload did not finish"),
+            }
+        }
+        loader.forget_all();
+        assert!(loader.inner.entries.lock().expect("lock").is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
