@@ -230,13 +230,14 @@ impl PlaylistStyle {
 }
 
 /// A `#RRGGBB` colour. Winamp accepted the hash missing and extra digits
-/// after the six, so both are taken here.
+/// after the six, so both are taken here. Anything but six hex digits at
+/// the front is no colour, a multi-byte character included: this reads
+/// bytes, since slicing the text two bytes at a time would panic inside
+/// one.
 pub fn hex(value: &str) -> Option<Rgb> {
-    let digits = value.trim().trim_start_matches('#');
-    if digits.len() < 6 || !digits.is_char_boundary(6) {
-        return None;
-    }
-    let channel = |at: usize| u8::from_str_radix(&digits[at..at + 2], 16).ok();
+    let digits = value.trim().trim_start_matches('#').as_bytes();
+    let nibble = |at: usize| digits.get(at).and_then(|byte| (*byte as char).to_digit(16));
+    let channel = |at: usize| Some((nibble(at)? << 4 | nibble(at + 1)?) as u8);
     Some([channel(0)?, channel(2)?, channel(4)?])
 }
 
@@ -324,6 +325,22 @@ mod tests {
             style.normal_background,
             PlaylistStyle::default().normal_background
         );
+    }
+
+    #[test]
+    fn a_colour_with_a_multibyte_character_is_no_colour() {
+        // A byte no UTF-8 decoder accepts, such as a Cyrillic А typed for a
+        // Latin A in a Windows-1251 file, comes through the lossy decode as
+        // a three-byte replacement character. Slicing two bytes into it
+        // panicked the skin loader.
+        let style = PlaylistStyle::parse(&String::from_utf8_lossy(
+            b"[Text]\nNormal=#\xC00B0C0\nCurrent=#FFFFFF\n",
+        ));
+        assert_eq!(style.normal, PlaylistStyle::default().normal);
+        assert_eq!(style.current, [0xff, 0xff, 0xff]);
+        assert_eq!(hex("ab\u{fffd}c"), None);
+        assert_eq!(hex("#0\u{0410}0B0C"), None);
+        assert_eq!(hex("\u{fffd}"), None);
     }
 
     #[test]
