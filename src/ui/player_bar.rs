@@ -67,7 +67,7 @@ fn now_playing_block(app: &mut App, ui: &mut egui::Ui, region: Rect, now: Option
     let cover_rect = Rect::from_min_size(pos2(region.left() + 4.0, cy - 28.0), Vec2::splat(56.0));
 
     let Some(now) = now else {
-        super::widgets::paint_cover(ui, &palette, None, cover_rect, 6.0, Icon::Music);
+        super::widgets::paint_cover(ui, &palette, None, cover_rect, 6.0, Icon::Music, None);
         let text_left = cover_rect.right() + 12.0;
         let text_rect = Rect::from_min_size(
             pos2(text_left, cy - 17.0),
@@ -101,6 +101,7 @@ fn now_playing_block(app: &mut App, ui: &mut egui::Ui, region: Rect, now: Option
         cover_rect,
         6.0,
         Icon::Music,
+        Some(app.backend.art()),
     );
     let song = app.now_playing_item();
     let drag_sense = if song.is_some() {
