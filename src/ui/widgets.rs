@@ -146,6 +146,34 @@ pub fn virtual_rows(
     ui.spacing_mut().item_spacing = previous_spacing;
 }
 
+/// A wrapping grid of cards, laid out row by row so only visible cards are
+/// measured and painted.
+pub fn virtual_wrapped_cards(
+    ui: &mut Ui,
+    count: usize,
+    card_height: f32,
+    mut card: impl FnMut(&mut Ui, usize),
+) {
+    if count == 0 {
+        return;
+    }
+    let spacing = CARD_GAP / 2.0;
+    let row_width = ui.available_width().max(CARD_WIDTH);
+    let cards_per_row =
+        ((row_width + spacing) / (CARD_WIDTH + spacing)).floor().max(1.0) as usize;
+    let row_count = count.div_ceil(cards_per_row);
+    virtual_rows(ui, row_count, card_height + CARD_GAP, |ui, row| {
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = vec2(spacing, CARD_GAP);
+            let start = row * cards_per_row;
+            let end = (start + cards_per_row).min(count);
+            for index in start..end {
+                card(ui, index);
+            }
+        });
+    });
+}
+
 /// Asks for the next page when the user scrolls near the end of a list.
 pub fn load_more_when_near_end(ui: &Ui, app: &mut App, page: Page, can_load: bool) {
     if !can_load {
@@ -1473,6 +1501,24 @@ pub fn ellipsized(
 pub struct CardResponse {
     pub clicked: bool,
     pub play: bool,
+}
+
+/// Fixed height of a [`card`] row for virtualised grids.
+pub fn card_row_height(ui: &mut Ui) -> f32 {
+    const PAD: f32 = 12.0;
+    const TITLE_GAP: f32 = 10.0;
+    const SUBTITLE_GAP: f32 = 2.0;
+    const BOTTOM_PAD: f32 = 8.0;
+    let image_size = CARD_WIDTH - 2.0 * PAD;
+    let title_font = theme::semibold(14.0);
+    let subtitle_font = theme::regular(12.5);
+    let (title_row, subtitle_row) = ui.fonts_mut(|fonts| {
+        (
+            fonts.row_height(&title_font),
+            fonts.row_height(&subtitle_font),
+        )
+    });
+    PAD + image_size + TITLE_GAP + title_row + SUBTITLE_GAP + 2.0 * subtitle_row + BOTTOM_PAD
 }
 
 /// A cover-and-title card for grids and shelves.
