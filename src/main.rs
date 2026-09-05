@@ -406,7 +406,11 @@ fn main() -> eframe::Result<()> {
             MiniWindow::wanted(guard.as_ref().expect("application state present"))
         };
         #[cfg(feature = "demo")]
-        let options = native_options(shot.is_some() && mini.is_none(), mini, demo_inner);
+        let options = native_options(
+            shot.is_some() && mini.is_none() && demo_inner.is_none(),
+            mini,
+            demo_inner,
+        );
         #[cfg(not(feature = "demo"))]
         let options = native_options(false, mini, None);
         eframe::run_native(
@@ -657,6 +661,12 @@ mod native_window_tests {
     fn demo_size_parses_width_by_height() {
         assert_eq!(parse_demo_size("760x800").unwrap(), [760.0, 800.0]);
         assert!(parse_demo_size("wide").is_err());
+        let options = native_options(false, None, Some([760.0, 800.0]));
+        assert_eq!(options.viewport.inner_size, Some(egui::vec2(760.0, 800.0)));
+        assert_eq!(
+            options.viewport.min_inner_size,
+            Some(egui::vec2(760.0, 800.0))
+        );
     }
 
     #[test]
