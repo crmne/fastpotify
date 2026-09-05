@@ -6182,6 +6182,7 @@ impl App {
             crate::ui::show(self, ui);
         }
         self.apply_actions(ctx);
+        self.refresh_frame_now();
         self.sync_media_controls();
 
         if !self.settings.winamp_window && !self.switch_intent {
@@ -6218,6 +6219,7 @@ impl App {
             // Close the window and keep the process running in the tray.
             self.hide_intent = true;
         }
+        self.frame_now = None;
     }
 
     /// Locks each scroll gesture to one axis.
