@@ -136,5 +136,6 @@ cargo run --release --features demo -- \
   --demo-shot docs/screenshot.png --demo-page playlist:pl1 --demo-show queue
 ```
 
-The image uses the current window size. `--demo-shot-delay <MS>` sets how long
-to wait for cover art before taking it.
+The image uses the current window size. `--demo-size WIDTHxHEIGHT` sets that
+size for a shot (for example `760x800` or `1240x800`). `--demo-shot-delay <MS>`
+sets how long to wait for cover art before taking it.
