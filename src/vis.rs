@@ -375,6 +375,7 @@ impl Analyser {
             return self.bars;
         }
         self.last_step = Some(due.max(now - STEP));
+        self.wave.fill(0.0);
         for (slot, sample) in self.wave.iter_mut().zip(samples.iter()) {
             *slot = sample * CHANNEL_SUM;
         }
