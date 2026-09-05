@@ -37,8 +37,10 @@ requests and pauses a session when Spotify sends a `Retry-After` response.
 
 Spotify also limits apps created since November 2024. These apps cannot access
 Spotify-owned playlists, related artists, recommendations, or audio features.
-This is why a personal app cannot handle every request and complete playlist
-views still use the shared app. See [How It Connects](/how-it-connects/).
+This is why a personal app cannot handle every request. Complete playlist
+library views stay on the shared app. Playlists other people own, and every
+playlist when there is no personal app, are read over the librespot session
+while local playback is signed in. See [How It Connects](/how-it-connects/).
 
 ## librespot session
 
@@ -50,6 +52,10 @@ clients. Fastpotify uses its session for:
 - **Playlist permissions.** The rootlist shows when a playlist shared by
   invitation can be edited. The Web API's `collaborative` flag does not cover
   these playlists. Fastpotify cannot manage collaborators.
+- **Playlists the shared app would otherwise serve.** Title, cover, and
+  songs of other people's playlists, and of the account's own when there is
+  no personal app, so they open without the shared app's quota. Whether a
+  playlist is public comes from the Web API's library list.
 - **Lyrics** when Spotify has them.
 - **Display names** for the user IDs attached to songs in a playlist.
 - **Song radio and autoplay** through Spotify's context resolver.

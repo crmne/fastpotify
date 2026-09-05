@@ -26,6 +26,12 @@ the shared app for the complete playlist library, playlist-bearing search,
 external playlist metadata and items, and those unavailable operations. Your
 app handles supported requests. The shared app handles the rest.
 
+Playlists are the exception. While local playback is signed in, Fastpotify
+reads the ones the shared app would serve, other people's and, without a
+personal app, your own, over the same connection that streams the audio, as
+Spotify's own apps do, so they open without waiting on the shared app's quota
+at all.
+
 ## Make a Spotify app
 
 1. Open the [Spotify developer dashboard](https://developer.spotify.com/dashboard)
