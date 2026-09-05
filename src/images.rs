@@ -99,6 +99,17 @@ impl ArtLoader {
             .then_some(path)
     }
 
+    pub fn prefetch(&self, ctx: &egui::Context, url: &str) -> bool {
+        let mut entries = self.inner.entries.lock().unwrap_or_else(|p| p.into_inner());
+        if entries.contains_key(url) {
+            return false;
+        }
+        entries.insert(url.to_string(), Entry::Pending);
+        drop(entries);
+        self.inner.start(ctx, url.to_string());
+        true
+    }
+
     pub fn clear_disk_cache(&self) -> std::io::Result<u64> {
         let mut removed = 0;
         for entry in std::fs::read_dir(&self.inner.cache_dir)? {
@@ -344,6 +355,27 @@ mod tests {
 
         std::fs::write(&path, b"\xff\xd8\xff jpeg-ish").expect("a file with bytes");
         assert_eq!(loader.cached_file(url), Some(path));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn prefetching_starts_one_download_and_not_another() {
+        let dir = std::env::temp_dir().join(format!("fastpotify-prefetch-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("a runtime to hand the loader");
+        let loader = ArtLoader::new(
+            reqwest::Client::new(),
+            runtime.handle().clone(),
+            dir.clone(),
+        );
+        let ctx = egui::Context::default();
+        let url = "https://i.scdn.co/image/never-drawn";
+
+        assert!(loader.prefetch(&ctx, url), "nobody has asked for it yet");
+        assert!(!loader.prefetch(&ctx, url), "it is already on its way");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
