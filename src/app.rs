@@ -700,15 +700,13 @@ impl App {
                 )));
             }
         }
-        if let Some(pos) = self.session_window_pos.take() {
-            // On Wayland this is a no-op. Validate against a large virtual
-            // desktop so a window that was on a now-disconnected monitor
-            // doesn't open off-screen.
-            if (-1000.0..=5000.0).contains(&pos[0]) && (-1000.0..=5000.0).contains(&pos[1]) {
-                ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(
-                    pos[0], pos[1],
-                )));
-            }
+        // If the saved position is off-screen, leave the window where eframe put it.
+        if let Some(pos) = self.session_window_pos.take()
+            && crate::window::can_restore(pos, ctx.pixels_per_point())
+        {
+            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(
+                pos[0], pos[1],
+            )));
         }
         // egui's consensus wheel speed is 40 points per line, about a third
         // of what every other player scrolls per notch; trackpads report
