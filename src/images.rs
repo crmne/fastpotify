@@ -16,6 +16,8 @@ use sha1::{Digest, Sha1};
 ///
 /// Size-based eviction keeps visible images stable.
 const HELD_BYTES: usize = 64 * 1024 * 1024;
+/// Rough footprint kept for textures whose JPEG bytes were already dropped.
+const TEXTURE_BYTES: usize = 32 * 1024;
 const MAX_ART_BYTES: usize = 8 * 1024 * 1024;
 
 enum Entry {
@@ -81,8 +83,8 @@ impl ArtLoader {
                     // Forget failures so a later request can retry.
                     Entry::Failed(_) => failed.push(url.clone()),
                     Entry::Ready { bytes, last_used } => {
-                        let bytes = bytes.as_ref().map_or(0, |bytes| bytes.len());
-                        held.push((url.clone(), *last_used, bytes));
+                        let size = bytes.as_ref().map_or(TEXTURE_BYTES, |bytes| bytes.len());
+                        held.push((url.clone(), *last_used, size));
                     }
                     Entry::Pending => {}
                 }
@@ -285,18 +287,29 @@ impl BytesLoader for ArtLoader {
                 last_used,
             }) => {
                 *last_used = Instant::now();
-                if let Some(bytes) = self.inner.read_disk(uri) {
-                    Ok(BytesPoll::Ready {
+                let url = uri.to_string();
+                drop(entries);
+                if let Some(bytes) = self.inner.read_disk(&url) {
+                    let mut entries = self.inner.entries.lock().unwrap_or_else(|p| p.into_inner());
+                    if let Some(Entry::Ready {
+                        bytes: slot,
+                        last_used,
+                    }) = entries.get_mut(&url)
+                    {
+                        *slot = Some(Arc::clone(&bytes));
+                        *last_used = Instant::now();
+                    }
+                    return Ok(BytesPoll::Ready {
                         size: None,
                         bytes: Bytes::Shared(bytes),
                         mime: None,
-                    })
-                } else {
-                    entries.insert(uri.to_string(), Entry::Pending);
-                    drop(entries);
-                    self.inner.start(ctx, uri.to_string());
-                    Ok(BytesPoll::Pending { size: None })
+                    });
                 }
+                let mut entries = self.inner.entries.lock().unwrap_or_else(|p| p.into_inner());
+                entries.insert(url, Entry::Pending);
+                drop(entries);
+                self.inner.start(ctx, uri.to_string());
+                Ok(BytesPoll::Pending { size: None })
             }
             Some(Entry::Pending) => Ok(BytesPoll::Pending { size: None }),
             Some(Entry::Failed(error)) => Err(LoadError::Loading(error.clone())),
