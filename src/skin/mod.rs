@@ -171,9 +171,13 @@ impl Skin {
             });
         }
         let text = |file: &str| {
-            files
-                .get(file)
-                .map(|bytes| String::from_utf8_lossy(bytes).into_owned())
+            files.get(file).map(|bytes| {
+                // A skin edited on Windows carries a byte order mark, and U+FEFF is not
+                // whitespace, so `trim` leaves it on the first line: `[Text]` stops being a
+                // section header and the first `r,g,b` stops being a colour.
+                let text = String::from_utf8_lossy(bytes);
+                text.strip_prefix('\u{feff}').unwrap_or(&text).to_owned()
+            })
         };
         let playlist = text("pledit.txt")
             .map(|text| PlaylistStyle::parse(&text))
@@ -342,6 +346,26 @@ mod tests {
         assert_eq!(skin.playlist.normal, [0x12, 0x34, 0x56]);
         assert_eq!(skin.vis_colors[0], [9, 8, 7]);
         assert_eq!(skin.vis_colors[1], config::DEFAULT_VIS_COLORS[1]);
+    }
+
+    #[test]
+    fn a_skin_saved_with_a_byte_order_mark_is_still_read() {
+        const BOM: &[u8] = b"\xef\xbb\xbf";
+        let mut pledit = BOM.to_vec();
+        pledit.extend_from_slice(b"[Text]\r\nNormal=#123456\r\n");
+        let mut viscolor = BOM.to_vec();
+        viscolor.extend_from_slice(b"9,8,7\n1,2,3\n");
+
+        let archive = zip::write(&[
+            ("main.bmp", &png(275, 116, [1, 2, 3]), true),
+            ("pledit.txt", &pledit, false),
+            ("viscolor.txt", &viscolor, false),
+        ]);
+        let skin = Skin::from_archive("bom", &archive).unwrap();
+
+        assert_eq!(skin.playlist.normal, [0x12, 0x34, 0x56]);
+        assert_eq!(skin.vis_colors[0], [9, 8, 7]);
+        assert_eq!(skin.vis_colors[1], [1, 2, 3]);
     }
 
     #[test]
