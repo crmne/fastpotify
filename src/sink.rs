@@ -5,7 +5,7 @@
 //! and reports failures through the UI. Fastpotify can then remain available
 //! as a Connect remote until an output appears.
 
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -34,6 +34,9 @@ const DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Length of each side of an interrupted-track fade.
 const INTERRUPT_FADE: Duration = Duration::from_millis(10);
+
+/// How long Play takes to come up, and Pause to go down.
+const TRANSPORT_FADE: Duration = Duration::from_millis(250);
 
 /// How often playback looks at which output the system calls its default.
 const DEFAULT_CHECK_INTERVAL: Duration = Duration::from_secs(2);
@@ -128,33 +131,87 @@ impl AudioControl {
     }
 }
 
+/// Frames handed to rodio, and frames it has finished with.
+/// The difference is what is still queued.
+struct Queued {
+    appended: AtomicU64,
+    consumed: AtomicU64,
+}
+
+impl Queued {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            appended: AtomicU64::new(0),
+            consumed: AtomicU64::new(0),
+        })
+    }
+
+    /// Frames handed over and not yet played.
+    fn frames(&self) -> u64 {
+        self.appended
+            .load(Ordering::Relaxed)
+            .saturating_sub(self.consumed.load(Ordering::Relaxed))
+    }
+}
+
+/// The range a level moves over, as a fixed point fraction of full gain.
+const SCALE: u32 = 1 << 24;
+
 /// A sample-clocked gain shared by every chunk in one rodio queue.
 struct Envelope {
     level: AtomicU32,
     target: AtomicU32,
-    frames: u32,
+    /// How far `level` moves each frame. Set per fade, so a ramp can be cut
+    /// to fit the sound that is left to carry it.
+    step: AtomicU32,
+    /// The step for this envelope's nominal length, and its slowest.
+    full_step: u32,
 }
 
 impl Envelope {
-    fn full(sample_rate: u32) -> Arc<Self> {
-        let frames = fade_frames(sample_rate);
+    /// Resting fully open, for a signal that is already sounding.
+    fn open(sample_rate: u32, length: Duration) -> Arc<Self> {
+        Self::at(sample_rate, length, SCALE)
+    }
+
+    /// Resting closed, and staying there until something raises it.
+    fn closed(sample_rate: u32, length: Duration) -> Arc<Self> {
+        Self::at(sample_rate, length, 0)
+    }
+
+    /// Closed, and already on its way up.
+    fn rising(sample_rate: u32, length: Duration) -> Arc<Self> {
+        let envelope = Self::closed(sample_rate, length);
+        envelope.fade_in();
+        envelope
+    }
+
+    fn at(sample_rate: u32, length: Duration, level: u32) -> Arc<Self> {
+        let full_step = step_over(fade_frames(sample_rate, length));
         Arc::new(Self {
-            level: AtomicU32::new(frames),
-            target: AtomicU32::new(frames),
-            frames,
+            level: AtomicU32::new(level),
+            target: AtomicU32::new(level),
+            step: AtomicU32::new(full_step),
+            full_step,
         })
     }
 
-    fn fade_in(sample_rate: u32) -> Arc<Self> {
-        let frames = fade_frames(sample_rate);
-        Arc::new(Self {
-            level: AtomicU32::new(0),
-            target: AtomicU32::new(frames),
-            frames,
-        })
+    fn fade_in(&self) {
+        self.step.store(self.full_step, Ordering::Relaxed);
+        self.target.store(SCALE, Ordering::Relaxed);
     }
 
     fn fade_out(&self) {
+        self.step.store(self.full_step, Ordering::Relaxed);
+        self.target.store(0, Ordering::Relaxed);
+    }
+
+    /// Fades out over `frames` of sound, or the nominal length if that is
+    /// shorter.
+    fn fade_out_over(&self, frames: u64) {
+        let frames = frames.clamp(1, u64::from(u32::MAX)) as u32;
+        self.step
+            .store(step_over(frames).max(self.full_step), Ordering::Relaxed);
         self.target.store(0, Ordering::Relaxed);
     }
 
@@ -166,37 +223,70 @@ impl Envelope {
     fn next_gain(&self) -> f32 {
         let level = self.level.load(Ordering::Relaxed);
         let target = self.target.load(Ordering::Relaxed);
+        let step = self.step.load(Ordering::Relaxed);
         let next = match level.cmp(&target) {
-            std::cmp::Ordering::Less => level + 1,
-            std::cmp::Ordering::Greater => level - 1,
+            std::cmp::Ordering::Less => level.saturating_add(step).min(target),
+            std::cmp::Ordering::Greater => level.saturating_sub(step).max(target),
             std::cmp::Ordering::Equal => level,
         };
         self.level.store(next, Ordering::Relaxed);
-        level as f32 / self.frames as f32
+        level as f32 / SCALE as f32
     }
 }
 
-fn fade_frames(sample_rate: u32) -> u32 {
-    (u64::from(sample_rate) * INTERRUPT_FADE.as_millis() as u64 / 1_000).max(1) as u32
+/// The per-frame movement that crosses the whole range in `frames`.
+fn step_over(frames: u32) -> u32 {
+    SCALE.div_ceil(frames.max(1)).max(1)
+}
+
+fn fade_frames(sample_rate: u32, length: Duration) -> u32 {
+    (u64::from(sample_rate) * length.as_millis() as u64 / 1_000).max(1) as u32
 }
 
 /// Applies the shared interruption envelope on rodio's output thread, so it
 /// can smooth audio that was already queued when the user changes track.
 struct TransitionSource {
     inner: rodio::buffer::SamplesBuffer,
-    envelope: Arc<Envelope>,
+    /// Smooths a track the listener replaced part way through.
+    interrupt: Arc<Envelope>,
+    /// Carries Play and Pause.
+    transport: Arc<Envelope>,
+    /// The count this chunk's frames belong to.
+    queued: Arc<Queued>,
+    /// Frames of this chunk not yet handed on.
+    remaining: u32,
     channel: usize,
     gain: f32,
 }
 
 impl TransitionSource {
-    fn new(inner: rodio::buffer::SamplesBuffer, envelope: Arc<Envelope>) -> Self {
+    fn new(
+        inner: rodio::buffer::SamplesBuffer,
+        interrupt: Arc<Envelope>,
+        transport: Arc<Envelope>,
+        queued: Arc<Queued>,
+        frames: u32,
+    ) -> Self {
         Self {
             inner,
-            envelope,
+            interrupt,
+            transport,
+            queued,
+            remaining: frames,
             channel: 0,
             gain: 1.0,
         }
+    }
+}
+
+impl Drop for TransitionSource {
+    /// rodio drops whole sources on `stop`, which every track change does, so
+    /// a chunk can end without being played. Settling up here is what stops
+    /// the count drifting away from the queue it is meant to describe.
+    fn drop(&mut self) {
+        self.queued
+            .consumed
+            .fetch_add(u64::from(self.remaining), Ordering::Relaxed);
     }
 }
 
@@ -206,7 +296,11 @@ impl Iterator for TransitionSource {
     fn next(&mut self) -> Option<Self::Item> {
         let sample = self.inner.next()?;
         if self.channel == 0 {
-            self.gain = self.envelope.next_gain();
+            // Both step every frame. They are independent ramps that happen
+            // to share a signal, so a skip during a pause rides them at once.
+            self.gain = self.interrupt.next_gain() * self.transport.next_gain();
+            self.remaining = self.remaining.saturating_sub(1);
+            self.queued.consumed.fetch_add(1, Ordering::Relaxed);
         }
         self.channel = (self.channel + 1) % NUM_CHANNELS as usize;
         Some(sample * self.gain)
@@ -283,6 +377,11 @@ struct Output {
     sample_rate: u32,
     resampler: Option<Resampler>,
     envelope: Arc<Envelope>,
+    /// The Play and Pause ramp, kept across track changes so a skip during a
+    /// fade does not snap the level back.
+    transport: Arc<Envelope>,
+    /// How much sound is queued, so Pause can cut its ramp to fit.
+    queued: Arc<Queued>,
     /// Whether this track has supplied audio since its last stop.
     fed: bool,
     last_write: Option<Instant>,
@@ -380,6 +479,7 @@ impl Sink for RodioSink {
         self.ensure_open()?;
         self.apply_volume();
         if let Some(output) = &mut self.output {
+            output.transport.fade_in();
             output.sink.play();
         }
         Ok(())
@@ -388,6 +488,11 @@ impl Sink for RodioSink {
     /// Never fails: librespot exits the process when a sink cannot stop.
     fn stop(&mut self) -> SinkResult<()> {
         if let Some(output) = &mut self.output {
+            // The drain below plays the queue out, so the ramp is cut to
+            // what is in it. During steady playback that is the whole
+            // 250 ms; just after a seek or a track change it is whatever has
+            // been decoded since.
+            output.transport.fade_out_over(output.queued.frames());
             let deadline = Instant::now() + DRAIN_TIMEOUT;
             while !output.sink.empty() && !output.failed() && Instant::now() < deadline {
                 thread::sleep(Duration::from_millis(10));
@@ -413,10 +518,11 @@ impl Sink for RodioSink {
             && let Some(output) = &mut self.output
         {
             let sink = Arc::new(rodio::Sink::connect_new(output._stream.mixer()));
-            let envelope = Envelope::fade_in(output.sample_rate);
+            let envelope = Envelope::rising(output.sample_rate, INTERRUPT_FADE);
             self.control.register(&sink, Arc::clone(&envelope));
             output.sink = sink;
             output.envelope = envelope;
+            output.queued = Queued::new();
             output.resampler =
                 Resampler::new(SAMPLE_RATE, output.sample_rate, NUM_CHANNELS as usize);
             output.fed = false;
@@ -441,14 +547,24 @@ impl Sink for RodioSink {
                 .unwrap_or(0);
             log::warn!("audio queue ran dry; next packet arrived after {late_ms} ms");
         }
+        output.transport.fade_in();
+        let frames = (samples.len() / NUM_CHANNELS as usize) as u32;
         let source = rodio::buffer::SamplesBuffer::new(
             NUM_CHANNELS as rodio::ChannelCount,
             output.sample_rate as rodio::SampleRate,
             samples,
         );
         output
-            .sink
-            .append(TransitionSource::new(source, Arc::clone(&output.envelope)));
+            .queued
+            .appended
+            .fetch_add(u64::from(frames), Ordering::Relaxed);
+        output.sink.append(TransitionSource::new(
+            source,
+            Arc::clone(&output.envelope),
+            Arc::clone(&output.transport),
+            Arc::clone(&output.queued),
+            frames,
+        ));
         output.fed = true;
         output.last_write = Some(now);
         // Let rodio drain a little; without this the whole track would be
@@ -624,7 +740,9 @@ fn open_output(
         );
     }
     let sink = Arc::new(rodio::Sink::connect_new(stream.mixer()));
-    let envelope = Envelope::full(sample_rate);
+    let envelope = Envelope::open(sample_rate, INTERRUPT_FADE);
+    // The first Play has silence to come up from instead of a hard edge.
+    let transport = Envelope::closed(sample_rate, TRANSPORT_FADE);
     control.register(&sink, Arc::clone(&envelope));
     Ok(Output {
         sink,
@@ -634,6 +752,8 @@ fn open_output(
         sample_rate,
         resampler,
         envelope,
+        transport,
+        queued: Queued::new(),
         fed: false,
         last_write: None,
     })
@@ -728,31 +848,173 @@ mod tests {
         assert!(sink.stop().is_ok());
     }
 
+    /// A rate that keeps a ramp short enough to step through in a test.
+    const RATE: u32 = 1_000;
+
+    /// Ramps that stay out of the way, for tests about something else.
+    fn wide_open() -> (Arc<Envelope>, Arc<Envelope>) {
+        (
+            Envelope::open(RATE, INTERRUPT_FADE),
+            Envelope::open(RATE, TRANSPORT_FADE),
+        )
+    }
+
+    /// A chunk of full scale sound, counted into `queued` the way `write`
+    /// counts one, and shaped by the ramps it is handed.
+    fn chunk(
+        frames: u32,
+        interrupt: &Arc<Envelope>,
+        transport: &Arc<Envelope>,
+        queued: &Arc<Queued>,
+    ) -> TransitionSource {
+        queued
+            .appended
+            .fetch_add(u64::from(frames), Ordering::Relaxed);
+        TransitionSource::new(
+            rodio::buffer::SamplesBuffer::new(
+                NUM_CHANNELS.into(),
+                RATE,
+                vec![1.0; frames as usize * NUM_CHANNELS as usize],
+            ),
+            Arc::clone(interrupt),
+            Arc::clone(transport),
+            Arc::clone(queued),
+            frames,
+        )
+    }
+
+    /// The gain each frame comes out at. The sound is full scale, so every
+    /// sample is the gain that shaped it.
+    fn gains(frames: u32, interrupt: &Arc<Envelope>, transport: &Arc<Envelope>) -> Vec<f32> {
+        chunk(frames, interrupt, transport, &Queued::new())
+            .step_by(NUM_CHANNELS as usize)
+            .collect()
+    }
+
+    /// Asserts a ramp still sounds for every one of `frames`, and is silent
+    /// on the frame after.
+    fn falls_silent_after(envelope: &Envelope, frames: u32) {
+        for step in 0..frames {
+            assert!(envelope.next_gain() > 0.0, "silent {step} frames early");
+        }
+        assert_eq!(envelope.next_gain(), 0.0);
+        assert!(envelope.silent());
+    }
+
     #[test]
     fn an_interrupted_signal_fades_out_and_a_replacement_fades_in() {
-        let rate = 1_000;
-        let frames = fade_frames(rate) as usize;
-        let samples = vec![1.0; (frames + 2) * NUM_CHANNELS as usize];
+        let frames = fade_frames(RATE, INTERRUPT_FADE);
+        let (interrupt, transport) = wide_open();
+        interrupt.fade_out();
 
-        let outgoing = Envelope::full(rate);
-        outgoing.fade_out();
-        let faded: Vec<_> = TransitionSource::new(
-            rodio::buffer::SamplesBuffer::new(NUM_CHANNELS.into(), rate, samples.clone()),
-            outgoing,
-        )
-        .collect();
+        let faded = gains(frames + 2, &interrupt, &transport);
         assert_eq!(faded[0], 1.0);
-        assert_eq!(faded[1], 1.0);
-        assert_eq!(faded[frames * NUM_CHANNELS as usize], 0.0);
+        assert_eq!(faded[frames as usize], 0.0);
 
-        let incoming = Envelope::fade_in(rate);
-        let faded: Vec<_> = TransitionSource::new(
-            rodio::buffer::SamplesBuffer::new(NUM_CHANNELS.into(), rate, samples),
-            incoming,
-        )
-        .collect();
-        assert_eq!(faded[0], 0.0);
-        assert_eq!(faded[1], 0.0);
-        assert_eq!(faded[frames * NUM_CHANNELS as usize], 1.0);
+        let incoming = Envelope::rising(RATE, INTERRUPT_FADE);
+        let risen = gains(frames + 2, &incoming, &transport);
+        assert_eq!(risen[0], 0.0);
+        assert_eq!(risen[frames as usize], 1.0);
+    }
+
+    /// One gain per frame rather than per sample, so the two channels of a
+    /// frame stay level with each other.
+    #[test]
+    fn both_channels_of_a_frame_share_a_gain() {
+        let (interrupt, transport) = wide_open();
+        interrupt.fade_out();
+
+        let played: Vec<_> = chunk(8, &interrupt, &transport, &Queued::new()).collect();
+        for pair in played.chunks(NUM_CHANNELS as usize) {
+            assert_eq!(pair[0], pair[1]);
+        }
+    }
+
+    /// A fresh output has played nothing, so the first Play must have silence
+    /// to come up from rather than starting already open.
+    #[test]
+    fn the_first_play_ramps_up_instead_of_starting_open() {
+        let transport = Envelope::closed(RATE, TRANSPORT_FADE);
+        assert!(transport.silent());
+        for _ in 0..fade_frames(RATE, TRANSPORT_FADE) {
+            assert_eq!(transport.next_gain(), 0.0);
+        }
+
+        transport.fade_in();
+        assert_eq!(transport.next_gain(), 0.0);
+        assert!(transport.next_gain() > 0.0);
+    }
+
+    #[test]
+    fn a_pause_reaches_silence_only_after_the_whole_ramp() {
+        let transport = Envelope::open(RATE, TRANSPORT_FADE);
+        transport.fade_out();
+        falls_silent_after(&transport, fade_frames(RATE, TRANSPORT_FADE));
+    }
+
+    /// The ramp is clocked by the sound, not by the wall, so it cannot run
+    /// past the audio it is shaping however long it is left waiting.
+    #[test]
+    fn the_fade_advances_with_the_music_not_the_clock() {
+        let transport = Envelope::open(RATE, TRANSPORT_FADE);
+        transport.fade_out();
+        thread::sleep(TRANSPORT_FADE * 2);
+        assert_eq!(transport.next_gain(), 1.0);
+    }
+
+    /// Skipping during a pause rides both ramps at once, and the shorter one
+    /// decides when silence arrives.
+    #[test]
+    fn a_skip_during_a_pause_carries_both_ramps() {
+        let frames = fade_frames(RATE, INTERRUPT_FADE);
+        let (interrupt, transport) = wide_open();
+        interrupt.fade_out();
+        transport.fade_out();
+
+        let faded = gains(frames + 2, &interrupt, &transport);
+        assert_eq!(faded[0], 1.0);
+        assert_eq!(faded[frames as usize], 0.0);
+        assert!(faded.windows(2).all(|pair| pair[0] >= pair[1]));
+    }
+
+    #[test]
+    fn a_short_queue_still_gets_a_whole_ramp() {
+        let left = 60;
+        assert!(left < fade_frames(RATE, TRANSPORT_FADE));
+
+        let transport = Envelope::open(RATE, TRANSPORT_FADE);
+        transport.fade_out_over(u64::from(left));
+        falls_silent_after(&transport, left);
+    }
+
+    #[test]
+    fn a_deep_queue_does_not_stretch_the_ramp() {
+        let nominal = fade_frames(RATE, TRANSPORT_FADE);
+        let transport = Envelope::open(RATE, TRANSPORT_FADE);
+        transport.fade_out_over(u64::from(nominal) * 10);
+        falls_silent_after(&transport, nominal);
+    }
+
+    #[test]
+    fn playing_a_chunk_takes_it_out_of_the_count() {
+        let queued = Queued::new();
+        let (interrupt, transport) = wide_open();
+
+        let played = chunk(40, &interrupt, &transport, &queued);
+        assert_eq!(queued.frames(), 40);
+        assert_eq!(played.count(), 40 * NUM_CHANNELS as usize);
+        assert_eq!(queued.frames(), 0);
+    }
+
+    /// rodio discards whole sources on a track change. Their frames never
+    /// play, so without settling up on drop the count would keep claiming
+    /// sound that no longer exists.
+    #[test]
+    fn a_discarded_chunk_stops_counting_as_queued() {
+        let queued = Queued::new();
+        let (interrupt, transport) = wide_open();
+
+        drop(chunk(40, &interrupt, &transport, &queued));
+        assert_eq!(queued.frames(), 0);
     }
 }

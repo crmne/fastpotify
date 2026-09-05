@@ -68,6 +68,9 @@ You can rename it in Settings.
   from the system tray; reopen it from the tray icon and quit from the tray
   menu or Ctrl+Q. On macOS you can also reopen it from the Dock. Settings can
   turn this off.
+- **Play and Pause fade.** Music played on this computer fade in or out to
+  avoid a hard cut. Skipping between tracks stays gapless and immediate, 
+  and playback on another device is unaffected.
 - **Play buttons show progress.** The button spins until Spotify responds.
 - **Common actions have shortcuts.** Space plays and pauses, Ctrl+F or `/`
   searches, and `Q` opens the queue. Ctrl+/ shows the full list.
