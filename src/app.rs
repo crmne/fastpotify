@@ -6836,9 +6836,7 @@ impl App {
             if ctx.input(|input| input.viewport().fullscreen.unwrap_or(false)) {
                 self.lyrics_fullscreen_seen = true;
             } else if self.lyrics_fullscreen_seen {
-                self.lyrics_fullscreen = None;
-                self.lyrics_fullscreen_seen = false;
-                self.lyrics_line_shown = None;
+                self.leave_lyrics_fullscreen(ctx);
             }
         }
         // Switch to the main window when sign-in is required.
@@ -9793,6 +9791,39 @@ mod tests {
                 })
                 .collect();
             assert_eq!(commands, vec![true, was_fullscreen]);
+        }
+    }
+
+    #[test]
+    fn native_fullscreen_exit_restores_the_previous_window_mode() {
+        for was_fullscreen in [false, true] {
+            let mut app = headless_app();
+            app.lyrics_fullscreen = Some(was_fullscreen);
+            app.lyrics_fullscreen_seen = true;
+            let ctx = egui::Context::default();
+            crate::theme::install(&ctx);
+            let mut input = egui::RawInput::default();
+            input
+                .viewports
+                .get_mut(&egui::ViewportId::ROOT)
+                .unwrap()
+                .fullscreen = Some(false);
+            let mut output = ctx.run_ui(input, |ui| app.frame_ui(ui));
+            output.textures_delta.clear();
+            assert_eq!(app.lyrics_fullscreen, None);
+            assert!(!app.lyrics_fullscreen_seen);
+            let commands: Vec<_> = output.viewport_output[&egui::ViewportId::ROOT]
+                .commands
+                .iter()
+                .filter_map(|command| {
+                    if let egui::ViewportCommand::Fullscreen(value) = command {
+                        Some(*value)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            assert_eq!(commands, vec![was_fullscreen]);
         }
     }
 
