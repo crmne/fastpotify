@@ -57,9 +57,7 @@ pub fn fullscreen(app: &mut App, ui: &mut egui::Ui) {
         .show(ui, |ui| {
             let rect = ui.max_rect();
             background(app, ui, rect);
-            let width = (rect.width() * 0.72)
-                .clamp(400.0, 960.0)
-                .min(rect.width() - 48.0);
+            let width = fullscreen_content_width(rect.width());
             let top = theme::titlebar_inset(ui.ctx()) + 24.0;
             let region = Rect::from_min_max(
                 pos2(rect.center().x - width / 2.0, rect.top() + top),
@@ -74,8 +72,13 @@ pub fn fullscreen(app: &mut App, ui: &mut egui::Ui) {
         });
 }
 
+fn fullscreen_content_width(viewport_width: f32) -> f32 {
+    let available = (viewport_width - 48.0).max(0.0);
+    (viewport_width * 0.72).clamp(400.0, 960.0).min(available)
+}
+
 fn background(app: &mut App, ui: &mut egui::Ui, rect: Rect) {
-    ui.style_mut().visuals = egui::Visuals::dark();
+    theme::apply_local(ui, &theme::Palette::dark());
     let art = app
         .now_playing()
         .and_then(|now| now.art_url.or(now.art_small));
@@ -397,5 +400,21 @@ fn contents(app: &mut App, ui: &mut egui::Ui, fullscreen: bool) {
             .request_repaint_after(std::time::Duration::from_millis(u64::from(
                 next - now.position_ms,
             )));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fullscreen_content_width;
+
+    #[test]
+    fn fullscreen_content_width_never_inverts_a_narrow_viewport() {
+        for viewport_width in [0.0, 24.0, 47.0, 48.0, 64.0, 760.0, 2_000.0] {
+            let width = fullscreen_content_width(viewport_width);
+            assert!(width >= 0.0);
+            assert!(width <= (viewport_width - 48.0).max(0.0));
+        }
+        assert_eq!(fullscreen_content_width(47.0), 0.0);
+        assert_eq!(fullscreen_content_width(2_000.0), 960.0);
     }
 }
