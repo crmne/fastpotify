@@ -77,11 +77,15 @@ fn fullscreen_content_width(viewport_width: f32) -> f32 {
     (viewport_width * 0.72).clamp(400.0, 960.0).min(available)
 }
 
+fn preferred_backdrop_art(small: Option<String>, large: Option<String>) -> Option<String> {
+    small.or(large)
+}
+
 fn background(app: &mut App, ui: &mut egui::Ui, rect: Rect) {
     theme::apply_local(ui, &theme::Palette::dark());
     let art = app
         .now_playing()
-        .and_then(|now| now.art_url.or(now.art_small));
+        .and_then(|now| preferred_backdrop_art(now.art_small, now.art_url));
     let painter = ui.painter().with_clip_rect(rect);
     if let Some(texture) = app
         .lyrics_backdrop
@@ -405,7 +409,22 @@ fn contents(app: &mut App, ui: &mut egui::Ui, fullscreen: bool) {
 
 #[cfg(test)]
 mod tests {
-    use super::fullscreen_content_width;
+    use super::{fullscreen_content_width, preferred_backdrop_art};
+
+    #[test]
+    fn fullscreen_backdrop_prefers_small_art_with_large_art_as_fallback() {
+        let small = "small".to_string();
+        let large = "large".to_string();
+        assert_eq!(
+            preferred_backdrop_art(Some(small.clone()), Some(large.clone())),
+            Some(small)
+        );
+        assert_eq!(
+            preferred_backdrop_art(None, Some(large.clone())),
+            Some(large)
+        );
+        assert_eq!(preferred_backdrop_art(None, None), None);
+    }
 
     #[test]
     fn fullscreen_content_width_never_inverts_a_narrow_viewport() {

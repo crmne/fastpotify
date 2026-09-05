@@ -449,7 +449,7 @@ impl LyricsBackdrop {
                         ctx.request_repaint();
                     });
                 }
-                Err(_) => self.requested = true,
+                Err(error) => self.requested = terminal_lyrics_backdrop_error(&error),
                 Ok(BytesPoll::Pending { .. }) => {}
             }
         }
@@ -469,6 +469,10 @@ impl LyricsBackdrop {
     }
 }
 
+fn terminal_lyrics_backdrop_error(error: &LoadError) -> bool {
+    matches!(error, LoadError::NotSupported)
+}
+
 fn lyrics_background(bytes: &[u8]) -> Option<egui::ColorImage> {
     let image = image::ImageReader::new(std::io::Cursor::new(bytes))
         .with_guessed_format()
@@ -486,6 +490,17 @@ fn lyrics_background(bytes: &[u8]) -> Option<egui::ColorImage> {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn transient_backdrop_load_errors_remain_retryable() {
+        assert!(!terminal_lyrics_backdrop_error(&LoadError::Loading(
+            "temporary network failure".into()
+        )));
+        assert!(!terminal_lyrics_backdrop_error(
+            &LoadError::NoMatchingBytesLoader
+        ));
+        assert!(terminal_lyrics_backdrop_error(&LoadError::NotSupported));
+    }
 
     #[test]
     fn lyrics_background_blurs_edges_and_bounds_texture_size() {
