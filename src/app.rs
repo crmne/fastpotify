@@ -989,10 +989,10 @@ impl App {
     }
 
     pub fn now_playing(&self) -> Option<NowPlaying> {
-self.now_playing_live().or_else(|| self.resume_preview())
+        self.now_playing_live().or_else(|| self.resume_preview())
     }
 
-/// What a device is actually playing, here or elsewhere.
+    /// What a device is actually playing, here or elsewhere.
     fn now_playing_live(&self) -> Option<NowPlaying> {
         if self.local.is_active() {
             let track = self.local.track.as_ref()?;
@@ -5228,14 +5228,14 @@ self.now_playing_live().or_else(|| self.resume_preview())
                     self.history_index -= 1;
                     let page = self.page().clone();
                     self.ensure_loaded(page);
-                            }
+                }
             }
             Action::Forward => {
                 if self.can_go_forward() {
                     self.history_index += 1;
                     let page = self.page().clone();
                     self.ensure_loaded(page);
-                            }
+                }
             }
             Action::PlayContext {
                 uri,
@@ -6156,7 +6156,7 @@ impl App {
     pub fn frame_ui(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         let ctx = &ctx;
-self.apply_theme(ctx);
+        self.apply_theme(ctx);
         self.lock_scroll_axis(ctx);
         // Switch to the main window when sign-in is required.
         let needs_sign_in = !(self.is_connected() && self.user.is_some())

@@ -324,12 +324,10 @@ pub fn cached_table_items(
 ) -> Arc<[TableItem]> {
     let cache_id = egui::Id::new("table-items-cache").with(page);
     let cached = ui.data(|d| d.get_temp::<Arc<[TableItem]>>(cache_id));
-    let valid = cached.as_ref().is_some_and(|items| {
+    let valid = cached.as_ref().is_some_and(|_items| {
         ui.data(|d| {
             d.get_temp::<(u64, u64)>(cache_id.with("rev"))
-                .is_some_and(|(rev, names)| {
-                    rev == items_revision && names == user_names_revision
-                })
+                .is_some_and(|(rev, names)| rev == items_revision && names == user_names_revision)
         })
     });
     if let Some(items) = cached.filter(|_| valid) {
@@ -338,10 +336,7 @@ pub fn cached_table_items(
         let items: Arc<[TableItem]> = build().into();
         ui.data_mut(|d| {
             d.insert_temp(cache_id, Arc::clone(&items));
-            d.insert_temp(
-                cache_id.with("rev"),
-                (items_revision, user_names_revision),
-            );
+            d.insert_temp(cache_id.with("rev"), (items_revision, user_names_revision));
         });
         items
     }
@@ -887,10 +882,7 @@ pub fn playlist(app: &mut App, ui: &mut egui::Ui, id: &str) {
                 sort,
                 page.items.revision,
             );
-            let view_play = table_view
-                .view_uris
-                .as_ref()
-                .map(|uris| Arc::clone(uris));
+            let view_play = table_view.view_uris.as_ref().map(Arc::clone);
             let playlist_clone = playlist.clone();
             actions_row(
                 app,
@@ -1004,10 +996,7 @@ pub fn album(app: &mut App, ui: &mut egui::Ui, id: &str) {
                 sort,
                 page.tracks.revision,
             );
-            let album_view = table_view
-                .view_uris
-                .as_ref()
-                .map(|uris| Arc::clone(uris));
+            let album_view = table_view.view_uris.as_ref().map(Arc::clone);
             actions_row(
                 app,
                 ui,
@@ -1206,10 +1195,7 @@ pub fn liked(app: &mut App, ui: &mut egui::Ui) {
         sort,
         app.library.liked.revision,
     );
-    let liked_view = table_view
-        .view_uris
-        .as_ref()
-        .map(|uris| Arc::clone(uris));
+    let liked_view = table_view.view_uris.as_ref().map(Arc::clone);
     actions_row(
         app,
         ui,
