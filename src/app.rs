@@ -1,6 +1,7 @@
 //! The application: state, event handling, and the actions views ask for.
 
 use std::collections::{HashMap, HashSet};
+use std::hash::Hash;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -4189,6 +4190,7 @@ impl App {
         self.history_index = self.history.len() - 1;
         self.show_devices = false;
         self.ensure_loaded(page);
+        self.evict_stale_pages();
     }
 
     /// Hands the app a Spotify link from outside, a canonical URI as
@@ -4250,6 +4252,91 @@ impl App {
 
     pub fn can_go_forward(&self) -> bool {
         self.history_index + 1 < self.history.len()
+    }
+
+    /// Drops page caches that are no longer in navigation history or playback.
+    fn evict_stale_pages(&mut self) {
+        const MAX_PLAYLIST_PAGES: usize = 12;
+        const MAX_ALBUM_PAGES: usize = 16;
+        const MAX_ARTIST_PAGES: usize = 10;
+        const MAX_SHOW_PAGES: usize = 8;
+        const MAX_TRACK_CACHE: usize = 800;
+
+        let mut keep_playlists = HashSet::new();
+        let mut keep_albums = HashSet::new();
+        let mut keep_artists = HashSet::new();
+        let mut keep_shows = HashSet::new();
+        for page in &self.history {
+            match page {
+                Page::Playlist(id) => {
+                    keep_playlists.insert(id.clone());
+                }
+                Page::Album(id) => {
+                    keep_albums.insert(id.clone());
+                }
+                Page::Artist(id) => {
+                    keep_artists.insert(id.clone());
+                }
+                Page::Show(id) => {
+                    keep_shows.insert(id.clone());
+                }
+                _ => {}
+            }
+        }
+        if let Some(uri) = self.playing_context_uri() {
+            if let Some(kind) = util::uri_kind(&uri)
+                && let Some(id) = util::uri_id(&uri)
+            {
+                match kind {
+                    "playlist" => {
+                        keep_playlists.insert(id.to_string());
+                    }
+                    "album" => {
+                        keep_albums.insert(id.to_string());
+                    }
+                    "artist" => {
+                        keep_artists.insert(id.to_string());
+                    }
+                    "show" => {
+                        keep_shows.insert(id.to_string());
+                    }
+                    _ => {}
+                }
+            }
+        }
+        evict_id_map(&mut self.playlist_pages, &keep_playlists, MAX_PLAYLIST_PAGES);
+        evict_id_map(&mut self.album_pages, &keep_albums, MAX_ALBUM_PAGES);
+        evict_id_map(&mut self.artist_pages, &keep_artists, MAX_ARTIST_PAGES);
+        evict_id_map(&mut self.show_pages, &keep_shows, MAX_SHOW_PAGES);
+        if self.track_cache.len() > MAX_TRACK_CACHE {
+            let protected: HashSet<String> = self
+                .now_playing()
+                .and_then(|now| now.id)
+                .into_iter()
+                .chain(
+                    self.playlist_pages
+                        .values()
+                        .flat_map(|page| {
+                            page.items.items.iter().filter_map(|item| {
+                                item.playable().and_then(|p| match p {
+                                    PlayableItem::Track(track) => track.id.clone(),
+                                    PlayableItem::Episode(episode) => Some(episode.id.clone()),
+                                })
+                            })
+                        }),
+                )
+                .collect();
+            let mut removable: Vec<String> = self
+                .track_cache
+                .keys()
+                .filter(|id| !protected.contains(*id))
+                .cloned()
+                .collect();
+            removable.sort();
+            for id in removable.into_iter().take(self.track_cache.len() - MAX_TRACK_CACHE) {
+                self.track_cache.remove(&id);
+            }
+        }
     }
 
     // ---- playback --------------------------------------------------------------
@@ -5228,6 +5315,7 @@ impl App {
                     self.history_index -= 1;
                     let page = self.page().clone();
                     self.ensure_loaded(page);
+                    self.evict_stale_pages();
                 }
             }
             Action::Forward => {
@@ -5235,6 +5323,7 @@ impl App {
                     self.history_index += 1;
                     let page = self.page().clone();
                     self.ensure_loaded(page);
+                    self.evict_stale_pages();
                 }
             }
             Action::PlayContext {
@@ -6572,6 +6661,25 @@ fn cap_uris(uris: Vec<String>, index: u32) -> (Vec<String>, u32) {
     let end = (start + MAX).min(uris.len());
     (uris[start..end].to_vec(), 0)
 }
+
+fn evict_id_map<K, V>(map: &mut HashMap<K, V>, keep: &HashSet<K>, max: usize)
+where
+    K: Eq + Hash + Clone,
+{
+    if map.len() <= max {
+        return;
+    }
+    let remove: Vec<K> = map
+        .keys()
+        .filter(|key| !keep.contains(*key))
+        .take(map.len().saturating_sub(max))
+        .cloned()
+        .collect();
+    for key in remove {
+        map.remove(&key);
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
