@@ -643,21 +643,23 @@ pub fn track_row(ui: &mut Ui, app: &mut App, row: TrackRow<'_>) -> Option<RowPic
     }
     // Start a sidebar drag only after egui's drag threshold.
     if row.item.is_track() && response.drag_started_by(egui::PointerButton::Primary) {
+        let items = dragged_items(row.item, row.picked, row.picked_songs);
         // Keep the source index for moves within an editable playlist.
-        let from = match row.context {
-            RowContext::Context {
-                editable_playlist: Some((id, _)),
-                ..
-            } => Some((id.clone(), row.index as u32)),
-            _ => None,
-        };
+        let from = (items.len() == 1)
+            .then(|| match row.context {
+                RowContext::Context {
+                    editable_playlist: Some((id, _)),
+                    ..
+                } => Some((id.clone(), row.index as u32)),
+                _ => None,
+            })
+            .flatten();
         egui::DragAndDrop::set_payload(
             ui.ctx(),
             DragTrack {
-                uri: row.item.uri().to_string(),
                 title: row.item.name().to_string(),
                 image: row.item.image(64).map(str::to_string),
-                item: row.item.clone(),
+                items,
                 from,
             },
         );
@@ -1177,11 +1179,31 @@ pub fn track_row(ui: &mut Ui, app: &mut App, row: TrackRow<'_>) -> Option<RowPic
     pick
 }
 
+fn dragged_items(
+    item: &PlayableItem,
+    picked: bool,
+    picked_songs: &[PlayableItem],
+) -> Vec<PlayableItem> {
+    if picked && !picked_songs.is_empty() {
+        picked_songs.to_vec()
+    } else {
+        vec![item.clone()]
+    }
+}
+
+fn drag_label(track: &DragTrack) -> String {
+    match track.items.as_slice() {
+        [] => track.title.clone(),
+        [item] => item.name().to_string(),
+        [first, rest @ ..] => format!("{} + {} more", first.name(), rest.len()),
+    }
+}
+
 /// The chip that rides the pointer while a song is being dragged.
 pub fn drag_ghost(ctx: &egui::Context, palette: &Palette) {
     // A song and a sidebar row ride the pointer the same way.
     let chip = egui::DragAndDrop::payload::<DragTrack>(ctx)
-        .map(|track| (track.title.clone(), track.image.clone()))
+        .map(|track| (drag_label(&track), track.image.clone()))
         .or_else(|| {
             egui::DragAndDrop::payload::<DragEntry>(ctx)
                 .map(|entry| (entry.title.clone(), entry.image.clone()))
@@ -1913,4 +1935,48 @@ pub fn setting_row(
         ui.with_layout(Layout::right_to_left(Align::Center), control);
     });
     ui.add_space(10.0);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn song(uri: &str) -> PlayableItem {
+        PlayableItem::Track(Track {
+            uri: uri.to_string(),
+            ..Default::default()
+        })
+    }
+
+    #[test]
+    fn dragging_a_picked_row_carries_the_whole_selection() {
+        let first = song("spotify:track:first");
+        let second = song("spotify:track:second");
+        let dragged = dragged_items(&second, true, &[first.clone(), second.clone()]);
+        assert_eq!(
+            dragged.iter().map(PlayableItem::uri).collect::<Vec<_>>(),
+            [first.uri(), second.uri()],
+            "the sidebar receives every selected row in table order"
+        );
+    }
+
+    #[test]
+    fn dragging_multiple_songs_labels_the_first_and_the_rest() {
+        let track = DragTrack {
+            title: "Fitraten (VDJ Fly LoFi)".into(),
+            image: None,
+            items: vec![
+                PlayableItem::Track(Track {
+                    name: "Kora Panna".into(),
+                    ..Default::default()
+                }),
+                PlayableItem::Track(Track {
+                    name: "Fitraten (VDJ Fly LoFi)".into(),
+                    ..Default::default()
+                }),
+            ],
+            from: None,
+        };
+        assert_eq!(drag_label(&track), "Kora Panna + 1 more");
+    }
 }

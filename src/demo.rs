@@ -1302,10 +1302,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
-    /// A drag in flight renders, and releasing it over an owned playlist
-    /// row lands in the same add-to-playlist plumbing the row menu uses.
+    /// A drag in flight renders, and releasing a selected set over an owned
+    /// playlist row lands every song in the usual add-to-playlist plumbing.
     #[test]
-    fn dropping_a_song_on_a_sidebar_playlist_adds_it() {
+    fn dropping_selected_songs_on_a_sidebar_playlist_adds_them_all() {
         let root =
             std::env::temp_dir().join(format!("fastpotify-drag-test-{}", std::process::id()));
         let dirs = AppDirs {
@@ -1327,10 +1327,30 @@ mod tests {
         );
         app.attach(&ctx);
         populate(&mut app);
+        app.library
+            .playlists
+            .get_mut()
+            .expect("the demo library")
+            .retain(|playlist| playlist.id == "pl1");
         app.open(Page::Playlist("pl1".into()));
         for _ in 0..3 {
             frame(&ctx, &mut app);
         }
+        let before = app.playlist_pages["pl1"].items.items.len();
+        let dragged = vec![
+            PlayableItem::Track(Track {
+                id: Some("not-in-demo-playlists".into()),
+                uri: "spotify:track:not-in-demo-playlists".into(),
+                name: "A new song".into(),
+                ..Default::default()
+            }),
+            PlayableItem::Track(Track {
+                id: Some("also-not-in-demo-playlists".into()),
+                uri: "spotify:track:also-not-in-demo-playlists".into(),
+                name: "Another new song".into(),
+                ..Default::default()
+            }),
+        ];
 
         // Sweep a held track down the sidebar; somewhere along the sweep
         // the pointer crosses an owned playlist row, and releasing there
@@ -1343,15 +1363,9 @@ mod tests {
             egui::DragAndDrop::set_payload(
                 &ctx,
                 DragTrack {
-                    uri: "spotify:track:not-in-demo-playlists".into(),
                     title: "A new song".into(),
                     image: None,
-                    item: PlayableItem::Track(Track {
-                        id: Some("not-in-demo-playlists".into()),
-                        uri: "spotify:track:not-in-demo-playlists".into(),
-                        name: "A new song".into(),
-                        ..Default::default()
-                    }),
+                    items: dragged.clone(),
                     from: None,
                 },
             );
@@ -1373,6 +1387,7 @@ mod tests {
             }
         }
         assert!(dropped, "no sweep position landed on an owned playlist row");
+        assert_eq!(app.playlist_pages["pl1"].items.items.len(), before + 2);
         app.backend.shutdown();
         let _ = std::fs::remove_dir_all(root);
     }
@@ -1431,8 +1446,8 @@ mod tests {
 
         let payload = egui::DragAndDrop::payload::<DragTrack>(&ctx)
             .expect("dragging the bottom-left song should create a song payload");
-        assert_eq!(payload.uri, "spotify:track:trk0");
-        assert_eq!(payload.item.uri(), "spotify:track:trk0");
+        assert_eq!(payload.items.len(), 1);
+        assert_eq!(payload.items[0].uri(), "spotify:track:trk0");
         assert_eq!(payload.from, None, "this is an add, not a playlist move");
 
         egui::DragAndDrop::clear_payload(&ctx);
@@ -1642,14 +1657,13 @@ mod tests {
         let original = order(&app);
         let from = 5usize;
         let held = |from: usize, uri: &str| DragTrack {
-            uri: uri.to_string(),
             title: "Closer".into(),
             image: None,
-            item: PlayableItem::Track(Track {
+            items: vec![PlayableItem::Track(Track {
                 uri: uri.to_string(),
                 name: "Closer".into(),
                 ..Default::default()
-            }),
+            })],
             from: Some(("pl1".into(), from as u32)),
         };
 
