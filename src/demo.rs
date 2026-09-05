@@ -1176,6 +1176,98 @@ mod tests {
         app.backend.shutdown();
     }
 
+    #[test]
+    fn accessible_playing_and_queued_copies_target_their_own_context() {
+        use crate::model::RowContext;
+        use crate::ui::widgets::{TrackRow, track_row};
+        use egui::accesskit::{Action as AccessibleAction, Role};
+        let (ctx, mut app) = accessible_app("queued-copy");
+        let item = app.queue.get().unwrap().currently_playing.clone().unwrap();
+        let contexts = [
+            RowContext::Uris(vec![item.uri().to_string()]),
+            RowContext::Queue,
+        ];
+        let label = format!("Play {}, {}", item.name(), item.subtitle());
+        let mut render = |events| {
+            app.actions.clear();
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    for context in &contexts {
+                        track_row(
+                            ui,
+                            &mut app,
+                            TrackRow {
+                                index: 0,
+                                number: Some(1),
+                                item: &item,
+                                context,
+                                show_cover: false,
+                                show_album: false,
+                                added_at: None,
+                                added_by: None,
+                                show_added_by: false,
+                                compact: false,
+                                thin: false,
+                                shift: 0.0,
+                                picked: false,
+                                picked_songs: &[],
+                            },
+                        );
+                    }
+                },
+            );
+            output.textures_delta.clear();
+            (
+                output.platform_output.accesskit_update.unwrap(),
+                app.actions.clone(),
+            )
+        };
+        let (tree, _) = render(vec![]);
+        let mut rows: Vec<_> = tree
+            .nodes
+            .iter()
+            .filter(|(_, node)| node.label() == Some(label.as_str()) && node.role() == Role::Button)
+            .map(|(id, node)| (*id, node.bounds().unwrap().y0))
+            .collect();
+        rows.sort_by(|a, b| a.1.total_cmp(&b.1));
+        assert_eq!(
+            rows.len(),
+            2,
+            "the playing song and queued copy need separate controls"
+        );
+        let (_, actions) = render(vec![accessible_action(
+            rows[1].0,
+            AccessibleAction::Click,
+            None,
+        )]);
+        assert!(matches!(
+            actions.as_slice(),
+            [crate::model::Action::PlayFromRow {
+                context: RowContext::Queue,
+                index: 0,
+                ..
+            }]
+        ));
+        let (_, actions) = render(vec![accessible_action(
+            rows[0].0,
+            AccessibleAction::Click,
+            None,
+        )]);
+        assert!(matches!(
+            actions.as_slice(),
+            [crate::model::Action::PlayFromRow {
+                context: RowContext::Uris(_),
+                index: 0,
+                ..
+            }]
+        ));
+        app.backend.shutdown();
+    }
+
     fn frame(ctx: &egui::Context, app: &mut App) {
         frame_events(ctx, app, Vec::new());
     }

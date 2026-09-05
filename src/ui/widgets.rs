@@ -636,7 +636,14 @@ fn columns(width: f32, row: &TrackRow<'_>) -> Columns {
 pub fn track_row(ui: &mut Ui, app: &mut App, row: TrackRow<'_>) -> Option<RowPick> {
     // Virtual lists reuse the visible slots as they scroll. Keep focus and
     // accessibility actions attached to the song and its occurrence instead.
-    let id = ui.id().with(("track-row", row.item.uri(), row.index));
+    // Now playing and Next up can both contain the same song at index zero.
+    // Their actions have different meanings, so they must not share an ID.
+    let id = ui.unique_id().with((
+        "track-row",
+        std::mem::discriminant(row.context),
+        row.item.uri(),
+        row.index,
+    ));
     ui.scope_builder(UiBuilder::new().id(id), |ui| {
         track_row_contents(ui, app, row)
     })
