@@ -423,14 +423,71 @@ fn covers_han_region(code_pages: Option<u32>, han: &str) -> bool {
         .is_some_and(|(bit, pages)| pages & (1 << bit) != 0)
 }
 
-/// The user's locale, lowercased, or an empty string when none is set. A
-/// variable that is set but empty does not count, as POSIX has it.
+/// The user's locale, in the shape [`han_region`] matches, or an empty
+/// string when none is set. A variable that is set but empty does not
+/// count, as POSIX has it.
 fn locale() -> String {
-    ["LC_ALL", "LC_CTYPE", "LANG"]
+    let named = ["LC_ALL", "LC_CTYPE", "LANG"]
         .iter()
-        .find_map(|key| std::env::var(key).ok().filter(|value| !value.is_empty()))
-        .unwrap_or_default()
-        .to_lowercase()
+        .find_map(|key| std::env::var(key).ok().filter(|value| !value.is_empty()));
+    // A Windows desktop sets none of those, so without asking the system
+    // every listener there would be shown the default cut, whatever they
+    // read. The variables still come first, so setting one overrides it.
+    #[cfg(windows)]
+    let named = named.or_else(windows_language);
+    normalise(named.unwrap_or_default())
+}
+
+/// A language name as [`HAN_REGIONS`] writes them: lowercase, with `_`
+/// between the language and its region. Windows and BCP 47 hyphenate.
+fn normalise(name: String) -> String {
+    name.to_lowercase().replace('-', "_")
+}
+
+/// The language a Windows desktop is read in.
+///
+/// The display language comes first, since that is what `LANG` names on the
+/// other two platforms. A machine whose display language is not one of the
+/// installed ones still has a user locale, which carries the region.
+#[cfg(windows)]
+fn windows_language() -> Option<String> {
+    use windows_sys::Win32::Globalization::{
+        GetUserDefaultLocaleName, GetUserPreferredUILanguages, MUI_LANGUAGE_NAME,
+    };
+
+    /// `LOCALE_NAME_MAX_LENGTH`, which windows-sys does not carry.
+    const NAME_LENGTH: usize = 85;
+
+    let mut names = [0u16; NAME_LENGTH * 8];
+    let mut count = 0u32;
+    let mut length = names.len() as u32;
+    // SAFETY: both calls write at most `length` (or `len`) units into the
+    // buffer they are handed, which is the buffer's own length.
+    let preferred = unsafe {
+        GetUserPreferredUILanguages(
+            MUI_LANGUAGE_NAME,
+            &mut count,
+            names.as_mut_ptr(),
+            &mut length,
+        )
+    };
+    if preferred != 0
+        && count > 0
+        && let Some(first) = first_name(&names)
+    {
+        return Some(first);
+    }
+
+    let mut name = [0u16; NAME_LENGTH];
+    let read = unsafe { GetUserDefaultLocaleName(name.as_mut_ptr(), name.len() as i32) };
+    (read > 0).then(|| first_name(&name)).flatten()
+}
+
+/// The first string of a null-terminated list of them.
+#[cfg(windows)]
+fn first_name(names: &[u16]) -> Option<String> {
+    let end = names.iter().position(|unit| *unit == 0)?;
+    (end > 0).then(|| String::from_utf16_lossy(&names[..end]))
 }
 
 /// The pan-CJK cut a locale reads, defaulting to Simplified Chinese -- the
@@ -501,6 +558,35 @@ mod tests {
         assert_eq!(han_region("ko_kr.utf-8"), "kr");
         assert_eq!(han_region("en_us.utf-8"), "sc", "the default");
         assert_eq!(han_region(""), "sc", "no locale set");
+    }
+
+    /// Windows and BCP 47 write `ko-KR` where POSIX writes `ko_KR`, and the
+    /// prefixes above are POSIX-shaped.
+    #[test]
+    fn hyphenated_language_names_choose_a_cut_too() {
+        let cut = |name: &str| han_region(&normalise(name.to_owned()));
+        assert_eq!(cut("ko-KR"), "kr");
+        assert_eq!(cut("ja-JP"), "jp");
+        assert_eq!(cut("zh-TW"), "tc");
+        assert_eq!(cut("zh-Hant-TW"), "tc");
+        assert_eq!(cut("zh-HK"), "hk");
+        assert_eq!(cut("zh-CN"), "sc");
+        assert_eq!(cut("en-US"), "sc", "the default");
+    }
+
+    /// A Windows desktop sets none of the POSIX variables, so the language
+    /// has to come from the system. An empty answer puts every Japanese and
+    /// Korean listener on the Simplified Chinese cut.
+    #[cfg(windows)]
+    #[test]
+    fn windows_names_the_language_it_is_read_in() {
+        let locale = locale();
+        assert!(!locale.is_empty(), "Windows named no language");
+        assert!(
+            !locale.contains('-'),
+            "{locale} keeps a hyphen no region prefix matches"
+        );
+        assert_eq!(locale, locale.to_lowercase());
     }
 
     #[test]
