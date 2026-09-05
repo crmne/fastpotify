@@ -642,6 +642,35 @@ mod tests {
         assert_eq!(scope_shade(15), 4);
     }
 
+    /// A reused analyser that just saw a full frame must match a fresh one
+    /// when the next input is short or empty. Zero-fill stops old samples
+    /// leaking into the spectrum.
+    #[test]
+    fn a_short_or_empty_input_does_not_keep_the_previous_spectrum() {
+        let mut reused = Analyser::default();
+        let mut fresh = Analyser::default();
+        let loud = sine(1000.0, 0.5, FFT_SAMPLES);
+        let t0 = Instant::now();
+        reused.step(&loud, t0);
+        let t1 = t0 + STEP;
+        let short = &loud[..32];
+        reused.step(short, t1);
+        fresh.step(short, t1);
+        assert_eq!(
+            reused.spectrum, fresh.spectrum,
+            "a short frame left the previous spectrum in the scratch buffer"
+        );
+        let mut reused_empty = Analyser::default();
+        let mut fresh_empty = Analyser::default();
+        reused_empty.step(&loud, t0);
+        reused_empty.step(&[], t1);
+        fresh_empty.step(&[], t1);
+        assert_eq!(
+            reused_empty.spectrum, fresh_empty.spectrum,
+            "an empty frame left the previous spectrum in the scratch buffer"
+        );
+    }
+
     /// Rule: full scale is one when the volume is already in, and the
     /// level that lands on one when the output has yet to apply it.
     /// Getting this wrong would hold a quiet listener to a quarter of
