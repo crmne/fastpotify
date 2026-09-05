@@ -4312,29 +4312,17 @@ impl App {
         evict_id_map(&mut self.artist_pages, &keep_artists, MAX_ARTIST_PAGES);
         evict_id_map(&mut self.show_pages, &keep_shows, MAX_SHOW_PAGES);
         if self.track_cache.len() > MAX_TRACK_CACHE {
-            let protected: HashSet<String> = self
-                .now_playing()
-                .and_then(|now| now.id)
-                .into_iter()
-                .chain(self.playlist_pages.values().flat_map(|page| {
-                    page.items.items.iter().filter_map(|item| {
-                        item.playable().and_then(|p| match p {
-                            PlayableItem::Track(track) => track.id.clone(),
-                            PlayableItem::Episode(episode) => Some(episode.id.clone()),
-                        })
-                    })
-                }))
-                .collect();
-            let mut removable: Vec<String> = self
+            let playing = self.now_playing().and_then(|now| now.id);
+            let mut keys: Vec<String> = self
                 .track_cache
                 .keys()
-                .filter(|id| !protected.contains(*id))
+                .filter(|id| playing.as_ref() != Some(*id))
                 .cloned()
                 .collect();
-            removable.sort();
-            for id in removable
+            keys.sort();
+            for id in keys
                 .into_iter()
-                .take(self.track_cache.len() - MAX_TRACK_CACHE)
+                .take(self.track_cache.len().saturating_sub(MAX_TRACK_CACHE))
             {
                 self.track_cache.remove(&id);
             }
@@ -6666,18 +6654,18 @@ fn cap_uris(uris: Vec<String>, index: u32) -> (Vec<String>, u32) {
 
 fn evict_id_map<K, V>(map: &mut HashMap<K, V>, keep: &HashSet<K>, max: usize)
 where
-    K: Eq + Hash + Clone,
+    K: Eq + Hash + Clone + Ord,
 {
     if map.len() <= max {
         return;
     }
-    let remove: Vec<K> = map
+    let mut remove: Vec<K> = map
         .keys()
         .filter(|key| !keep.contains(*key))
-        .take(map.len().saturating_sub(max))
         .cloned()
         .collect();
-    for key in remove {
+    remove.sort();
+    for key in remove.into_iter().take(map.len().saturating_sub(max)) {
         map.remove(&key);
     }
 }
