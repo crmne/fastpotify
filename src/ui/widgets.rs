@@ -172,6 +172,7 @@ pub fn virtual_wrapped_cards(
                 card(ui, index);
             }
         });
+        ui.allocate_space(vec2(row_width, CARD_GAP));
     });
 }
 
