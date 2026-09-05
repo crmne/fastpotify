@@ -6,6 +6,37 @@ use std::time::Instant;
 
 use crate::api::models::*;
 
+/// One table row: the playable, when it was added, who added it.
+pub type TableItem = (PlayableItem, Option<String>, Option<String>);
+
+/// Cached track-table rows for one page.
+///
+/// Lives on the app, not in egui temp data, so it dies with page eviction,
+/// sign-out, and `reset_data`. A generation token stops a recreated page
+/// from reusing a stale copy that still has the old revision number.
+pub struct TableRowsCache {
+    pub generation: u64,
+    pub items_revision: u64,
+    pub user_names_revision: u64,
+    pub items: Arc<[TableItem]>,
+}
+
+impl TableRowsCache {
+    /// Heap-ish retained size: struct slots plus the URI/name strings we own.
+    pub fn retained_bytes(&self) -> usize {
+        self.items
+            .iter()
+            .map(|(item, added, by)| {
+                std::mem::size_of_val(item)
+                    + item.uri().len()
+                    + item.name().len()
+                    + added.as_ref().map(String::len).unwrap_or(0)
+                    + by.as_ref().map(String::len).unwrap_or(0)
+            })
+            .sum()
+    }
+}
+
 /// Every screen the central panel can show.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Page {
@@ -450,6 +481,7 @@ pub struct PlaylistCache {
 
 #[derive(Default)]
 pub struct AlbumPage {
+    pub generation: u64,
     pub album: Loadable<Album>,
     pub tracks: PagedList<Track>,
 }

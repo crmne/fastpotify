@@ -7,7 +7,8 @@ use egui::{Align, Layout, Rect, Sense, Vec2, pos2, vec2};
 use crate::api::models::{Album, PlayableItem, Playlist, pick_image};
 use crate::app::App;
 use crate::model::{
-    Action, Dialog, DragTrack, Loadable, Page, PagedList, RowContext, SortColumn, TableSort,
+    Action, Dialog, DragTrack, Loadable, Page, PagedList, RowContext, SortColumn, TableItem,
+    TableRowsCache, TableSort,
 };
 use crate::theme::{self, Icon, Palette};
 use crate::util;
@@ -282,9 +283,6 @@ fn playlist_position_jump(
     ui.add_space(8.0);
 }
 
-/// One table row's data: the item, when it was added, who added it.
-pub type TableItem = (PlayableItem, Option<String>, Option<String>);
-
 /// A track table with virtualised rows and paging.
 pub struct Table<'a> {
     pub items: &'a [TableItem],
@@ -313,33 +311,71 @@ pub struct TableCache {
     pub view_uris: Option<Arc<[String]>>,
 }
 
-/// Cached table rows for one page. Rebuilt only when the source list or
-/// contributor names change, not every frame.
-pub fn cached_table_items(
-    ui: &mut egui::Ui,
+pub fn table_items_hit(
+    app: &App,
     page: &Page,
+    generation: u64,
+    items_revision: u64,
+    user_names_revision: u64,
+) -> Option<Arc<[TableItem]>> {
+    app.table_rows.get(page).and_then(|cached| {
+        (cached.generation == generation
+            && cached.items_revision == items_revision
+            && cached.user_names_revision == user_names_revision)
+            .then(|| Arc::clone(&cached.items))
+    })
+}
+
+pub fn remember_table_items(
+    app: &mut App,
+    page: Page,
+    generation: u64,
+    items_revision: u64,
+    user_names_revision: u64,
+    items: Vec<TableItem>,
+) -> Arc<[TableItem]> {
+    let items: Arc<[TableItem]> = items.into();
+    app.table_rows.insert(
+        page.clone(),
+        TableRowsCache {
+            generation,
+            items_revision,
+            user_names_revision,
+            items: Arc::clone(&items),
+        },
+    );
+    app.retain_table_rows(&page);
+    items
+}
+
+/// Cached table rows for one page. Rebuilt only when the source list,
+/// contributor names, or page generation change, not every frame.
+///
+/// The cache lives on `App`, not in egui temp data. It is dropped when the
+/// page is evicted, when the account resets, and when more than two tables
+/// would be retained. Recreated pages get a new generation, so an old
+/// revision number cannot resurrect stale rows.
+pub fn cached_table_items(
+    app: &mut App,
+    page: Page,
+    generation: u64,
     items_revision: u64,
     user_names_revision: u64,
     build: impl FnOnce() -> Vec<TableItem>,
 ) -> Arc<[TableItem]> {
-    let cache_id = egui::Id::new("table-items-cache").with(page);
-    let cached = ui.data(|d| d.get_temp::<Arc<[TableItem]>>(cache_id));
-    let valid = cached.as_ref().is_some_and(|_items| {
-        ui.data(|d| {
-            d.get_temp::<(u64, u64)>(cache_id.with("rev"))
-                .is_some_and(|(rev, names)| rev == items_revision && names == user_names_revision)
-        })
-    });
-    if let Some(items) = cached.filter(|_| valid) {
-        items
-    } else {
-        let items: Arc<[TableItem]> = build().into();
-        ui.data_mut(|d| {
-            d.insert_temp(cache_id, Arc::clone(&items));
-            d.insert_temp(cache_id.with("rev"), (items_revision, user_names_revision));
-        });
-        items
+    if let Some(items) =
+        table_items_hit(app, &page, generation, items_revision, user_names_revision)
+    {
+        return items;
     }
+    remember_table_items(
+        app,
+        page,
+        generation,
+        items_revision,
+        user_names_revision,
+        build(),
+    )
 }
 
 pub fn prepare_table_view(
@@ -740,19 +776,19 @@ pub fn top_songs(app: &mut App, ui: &mut egui::Ui) {
             return;
         }
     };
-    let items = cached_table_items(
-        ui,
-        &Page::TopSongs,
-        app.home.top_songs_generation,
-        app.user_names_revision,
-        || {
-            tracks
+    let generation = app.home.top_songs_generation;
+    let names = app.user_names_revision;
+    let items =
+        if let Some(items) = table_items_hit(app, &Page::TopSongs, generation, generation, names) {
+            items
+        } else {
+            let rows = tracks
                 .iter()
                 .cloned()
                 .map(|track| (PlayableItem::Track(track), None, None))
-                .collect()
-        },
-    );
+                .collect();
+            remember_table_items(app, Page::TopSongs, generation, generation, names, rows)
+        };
     let uris: Arc<[String]> = items
         .iter()
         .map(|(item, _, _)| item.uri().to_string())
@@ -788,20 +824,22 @@ pub fn playlist(app: &mut App, ui: &mut egui::Ui, id: &str) {
     let user_id = app.user_id().unwrap_or("").to_string();
     match &page.playlist {
         Loadable::Loaded(playlist) => {
-            let items = cached_table_items(
-                ui,
-                &Page::Playlist(id.to_string()),
-                page.items.revision,
-                app.user_names_revision,
-                || {
-                    items_of(
-                        &page.items,
-                        playlist.owner.id.as_deref(),
-                        playlist.owner_name(),
-                        &app.user_names,
-                    )
-                },
-            );
+            let generation = page.generation;
+            let revision = page.items.revision;
+            let names = app.user_names_revision;
+            let key = Page::Playlist(id.to_string());
+            let items = if let Some(items) = table_items_hit(app, &key, generation, revision, names)
+            {
+                items
+            } else {
+                let rows = items_of(
+                    &page.items,
+                    playlist.owner.id.as_deref(),
+                    playlist.owner_name(),
+                    &app.user_names,
+                );
+                remember_table_items(app, key, generation, revision, names, rows)
+            };
             let count = playlist.track_total().max(items.len() as u32);
             // Spotify's collaborative flag covers secret collaborations; a
             // playlist made together today is recognised by who added songs.
@@ -960,31 +998,34 @@ pub fn album(app: &mut App, ui: &mut egui::Ui, id: &str) {
     match &page.album {
         Loadable::Loaded(album) => {
             album_hero(app, ui, album, &page.tracks);
-            let items = cached_table_items(
-                ui,
-                &Page::Album(id.to_string()),
-                page.tracks.revision,
-                app.user_names_revision,
-                || {
-                    page.tracks
-                        .items
-                        .iter()
-                        .cloned()
-                        .map(|mut track| {
-                            if track.album.is_none() {
-                                track.album = Some(Album {
-                                    id: album.id.clone(),
-                                    name: album.name.clone(),
-                                    uri: album.uri.clone(),
-                                    images: album.images.clone(),
-                                    ..Album::default()
-                                });
-                            }
-                            (PlayableItem::Track(track), None, None)
-                        })
-                        .collect()
-                },
-            );
+            let generation = page.generation;
+            let revision = page.tracks.revision;
+            let names = app.user_names_revision;
+            let key = Page::Album(id.to_string());
+            let items = if let Some(items) = table_items_hit(app, &key, generation, revision, names)
+            {
+                items
+            } else {
+                let rows = page
+                    .tracks
+                    .items
+                    .iter()
+                    .cloned()
+                    .map(|mut track| {
+                        if track.album.is_none() {
+                            track.album = Some(Album {
+                                id: album.id.clone(),
+                                name: album.name.clone(),
+                                uri: album.uri.clone(),
+                                images: album.images.clone(),
+                                ..Album::default()
+                            });
+                        }
+                        (PlayableItem::Track(track), None, None)
+                    })
+                    .collect();
+                remember_table_items(app, key, generation, revision, names, rows)
+            };
             let saved = app.is_saved(&album.uri).unwrap_or(false);
             let sort = app.table_sorts.get(&Page::Album(id.to_string())).copied();
             let table_view = prepare_table_view(
@@ -1128,13 +1169,14 @@ fn album_hero(
 
 pub fn liked(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
-    let items = cached_table_items(
-        ui,
-        &Page::LikedSongs,
-        app.library.liked.revision,
-        app.user_names_revision,
-        || {
-            app.library
+    let revision = app.library.liked.revision;
+    let names = app.user_names_revision;
+    let items =
+        if let Some(items) = table_items_hit(app, &Page::LikedSongs, revision, revision, names) {
+            items
+        } else {
+            let rows = app
+                .library
                 .liked
                 .items
                 .iter()
@@ -1145,9 +1187,9 @@ pub fn liked(app: &mut App, ui: &mut egui::Ui) {
                         None,
                     )
                 })
-                .collect()
-        },
-    );
+                .collect();
+            remember_table_items(app, Page::LikedSongs, revision, revision, names, rows)
+        };
     let total = app.library.liked.total.unwrap_or(items.len() as u32);
     let user = app
         .user
@@ -1276,6 +1318,7 @@ fn palette_of(app: &App) -> Palette {
 mod tests {
     use super::*;
     use crate::api::models::{Album, ArtistRef, Track};
+    use crate::model::PlaylistPage;
 
     fn make_test_tracks() -> Vec<TableItem> {
         let titles = [
@@ -1420,5 +1463,84 @@ mod tests {
     fn a_direct_playlist_page_keeps_spotify_row_numbers() {
         assert_eq!(absolute_row_index(6_900, 0) + 1, 6_901);
         assert_eq!(absolute_row_index(6_900, 6) + 1, 6_907);
+    }
+
+    fn test_app() -> App {
+        let root = std::env::temp_dir().join(format!(
+            "fastpotify-table-cache-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        App::new(
+            &crate::backend::Waker::default(),
+            crate::paths::AppDirs {
+                config: root.join("config"),
+                state: root.join("state"),
+                cache: root.join("cache"),
+            },
+            crate::settings::Settings::default(),
+            crate::app::AppOptions {
+                media_controls: false,
+                tray: false,
+            },
+        )
+    }
+
+    #[test]
+    fn table_row_cache_hits_until_revision_or_generation_changes() {
+        let mut app = test_app();
+        let mut builds = 0;
+        let page = Page::LikedSongs;
+        cached_table_items(&mut app, page.clone(), 1, 0, 0, || {
+            builds += 1;
+            make_test_tracks()
+        });
+        cached_table_items(&mut app, page.clone(), 1, 0, 0, || {
+            builds += 1;
+            panic!("cache hit rebuilt the table");
+        });
+        assert_eq!(builds, 1);
+        cached_table_items(&mut app, page.clone(), 1, 1, 0, || {
+            builds += 1;
+            make_test_tracks()
+        });
+        assert_eq!(builds, 2, "revision change must rebuild");
+        cached_table_items(&mut app, page, 2, 1, 0, || {
+            builds += 1;
+            make_test_tracks()
+        });
+        assert_eq!(builds, 3, "generation change must rebuild");
+    }
+
+    #[test]
+    fn table_row_cache_dies_when_account_data_resets() {
+        let mut app = test_app();
+        cached_table_items(&mut app, Page::LikedSongs, 0, 0, 0, make_test_tracks);
+        assert!(!app.table_rows.is_empty());
+        let before = app.table_rows_retained_bytes();
+        assert!(before > 0, "cached rows should retain heap");
+        app.table_rows.clear();
+        assert_eq!(app.table_rows_retained_bytes(), 0);
+    }
+
+    #[test]
+    fn table_row_cache_keeps_at_most_two_pages() {
+        let mut app = test_app();
+        for i in 0..5 {
+            let page = Page::Playlist(format!("pl{i}"));
+            app.playlist_pages
+                .insert(format!("pl{i}"), PlaylistPage::default());
+            app.history.push(page.clone());
+            app.history_index = app.history.len() - 1;
+            cached_table_items(&mut app, page, 1, 0, 0, make_test_tracks);
+        }
+        assert_eq!(app.table_rows.len(), 2);
+        assert!(
+            app.table_rows.contains_key(&Page::Playlist("pl4".into())),
+            "the open page stays"
+        );
     }
 }
