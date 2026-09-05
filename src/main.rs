@@ -550,20 +550,19 @@ impl MiniWindow {
     fn wanted(app: &app::App) -> Option<Self> {
         // A WMP skin is the window: transparent and chromeless, sized
         // to the view, wherever the skin sits.
-        if app.settings.wmp_window
-            && let Some(skin) = app.wmp.skin.as_ref()
-        {
-            return Some(Self {
+        match app.window_kind() {
+            app::WindowKind::Wmp => app.wmp.skin.as_ref().map(|skin| Self {
                 size: fastpotify::ui::wmp::initial_size(&skin.document, &app.settings),
                 position: app.wmp.restore_pos,
                 on_top: false,
-            });
+            }),
+            app::WindowKind::Winamp => Some(Self {
+                size: fastpotify::ui::winamp::initial_size(&app.settings),
+                position: app.winamp.restore_pos,
+                on_top: app.settings.winamp_on_top,
+            }),
+            app::WindowKind::Main => None,
         }
-        app.settings.winamp_window.then(|| Self {
-            size: fastpotify::ui::winamp::initial_size(&app.settings),
-            position: app.winamp.restore_pos,
-            on_top: app.settings.winamp_on_top,
-        })
     }
 }
 
@@ -799,9 +798,10 @@ impl eframe::App for Shell {
     /// The mini player's window is see-through where the skin leaves it
     /// out; the big window paints itself over eframe's own ground.
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
-        let skinned = self.app.as_ref().is_some_and(|app| {
-            app.settings.winamp_window || (app.settings.wmp_window && app.wmp.skin.is_some())
-        });
+        let skinned = self
+            .app
+            .as_ref()
+            .is_some_and(|app| !matches!(app.window_kind(), app::WindowKind::Main));
         if skinned {
             [0.0; 4]
         } else {
