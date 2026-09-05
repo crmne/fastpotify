@@ -989,10 +989,10 @@ impl App {
     }
 
     pub fn now_playing(&self) -> Option<NowPlaying> {
-        self.now_playing_live().or_else(|| self.resume_preview())
+self.now_playing_live().or_else(|| self.resume_preview())
     }
 
-    /// What a device is actually playing, here or elsewhere.
+/// What a device is actually playing, here or elsewhere.
     fn now_playing_live(&self) -> Option<NowPlaying> {
         if self.local.is_active() {
             let track = self.local.track.as_ref()?;
@@ -2851,7 +2851,7 @@ impl App {
             if uris.is_empty() {
                 return;
             }
-            let (uris, index) = cap_uris(uris, index as u32);
+            let (uris, index) = cap_uris(&uris, index as u32);
             self.play_request(PlayRequest::tracks(uris).starting_at_index(index), false);
             return;
         }
@@ -5228,14 +5228,14 @@ impl App {
                     self.history_index -= 1;
                     let page = self.page().clone();
                     self.ensure_loaded(page);
-                }
+                            }
             }
             Action::Forward => {
                 if self.can_go_forward() {
                     self.history_index += 1;
                     let page = self.page().clone();
                     self.ensure_loaded(page);
-                }
+                            }
             }
             Action::PlayContext {
                 uri,
@@ -5277,7 +5277,7 @@ impl App {
                 if uris.is_empty() {
                     return;
                 }
-                let (uris, index) = cap_uris(uris, index);
+                let (uris, index) = cap_uris(&uris, index);
                 let request = PlayRequest::tracks(uris).starting_at_index(index);
                 self.play_request(request, false);
             }
@@ -5293,13 +5293,13 @@ impl App {
                     self.play_request(request, false);
                 }
                 RowContext::Uris(uris) => {
-                    let (uris, index) = cap_uris(uris, index);
+                    let (uris, index) = cap_uris(uris.as_ref(), index);
                     let request = PlayRequest::tracks(uris).starting_at_index(index);
                     self.play_request(request, false);
                 }
                 RowContext::Queue => self.play_queue_item(index as usize, uri),
                 RowContext::View { uris, context_uri } => {
-                    let (uris, index) = cap_uris(uris, index);
+                    let (uris, index) = cap_uris(uris.as_ref(), index);
                     let request = PlayRequest::tracks(uris).starting_at_index(index);
                     self.play_request(request, false);
                     self.note_recent_context(&context_uri);
@@ -6156,7 +6156,7 @@ impl App {
     pub fn frame_ui(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         let ctx = &ctx;
-        self.apply_theme(ctx);
+self.apply_theme(ctx);
         self.lock_scroll_axis(ctx);
         // Switch to the main window when sign-in is required.
         let needs_sign_in = !(self.is_connected() && self.user.is_some())
@@ -6563,12 +6563,12 @@ fn autoplay_seed(
 }
 
 /// Caps large track lists at 500 items starting from the selected row.
-fn cap_uris(uris: Vec<String>, index: u32) -> (Vec<String>, u32) {
+fn cap_uris(uris: &[String], index: u32) -> (Vec<String>, u32) {
     const MAX: usize = 500;
     if uris.len() <= MAX {
-        return (uris, index);
+        return (uris.to_vec(), index);
     }
-    let start = (index as usize).min(uris.len() - 1);
+    let start = (index as usize).min(uris.len().saturating_sub(1));
     let end = (start + MAX).min(uris.len());
     (uris[start..end].to_vec(), 0)
 }

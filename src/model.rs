@@ -1,6 +1,7 @@
 //! UI state, loaded data, and pending actions.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Instant;
 
 use crate::api::models::*;
@@ -529,12 +530,12 @@ pub enum RowContext {
         editable_playlist: Option<(String, Option<String>)>,
     },
     /// A loose list of tracks, played as a queue of URIs.
-    Uris(Vec<String>),
+    Uris(Arc<[String]>),
     /// A Next up row. Playing it consumes that row and all rows before it.
     Queue,
     /// A sorted or filtered context view that plays the displayed rows.
     View {
-        uris: Vec<String>,
+        uris: Arc<[String]>,
         context_uri: String,
     },
 }

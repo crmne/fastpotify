@@ -1,5 +1,7 @@
 //! The Home page.
 
+use std::sync::Arc;
+
 use egui::{CornerRadius, Rect, Sense, Vec2, pos2, vec2};
 
 use crate::api::models::{PlayableItem, Playlist, pick_image};
@@ -362,9 +364,13 @@ fn track_list(
         theme::section_title(ui, &palette, title);
     }
     ui.add_space(4.0);
-    let uris: Vec<String> = tracks.iter().map(|track| track.uri.clone()).collect();
-    let context = RowContext::Uris(uris);
-    let items: Vec<PlayableItem> = tracks.into_iter().map(PlayableItem::Track).collect();
+    let uris: Arc<[String]> = tracks
+        .iter()
+        .map(|track| track.uri.clone())
+        .collect::<Vec<_>>()
+        .into();
+    let context = RowContext::Uris(Arc::clone(&uris));
+    let items: Vec<PlayableItem> = tracks.iter().cloned().map(PlayableItem::Track).collect();
     for (index, item) in items.iter().take(limit).enumerate() {
         widgets::track_row(
             ui,

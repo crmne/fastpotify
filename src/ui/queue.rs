@@ -1,5 +1,7 @@
 //! The playback queue, as a page or as a side panel.
 
+use std::sync::Arc;
+
 use egui::{Align, Frame, Layout, Margin};
 
 use crate::api::models::PlayableItem;
@@ -167,7 +169,7 @@ fn contents(app: &mut App, ui: &mut egui::Ui, compact: bool) {
     if let Some(current) = &current {
         theme::text(ui, "Now playing", theme::semibold(14.0), palette.text);
         ui.add_space(4.0);
-        let context = RowContext::Uris(vec![current.uri().to_string()]);
+        let context = RowContext::Uris(Arc::from([current.uri().to_string()]));
         widgets::track_row(
             ui,
             app,
@@ -293,7 +295,7 @@ fn recents_contents(app: &mut App, ui: &mut egui::Ui) {
         let entry = &items[index];
         // Need owned PlayableItem for track_row; clone track.
         let item = PlayableItem::Track(entry.track.clone());
-        let context = RowContext::Uris(vec![entry.track.uri.clone()]);
+        let context = RowContext::Uris(Arc::from([entry.track.uri.clone()]));
         widgets::track_row(
             ui,
             app,

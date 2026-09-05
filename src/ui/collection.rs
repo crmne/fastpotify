@@ -109,7 +109,7 @@ pub struct Actions<'a> {
     pub play_uri: Option<String>,
     /// A sorted or filtered view: the exact list on screen, which the big
     /// button plays instead of the context's own order.
-    pub view: Option<Vec<String>>,
+    pub view: Option<Arc<[String]>>,
     pub saved: Option<(String, bool)>,
     pub saved_icons: (Icon, Icon),
     pub saved_tooltips: (&'a str, &'a str),
@@ -154,7 +154,7 @@ pub fn actions_row(
                 } else if let Some(uris) = actions.view.clone() {
                     app.actions.push(Action::PlayFromRow {
                         context: RowContext::View {
-                            uris,
+                            uris: Arc::clone(&uris),
                             context_uri: uri.clone(),
                         },
                         uri: String::new(),
@@ -313,6 +313,40 @@ pub struct TableCache {
     pub view_uris: Option<Arc<[String]>>,
 }
 
+/// Cached table rows for one page. Rebuilt only when the source list or
+/// contributor names change, not every frame.
+pub fn cached_table_items(
+    ui: &mut egui::Ui,
+    page: &Page,
+    items_revision: u64,
+    user_names_revision: u64,
+    build: impl FnOnce() -> Vec<TableItem>,
+) -> Arc<[TableItem]> {
+    let cache_id = egui::Id::new("table-items-cache").with(page);
+    let cached = ui.data(|d| d.get_temp::<Arc<[TableItem]>>(cache_id));
+    let valid = cached.as_ref().is_some_and(|items| {
+        ui.data(|d| {
+            d.get_temp::<(u64, u64)>(cache_id.with("rev"))
+                .is_some_and(|(rev, names)| {
+                    rev == items_revision && names == user_names_revision
+                })
+        })
+    });
+    if let Some(items) = cached.filter(|_| valid) {
+        items
+    } else {
+        let items: Arc<[TableItem]> = build().into();
+        ui.data_mut(|d| {
+            d.insert_temp(cache_id, Arc::clone(&items));
+            d.insert_temp(
+                cache_id.with("rev"),
+                (items_revision, user_names_revision),
+            );
+        });
+        items
+    }
+}
+
 pub fn prepare_table_view(
     ui: &mut egui::Ui,
     app: &App,
@@ -423,10 +457,10 @@ pub fn table(app: &mut App, ui: &mut egui::Ui, table: Table<'_>) {
     let context = if let Some(uris) = &entry.view_uris {
         match &table.context {
             RowContext::Context { uri, .. } => RowContext::View {
-                uris: uris.to_vec(),
+                uris: Arc::clone(uris),
                 context_uri: uri.clone(),
             },
-            _ => RowContext::Uris(uris.to_vec()),
+            _ => RowContext::Uris(Arc::clone(uris)),
         }
     } else {
         table.context.clone()
@@ -700,7 +734,7 @@ pub fn top_songs(app: &mut App, ui: &mut egui::Ui) {
     ui.add_space(18.0);
 
     let tracks = match &app.home.top_songs {
-        Loadable::Loaded(tracks) => tracks.clone(),
+        Loadable::Loaded(tracks) => tracks,
         Loadable::Loading | Loadable::NotLoaded => {
             widgets::loading_row(ui, &palette);
             return;
@@ -711,19 +745,31 @@ pub fn top_songs(app: &mut App, ui: &mut egui::Ui) {
             return;
         }
     };
-    let items: Vec<TableItem> = tracks
+    let items = cached_table_items(
+        ui,
+        &Page::TopSongs,
+        app.home.top_songs_generation,
+        app.user_names_revision,
+        || {
+            tracks
+                .iter()
+                .cloned()
+                .map(|track| (PlayableItem::Track(track), None, None))
+                .collect()
+        },
+    );
+    let uris: Arc<[String]> = items
         .iter()
-        .cloned()
-        .map(|track| (PlayableItem::Track(track), None, None))
-        .collect();
-    let uris = tracks.into_iter().map(|track| track.uri).collect();
+        .map(|(item, _, _)| item.uri().to_string())
+        .collect::<Vec<_>>()
+        .into();
     table(
         app,
         ui,
         Table {
             items: &items,
             row_offset: 0,
-            context: RowContext::Uris(uris),
+            context: RowContext::Uris(Arc::clone(&uris)),
             show_album: true,
             show_cover: true,
             show_added: false,
@@ -747,11 +793,19 @@ pub fn playlist(app: &mut App, ui: &mut egui::Ui, id: &str) {
     let user_id = app.user_id().unwrap_or("").to_string();
     match &page.playlist {
         Loadable::Loaded(playlist) => {
-            let items = items_of(
-                &page.items,
-                playlist.owner.id.as_deref(),
-                playlist.owner_name(),
-                &app.user_names,
+            let items = cached_table_items(
+                ui,
+                &Page::Playlist(id.to_string()),
+                page.items.revision,
+                app.user_names_revision,
+                || {
+                    items_of(
+                        &page.items,
+                        playlist.owner.id.as_deref(),
+                        playlist.owner_name(),
+                        &app.user_names,
+                    )
+                },
             );
             let count = playlist.track_total().max(items.len() as u32);
             // Spotify's collaborative flag covers secret collaborations; a
@@ -833,7 +887,10 @@ pub fn playlist(app: &mut App, ui: &mut egui::Ui, id: &str) {
                 sort,
                 page.items.revision,
             );
-            let view_play = table_view.view_uris.as_ref().map(|uris| uris.to_vec());
+            let view_play = table_view
+                .view_uris
+                .as_ref()
+                .map(|uris| Arc::clone(uris));
             let playlist_clone = playlist.clone();
             actions_row(
                 app,
@@ -911,24 +968,31 @@ pub fn album(app: &mut App, ui: &mut egui::Ui, id: &str) {
     match &page.album {
         Loadable::Loaded(album) => {
             album_hero(app, ui, album, &page.tracks);
-            let items: Vec<TableItem> = page
-                .tracks
-                .items
-                .iter()
-                .cloned()
-                .map(|mut track| {
-                    if track.album.is_none() {
-                        track.album = Some(Album {
-                            id: album.id.clone(),
-                            name: album.name.clone(),
-                            uri: album.uri.clone(),
-                            images: album.images.clone(),
-                            ..Album::default()
-                        });
-                    }
-                    (PlayableItem::Track(track), None, None)
-                })
-                .collect();
+            let items = cached_table_items(
+                ui,
+                &Page::Album(id.to_string()),
+                page.tracks.revision,
+                app.user_names_revision,
+                || {
+                    page.tracks
+                        .items
+                        .iter()
+                        .cloned()
+                        .map(|mut track| {
+                            if track.album.is_none() {
+                                track.album = Some(Album {
+                                    id: album.id.clone(),
+                                    name: album.name.clone(),
+                                    uri: album.uri.clone(),
+                                    images: album.images.clone(),
+                                    ..Album::default()
+                                });
+                            }
+                            (PlayableItem::Track(track), None, None)
+                        })
+                        .collect()
+                },
+            );
             let saved = app.is_saved(&album.uri).unwrap_or(false);
             let sort = app.table_sorts.get(&Page::Album(id.to_string())).copied();
             let table_view = prepare_table_view(
@@ -940,7 +1004,10 @@ pub fn album(app: &mut App, ui: &mut egui::Ui, id: &str) {
                 sort,
                 page.tracks.revision,
             );
-            let album_view = table_view.view_uris.as_ref().map(|uris| uris.to_vec());
+            let album_view = table_view
+                .view_uris
+                .as_ref()
+                .map(|uris| Arc::clone(uris));
             actions_row(
                 app,
                 ui,
@@ -1072,19 +1139,26 @@ fn album_hero(
 
 pub fn liked(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
-    let items: Vec<TableItem> = app
-        .library
-        .liked
-        .items
-        .iter()
-        .map(|saved| {
-            (
-                PlayableItem::Track(saved.track.clone()),
-                saved.added_at.clone(),
-                None,
-            )
-        })
-        .collect();
+    let items = cached_table_items(
+        ui,
+        &Page::LikedSongs,
+        app.library.liked.revision,
+        app.user_names_revision,
+        || {
+            app.library
+                .liked
+                .items
+                .iter()
+                .map(|saved| {
+                    (
+                        PlayableItem::Track(saved.track.clone()),
+                        saved.added_at.clone(),
+                        None,
+                    )
+                })
+                .collect()
+        },
+    );
     let total = app.library.liked.total.unwrap_or(items.len() as u32);
     let user = app
         .user
@@ -1132,7 +1206,10 @@ pub fn liked(app: &mut App, ui: &mut egui::Ui) {
         sort,
         app.library.liked.revision,
     );
-    let liked_view = table_view.view_uris.as_ref().map(|uris| uris.to_vec());
+    let liked_view = table_view
+        .view_uris
+        .as_ref()
+        .map(|uris| Arc::clone(uris));
     actions_row(
         app,
         ui,
@@ -1148,10 +1225,11 @@ pub fn liked(app: &mut App, ui: &mut egui::Ui) {
         Some(&mut filter),
     );
     ui.data_mut(|data| data.insert_temp(filter_id, filter.clone()));
-    let uris: Vec<String> = items
+    let uris: Arc<[String]> = items
         .iter()
         .map(|(item, _, _)| item.uri().to_string())
-        .collect();
+        .collect::<Vec<_>>()
+        .into();
     let context = match collection_uri {
         Some(uri) if app.library.liked.is_complete() => RowContext::Context {
             uri,

@@ -1,5 +1,7 @@
 //! Podcast pages and episode rows.
 
+use std::sync::Arc;
+
 use egui::{CornerRadius, Layout, Rect, Sense, UiBuilder, Vec2, pos2, vec2};
 
 use crate::api::models::{Episode, PlayableItem, pick_image};
@@ -332,5 +334,5 @@ pub fn episode_row(
             index: 0,
         });
     }
-    let _ = RowContext::Uris(Vec::new());
+    let _ = RowContext::Uris(Arc::from([]));
 }
