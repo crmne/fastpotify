@@ -333,8 +333,7 @@ impl BytesLoader for ArtLoader {
             .values()
             .map(|entry| match entry {
                 Entry::Ready {
-                    bytes: Some(bytes),
-                    ..
+                    bytes: Some(bytes), ..
                 } => bytes.len(),
                 _ => 0,
             })
