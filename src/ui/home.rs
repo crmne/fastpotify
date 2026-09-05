@@ -370,15 +370,15 @@ fn track_list(
         .collect::<Vec<_>>()
         .into();
     let context = RowContext::Uris(Arc::clone(&uris));
-    let items: Vec<PlayableItem> = tracks.iter().cloned().map(PlayableItem::Track).collect();
-    for (index, item) in items.iter().take(limit).enumerate() {
+    for (index, track) in tracks.iter().take(limit).enumerate() {
+        let item = PlayableItem::Track(track.clone());
         widgets::track_row(
             ui,
             app,
             TrackRow {
                 index,
                 number: None,
-                item,
+                item: &item,
                 context: &context,
                 show_cover: !app.settings.tracklist_compact,
                 show_album: true,
@@ -394,7 +394,7 @@ fn track_list(
         );
     }
     if let Some(label) = more_label
-        && items.len() > limit
+        && tracks.len() > limit
         && theme::link(ui, label, theme::semibold(14.0), palette.secondary).clicked()
     {
         app.actions.push(Action::Open(Page::TopSongs));
