@@ -312,9 +312,20 @@ fn create_playlist(app: &mut App, ui: &mut egui::Ui) {
 }
 
 fn edit_playlist(app: &mut App, ui: &mut egui::Ui) {
+    let existing_image = if let Some(Dialog::EditPlaylist { id, .. }) = &app.dialog {
+        app.library
+            .playlists
+            .get()
+            .and_then(|playlists| playlists.iter().find(|playlist| &playlist.id == id))
+            .and_then(|playlist| crate::api::models::pick_image(&playlist.images, 100))
+            .map(str::to_owned)
+    } else {
+        None
+    };
     let palette = app.palette;
     let busy = app.playlist_busy;
     let Some(Dialog::EditPlaylist {
+        cover,
         id,
         name,
         description,
@@ -325,32 +336,84 @@ fn edit_playlist(app: &mut App, ui: &mut egui::Ui) {
     };
     theme::text(ui, "Edit details", theme::bold(20.0), palette.text);
     ui.add_space(12.0);
-    theme::text(ui, "Name", theme::medium(13.0), palette.secondary);
-    text_field(ui, &palette, "edit-name", name, "Playlist name", true);
-    ui.add_space(10.0);
-    theme::text(ui, "Description", theme::medium(13.0), palette.secondary);
-    Frame::new()
-        .fill(palette.surface)
-        .corner_radius(CornerRadius::same(6))
-        .inner_margin(Margin::symmetric(12, 8))
+    egui::ScrollArea::vertical()
+        .max_height((ui.ctx().content_rect().height() - 210.0).max(100.0))
         .show(ui, |ui| {
-            ui.add(
-                egui::TextEdit::multiline(description)
-                    .id(egui::Id::new("edit-description"))
-                    .hint_text(egui::RichText::new("Optional description").color(palette.dim))
-                    .font(theme::regular(14.0))
-                    .frame(egui::Frame::NONE)
-                    .desired_rows(3)
-                    .desired_width(f32::INFINITY),
-            );
+            ui.horizontal(|ui| {
+                if let Some(selected) = &cover.selection {
+                    ui.ctx()
+                        .include_bytes(selected.uri.clone(), selected.jpeg.clone());
+                    ui.add(
+                        egui::Image::new(selected.uri.clone())
+                            .fit_to_exact_size(egui::vec2(72.0, 72.0))
+                            .alt_text("Selected playlist cover"),
+                    );
+                } else if let Some(url) = &existing_image {
+                    ui.add(
+                        egui::Image::new(url)
+                            .fit_to_exact_size(egui::vec2(72.0, 72.0))
+                            .alt_text("Current playlist cover"),
+                    );
+                }
+                ui.vertical(|ui| {
+                    if cover.request.is_some() || cover.uploading {
+                        theme::spinner(ui, 18.0, palette.accent);
+                        theme::text(
+                            ui,
+                            if cover.uploading {
+                                "Uploading cover…"
+                            } else {
+                                "Choosing cover…"
+                            },
+                            theme::regular(13.0),
+                            palette.secondary,
+                        );
+                    } else {
+                        if theme::pill_button(ui, &palette, "Change cover", false).clicked() {
+                            app.actions.push(Action::ChoosePlaylistCover(id.clone()));
+                        }
+                        if cover.selection.is_some()
+                            && theme::pill_button(ui, &palette, "Upload cover", true).clicked()
+                        {
+                            app.actions.push(Action::UploadPlaylistCover(id.clone()));
+                        }
+                    }
+                });
+            });
+            if let Some(error) = &cover.error {
+                ui.add(egui::Label::new(egui::RichText::new(error).color(palette.text)).wrap());
+            }
+            ui.add_space(10.0);
+            theme::text(ui, "Name", theme::medium(13.0), palette.secondary);
+            text_field(ui, &palette, "edit-name", name, "Playlist name", true);
+            ui.add_space(10.0);
+            theme::text(ui, "Description", theme::medium(13.0), palette.secondary);
+            Frame::new()
+                .fill(palette.surface)
+                .corner_radius(CornerRadius::same(6))
+                .inner_margin(Margin::symmetric(12, 8))
+                .show(ui, |ui| {
+                    ui.add(
+                        egui::TextEdit::multiline(description)
+                            .id(egui::Id::new("edit-description"))
+                            .hint_text(
+                                egui::RichText::new("Optional description").color(palette.dim),
+                            )
+                            .font(theme::regular(14.0))
+                            .frame(egui::Frame::NONE)
+                            .desired_rows(3)
+                            .desired_width(f32::INFINITY),
+                    );
+                });
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                super::widgets::switch(ui, &palette, "Public playlist", public);
+                theme::text(ui, "Public playlist", theme::regular(14.0), palette.text);
+            });
         });
-    ui.add_space(10.0);
-    ui.horizontal(|ui| {
-        super::widgets::switch(ui, &palette, "Public playlist", public);
-        theme::text(ui, "Public playlist", theme::regular(14.0), palette.text);
-    });
     ui.add_space(20.0);
     let id = id.clone();
+    let busy = busy || cover.uploading || cover.request.is_some();
     let name_value = name.trim().to_string();
     let description_value = description.trim().to_string();
     let public_value = *public;

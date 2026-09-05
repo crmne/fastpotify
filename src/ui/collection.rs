@@ -1187,6 +1187,7 @@ pub fn liked(app: &mut App, ui: &mut egui::Ui) {
 #[allow(dead_code)]
 fn playlist_dialog(app: &mut App, playlist: &Playlist) {
     app.actions.push(Action::ShowDialog(Dialog::EditPlaylist {
+        cover: Default::default(),
         id: playlist.id.clone(),
         name: playlist.name.clone(),
         description: playlist.description.clone().unwrap_or_default(),

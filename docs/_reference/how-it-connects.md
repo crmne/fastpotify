@@ -68,6 +68,28 @@ successful write advances the cached playlist to Spotify's returned snapshot
 instead of downloading the playlist again. If Spotify cannot answer the scan,
 Fastpotify preserves the requested edit and lets the write report its result.
 
+## Playlist cover uploads
+
+**Edit details → Change cover** opens the native file picker. Fastpotify reads
+only the selected JPEG or PNG, preserves its aspect ratio, flattens transparent
+pixels onto white, and encodes a JPEG preview. Files must be smaller than 20 MB
+and no larger than 8192 pixels per side. Encoding reduces the image to fit
+Spotify's 256 KB Base64 request limit. **Upload cover** sends that preview to
+Spotify; **Save** separately saves the name, description, and visibility.
+
+Uploads use the same shared or personal app routing as playlist edits. Requests
+are not retried through another app. The uploaded image stays visible for the
+session while Spotify propagates its artwork. The selected source file is not
+copied to the cache or settings.
+
+Image uploads require renewed Web API consent. If Fastpotify asks you to sign
+in again after updating, approve the image upload permission. Reconnect your
+personal app in Settings too, if you use one. Local playback authorization is
+unchanged. Spotify can refuse changes to playlists you do not own.
+
+On Linux the file picker uses a desktop portal, with Zenity as a fallback.
+Install your desktop's file chooser portal or Zenity if no picker opens.
+
 ## Receivers on the local network
 
 Spotify's device list only shows signed-in receivers. A new librespot or

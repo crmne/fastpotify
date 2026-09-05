@@ -614,6 +614,15 @@ pub fn apply_flags(app: &mut App, page: Option<&str>, show: Option<&str>) {
             "devices" => app.show_devices = true,
             "shortcuts" => app.dialog = Some(Dialog::Shortcuts),
             "premium" => app.dialog = Some(Dialog::PremiumNeeded),
+            "edit" => {
+                app.dialog = Some(Dialog::EditPlaylist {
+                    id: "pl1".into(),
+                    name: "Long Way Home".into(),
+                    description: "Songs for the road".into(),
+                    public: false,
+                    cover: Default::default(),
+                });
+            }
             "create" => {
                 app.dialog = Some(Dialog::CreatePlaylist {
                     name: "Autumn drives".into(),
@@ -826,6 +835,76 @@ mod tests {
         app.attach(&ctx);
         populate(&mut app);
         (ctx, app)
+    }
+
+    #[test]
+    fn change_cover_button_dispatches_the_native_picker_action() {
+        let (ctx, mut app) = accessible_app("cover-button");
+        app.dialog = Some(Dialog::EditPlaylist {
+            id: "pl1".into(),
+            name: "Test".into(),
+            description: String::new(),
+            public: false,
+            cover: Default::default(),
+        });
+        let _ = accessible_frame(&ctx, &mut app, vec![]);
+        let tree = accessible_frame(&ctx, &mut app, vec![]);
+        let button = accessible_node(&tree, "Change cover", egui::accesskit::Role::Button);
+        let _ = accessible_frame(
+            &ctx,
+            &mut app,
+            vec![accessible_action(
+                button,
+                egui::accesskit::Action::Click,
+                None,
+            )],
+        );
+        let Some(Dialog::EditPlaylist { cover, .. }) = &app.dialog else {
+            panic!()
+        };
+        assert!(cover.request.is_some());
+        app.backend.shutdown();
+    }
+
+    #[test]
+    fn cover_editing_fits_large_and_narrow_windows_in_both_themes() {
+        for (width, height) in [(1240.0, 800.0), (760.0, 520.0)] {
+            for light in [false, true] {
+                let (ctx, mut app) = accessible_app("cover-dialog");
+                app.open(Page::Playlist("pl1".into()));
+                app.dialog = Some(Dialog::EditPlaylist {
+                    id: "pl1".into(),
+                    name: "Test".into(),
+                    description: String::new(),
+                    public: false,
+                    cover: Default::default(),
+                });
+                if light {
+                    app.settings.theme = crate::settings::ThemeChoice::Light;
+                    app.actions.push(Action::SettingsChanged);
+                }
+                if let Some(Dialog::EditPlaylist { cover, .. }) = &mut app.dialog {
+                    cover.error = Some("Spotify refused this cover. Check that you own the playlist, then sign in again to grant image upload permission.".into());
+                }
+                for _ in 0..3 {
+                    let mut output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(width, height),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| app.frame_ui(ui),
+                    );
+                    output.textures_delta.clear();
+                }
+                let rect = app.dialog_rect.unwrap();
+                assert!(rect.left() >= 0.0 && rect.top() >= 0.0, "{rect:?}");
+                assert!(rect.right() <= width && rect.bottom() <= height, "{rect:?}");
+                app.backend.shutdown();
+            }
+        }
     }
 
     fn accessible_frame(
@@ -1736,6 +1815,7 @@ mod tests {
                 add_uris: vec![],
             },
             Dialog::EditPlaylist {
+                cover: Default::default(),
                 id: "pl1".into(),
                 name: "x".into(),
                 description: String::new(),

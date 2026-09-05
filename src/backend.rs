@@ -116,6 +116,10 @@ pub enum ApiRequest {
         public: bool,
         description: String,
     },
+    UploadPlaylistCover {
+        id: String,
+        cover: crate::playlist_cover::Cover,
+    },
     UpdatePlaylist {
         id: String,
         name: Option<String>,
@@ -310,6 +314,11 @@ pub enum ApiResponse {
         result: ApiResult<Page<PlaylistItem>>,
     },
     PlaylistCreated(ApiResult<Playlist>),
+    PlaylistCoverUploaded {
+        id: String,
+        cover: crate::playlist_cover::Cover,
+        result: ApiResult<()>,
+    },
     PlaylistUpdated {
         id: String,
         result: ApiResult<()>,
@@ -423,6 +432,12 @@ pub enum ApiResponse {
 }
 
 pub enum Command {
+    ChoosePlaylistCover {
+        id: String,
+        request: u64,
+        selected:
+            std::pin::Pin<Box<dyn std::future::Future<Output = Option<rfd::FileHandle>> + Send>>,
+    },
     /// Start (or restart) the Web API sign-in in the browser.
     SignIn,
     CancelSignIn,
@@ -510,6 +525,11 @@ pub struct LyricsRequest {
 }
 
 pub enum Event {
+    PlaylistCoverChosen {
+        id: String,
+        request: u64,
+        result: Result<Option<crate::playlist_cover::Cover>, String>,
+    },
     Auth(AuthStatus),
     Playback(LocalPlayback),
     /// Receivers seen on the local network that Spotify has not listed.
@@ -694,6 +714,23 @@ impl Backend {
         let _ = self.commands.send(command);
     }
 
+    /// Construct the native dialog on the UI thread, then await and read it
+    /// on the runtime. AppKit requires its window lookup on the main thread.
+    pub fn choose_playlist_cover(&self, id: String, request: u64) {
+        if self.offline {
+            return;
+        }
+        let selected = rfd::AsyncFileDialog::new()
+            .set_title("Choose playlist cover")
+            .add_filter("JPEG or PNG image", &["jpg", "jpeg", "png"])
+            .pick_file();
+        self.send(Command::ChoosePlaylistCover {
+            id,
+            request,
+            selected: Box::pin(selected),
+        });
+    }
+
     pub fn api(&self, request: ApiRequest) {
         #[cfg(test)]
         if let ApiRequest::PlaylistItems {
@@ -837,6 +874,33 @@ impl Worker {
         self.restore_session();
         while let Some(command) = commands.recv().await {
             match command {
+                Command::ChoosePlaylistCover {
+                    id,
+                    request,
+                    selected,
+                } => {
+                    let events = self.events.clone();
+                    let waker = self.waker.clone();
+                    tokio::spawn(async move {
+                        let selected = selected.await;
+                        let result = match selected {
+                            None => Ok(None),
+                            Some(file) => tokio::task::spawn_blocking(move || {
+                                crate::playlist_cover::read(file.path()).map(Some)
+                            })
+                            .await
+                            .unwrap_or_else(|_| {
+                                Err("Couldn't prepare that image. Try another file.".into())
+                            }),
+                        };
+                        let _ = events.send(Event::PlaylistCoverChosen {
+                            id,
+                            request,
+                            result,
+                        });
+                        waker.wake();
+                    });
+                }
                 Command::Shutdown => break,
                 Command::SignIn => self.sign_in(),
                 Command::CancelSignIn => {
@@ -1767,7 +1831,9 @@ fn operation_for(api: &ApiGateway, request: &ApiRequest) -> Operation {
         | ApiRequest::CheckPlaylistDuplicates {
             playlist_id: id, ..
         } => Operation::PlaylistItems(api.playlist_access(id)),
-        ApiRequest::UpdatePlaylist { id, .. } | ApiRequest::FollowPlaylist { id, .. } => {
+        ApiRequest::UploadPlaylistCover { id, .. }
+        | ApiRequest::UpdatePlaylist { id, .. }
+        | ApiRequest::FollowPlaylist { id, .. } => {
             Operation::PlaylistMutation(api.playlist_access(id))
         }
         ApiRequest::AddToPlaylist { playlist_id, .. }
@@ -1948,6 +2014,11 @@ async fn handle(api: &ApiGateway, request: ApiRequest) -> (ApiResponse, Option<A
             public,
             description,
         } => ApiResponse::PlaylistCreated(routed!(create_playlist(&name, public, &description))),
+        ApiRequest::UploadPlaylistCover { id, cover } => ApiResponse::PlaylistCoverUploaded {
+            result: routed!(upload_playlist_cover(&id, &cover.encoded)),
+            id,
+            cover,
+        },
         ApiRequest::UpdatePlaylist {
             id,
             name,
@@ -2249,5 +2320,50 @@ mod playlist_cache_tests {
         assert_eq!(stored.snapshot, "second");
         assert!(!path.with_extension("json.tmp").exists());
         let _ = std::fs::remove_dir_all(root);
+    }
+}
+
+#[cfg(test)]
+mod cover_routing_tests {
+    use super::*;
+    use crate::api::gateway::{AccountId, PlaylistAccess};
+
+    #[test]
+    fn cover_upload_uses_the_existing_playlist_mutation_route() {
+        let api = ApiGateway::new(
+            reqwest::Client::new(),
+            std::sync::Arc::new(NetActivity::default()),
+        );
+        api.install(ApiSource::Shared, AccountId::new("me"))
+            .unwrap();
+        let request = ApiRequest::UploadPlaylistCover {
+            id: "test".into(),
+            cover: crate::playlist_cover::Cover {
+                jpeg: Vec::new().into(),
+                encoded: "".into(),
+                uri: String::new(),
+            },
+        };
+        assert_eq!(
+            operation_for(&api, &request),
+            Operation::PlaylistMutation(PlaylistAccess::Unknown)
+        );
+        let mut playlist = Playlist {
+            id: "test".into(),
+            ..Default::default()
+        };
+        playlist.owner.id = Some("me".into());
+        api.observe_playlist(&playlist);
+        assert_eq!(
+            operation_for(&api, &request),
+            Operation::PlaylistMutation(PlaylistAccess::Owned)
+        );
+        playlist.owner.id = Some("other".into());
+        playlist.collaborative = true;
+        api.observe_playlist(&playlist);
+        assert_eq!(
+            operation_for(&api, &request),
+            Operation::PlaylistMutation(PlaylistAccess::Collaborative)
+        );
     }
 }
