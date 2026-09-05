@@ -6205,11 +6205,7 @@ impl App {
             ctx.request_repaint_after(Duration::from_millis(120));
         }
         if self.is_connected() {
-            let interval = match self.target() {
-                Target::Local if self.local.is_active() => REMOTE_POLL_IDLE,
-                _ => REMOTE_POLL_ACTIVE,
-            };
-            ctx.request_repaint_after(interval);
+            ctx.request_repaint_after(self.connected_repaint_interval());
         }
         if ctx.input(|input| input.viewport().close_requested())
             && !self.quit_requested
@@ -6220,6 +6216,19 @@ impl App {
             self.hide_intent = true;
         }
         self.frame_now = None;
+    }
+
+    /// How soon the window asks for another frame while signed in.
+    ///
+    /// API polling already uses 20s during local playback. This only changes
+    /// the UI deadline. While a track is playing, the 250ms progress refresh
+    /// still wins, so the saving is idle-local frames: 4s -> 20s, 80% fewer
+    /// wakeups when paused on this device.
+    fn connected_repaint_interval(&self) -> Duration {
+        match self.target() {
+            Target::Local if self.local.is_active() => REMOTE_POLL_IDLE,
+            _ => REMOTE_POLL_ACTIVE,
+        }
     }
 
     /// Locks each scroll gesture to one axis.
@@ -8063,6 +8072,82 @@ mod tests {
         );
         app.local_ready = true;
         app
+    }
+
+    #[test]
+    fn a_frame_snapshot_sees_optimistic_pause_in_the_same_batch() {
+        let mut app = headless_app();
+        app.local.track = Some(crate::player::LocalTrack {
+            uri: "spotify:track:a".into(),
+            title: "A".into(),
+            ..Default::default()
+        });
+        app.local.playback = Playback::Playing;
+        app.refresh_frame_now();
+        assert!(app.now_playing().expect("playing").playing);
+        app.optimistic_playing = Some((false, Instant::now()));
+        assert!(
+            app.now_playing().expect("snapshot").playing,
+            "the pre-action snapshot must not flip until the frame refreshes"
+        );
+        app.refresh_frame_now();
+        assert!(
+            !app.now_playing().expect("paused").playing,
+            "after apply_actions the snapshot must match the optimistic pause"
+        );
+    }
+
+    #[test]
+    fn a_frame_snapshot_does_not_freeze_local_after_remote_handoff() {
+        let mut app = headless_app();
+        app.local.track = Some(crate::player::LocalTrack {
+            uri: "spotify:track:local".into(),
+            title: "Local".into(),
+            ..Default::default()
+        });
+        app.local.playback = Playback::Playing;
+        app.refresh_frame_now();
+        assert_eq!(app.now_playing().expect("local").uri, "spotify:track:local");
+        app.local.track = None;
+        app.local.playback = Playback::Stopped;
+        app.remote = Some(RemoteSnapshot {
+            state: PlaybackState {
+                is_playing: true,
+                item: Some(PlayableItem::Track(Track {
+                    id: Some("remote".into()),
+                    uri: "spotify:track:remote".into(),
+                    name: "Remote".into(),
+                    ..Track::default()
+                })),
+                ..Default::default()
+            },
+            received_at: Instant::now(),
+        });
+        assert_eq!(
+            app.now_playing().expect("stale snapshot").uri,
+            "spotify:track:local"
+        );
+        app.refresh_frame_now();
+        assert_eq!(
+            app.now_playing().expect("handoff").uri,
+            "spotify:track:remote"
+        );
+    }
+
+    #[test]
+    fn local_idle_repaint_is_twenty_seconds_not_four() {
+        let mut app = headless_app();
+        assert_eq!(app.connected_repaint_interval(), REMOTE_POLL_ACTIVE);
+        app.local.track = Some(crate::player::LocalTrack {
+            uri: "spotify:track:a".into(),
+            ..Default::default()
+        });
+        app.local.playback = Playback::Paused;
+        assert_eq!(
+            app.connected_repaint_interval(),
+            REMOTE_POLL_IDLE,
+            "paused local UI wait is 20s (already the API interval); 4s was only a tighter wake-up"
+        );
     }
 
     #[test]
