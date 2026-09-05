@@ -4,44 +4,47 @@
 
 use fastpotify::{app, backend, paths, settings, single_instance, util};
 
-use clap::Parser;
-
 /// A fast, native Spotify client.
-#[derive(Debug, Parser)]
-#[command(name = "fastpotify", version, about)]
+#[derive(Debug, usage::Cli)]
+#[usage(
+    bin = "fastpotify",
+    version = env!("CARGO_PKG_VERSION"),
+    unknown_flags = "error",
+    args_override_self = false
+)]
 struct Cli {
     /// A command for the running instance; without one, the app starts.
-    #[command(subcommand)]
+    #[usage(subcommand)]
     control: Option<Control>,
 
     /// A Spotify link to open: spotify:track:…, or an open.spotify.com
     /// address. The running Fastpotify opens it when there is one, which
     /// is how the desktop hands links over.
-    #[arg(value_name = "LINK")]
+    #[usage(value_name = "LINK")]
     link: Option<String>,
 
     /// Spotify Connect device name for this session.
-    #[arg(long)]
+    #[usage(long)]
     device_name: Option<String>,
 
     /// Log more from librespot and the Web API client.
-    #[arg(short, long)]
+    #[usage(short = 'v', long)]
     verbose: bool,
 
     /// Start with sample data and no Spotify connection (for screenshots).
     #[cfg(feature = "demo")]
-    #[arg(long)]
+    #[usage(long)]
     demo: bool,
 
     /// Page to open in demo mode, e.g. `home`, `playlist:pl1`, `artist:art0`.
     #[cfg(feature = "demo")]
-    #[arg(long)]
+    #[usage(long)]
     demo_page: Option<String>,
 
     /// Extra demo surfaces: a comma-separated list of `queue`, `devices`,
     /// `shortcuts`, `create`, `light`, `focus`.
     #[cfg(feature = "demo")]
-    #[arg(long)]
+    #[usage(long)]
     demo_show: Option<String>,
 
     /// Write a PNG of the demo window to this path and exit. Implies
@@ -50,18 +53,18 @@ struct Cli {
     /// the size of the tile under a tiling window manager, which decides for
     /// itself.
     #[cfg(feature = "demo")]
-    #[arg(long, value_name = "PATH")]
+    #[usage(long, value_name = "PATH")]
     demo_shot: Option<std::path::PathBuf>,
 
     /// How long to let cover art download before the shot is taken.
     #[cfg(feature = "demo")]
-    #[arg(long, value_name = "MS", default_value_t = 6000)]
+    #[usage(long, value_name = "MS", default = "6000")]
     demo_shot_delay: u64,
 }
 
 /// Remote control of the running instance, for Raycast scripts, launchers,
 /// and hands on keyboards.
-#[derive(Debug, clap::Subcommand)]
+#[derive(Debug, usage::Subcommands)]
 enum Control {
     /// Toggle play/pause
     PlayPause,
@@ -75,63 +78,96 @@ enum Control {
     Previous,
     /// Seek by this many seconds; negative seeks backwards
     Seek {
-        #[arg(allow_negative_numbers = true)]
+        #[usage(allow_negative_numbers)]
         seconds: i64,
     },
     /// Seek to a position, in seconds from the start
     SeekTo { seconds: u32 },
     /// Set the volume to a percentage
-    Volume {
-        #[arg(value_parser = clap::value_parser!(u8).range(0..=100))]
-        percent: u8,
-    },
+    Volume { percent: Percent<0> },
     /// Raise the volume
     VolumeUp {
-        #[arg(default_value_t = 10, value_parser = clap::value_parser!(u8).range(1..=100))]
-        percent: u8,
+        #[usage(default = "10")]
+        percent: Percent<1>,
     },
     /// Lower the volume
     VolumeDown {
-        #[arg(default_value_t = 10, value_parser = clap::value_parser!(u8).range(1..=100))]
-        percent: u8,
+        #[usage(default = "10")]
+        percent: Percent<1>,
     },
     /// Toggle mute
     Mute,
     /// Toggle shuffle, or set it outright
-    Shuffle { state: Option<OnOff> },
+    Shuffle {
+        #[usage(value_enum)]
+        state: Option<OnOff>,
+    },
     /// Cycle the repeat mode, or set it outright
-    Repeat { mode: Option<Repeat> },
+    Repeat {
+        #[usage(value_enum)]
+        mode: Option<Repeat>,
+    },
     /// Save the playing track to your library, or take it back out
     Like,
     /// Play a Spotify URI: a track, album, playlist, artist, or show
     PlayUri { uri: String },
     /// List the Spotify Connect devices
-    Devices {
-        /// Print the JSON the running instance sent instead.
-        #[arg(long)]
-        raw: bool,
-    },
+    Devices(DevicesArgs),
     /// Move playback to a device, by the id `devices` prints
     Transfer { device_id: String },
     /// Print the playing track
-    NowPlaying {
-        /// Print the fields tab-separated instead: state, title, artists,
-        /// album, position_ms, duration_ms, volume, shuffle, repeat,
-        /// art_url, saved, device.
-        #[arg(long)]
-        raw: bool,
-    },
+    NowPlaying(NowPlayingArgs),
     /// Bring the window of the running instance forward
     Show,
 }
 
-#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+#[derive(Debug, usage::Args)]
+#[usage(args_override_self = false)]
+struct DevicesArgs {
+    /// Print the JSON the running instance sent instead.
+    #[usage(long)]
+    raw: bool,
+}
+
+#[derive(Debug, usage::Args)]
+#[usage(args_override_self = false)]
+struct NowPlayingArgs {
+    /// Print the fields tab-separated instead: state, title, artists,
+    /// album, position_ms, duration_ms, volume, shuffle, repeat,
+    /// art_url, saved, device.
+    #[usage(long)]
+    raw: bool,
+}
+
+#[derive(Debug)]
+struct Percent<const MIN: u8>(u8);
+
+impl<const MIN: u8> std::str::FromStr for Percent<MIN> {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        value
+            .parse::<u8>()
+            .ok()
+            .filter(|percent| (MIN..=100).contains(percent))
+            .map(Self)
+            .ok_or_else(|| format!("expected a whole percentage between {MIN} and 100"))
+    }
+}
+
+impl<const MIN: u8> std::fmt::Display for Percent<MIN> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+#[derive(Clone, Copy, Debug, usage::ValueEnum)]
 enum OnOff {
     On,
     Off,
 }
 
-#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+#[derive(Clone, Copy, Debug, usage::ValueEnum)]
 enum Repeat {
     /// Play through and stop
     Off,
@@ -147,7 +183,8 @@ enum Repeat {
 fn run_control(control: Control) -> i32 {
     let raw = matches!(
         control,
-        Control::NowPlaying { raw: true } | Control::Devices { raw: true }
+        Control::NowPlaying(NowPlayingArgs { raw: true })
+            | Control::Devices(DevicesArgs { raw: true })
     );
     let verb = match control {
         Control::PlayPause => "playpause".to_owned(),
@@ -180,9 +217,9 @@ fn run_control(control: Control) -> i32 {
         }
         Control::Like => "save-toggle".to_owned(),
         Control::PlayUri { uri } => format!("play-uri {uri}"),
-        Control::Devices { .. } => "devices".to_owned(),
+        Control::Devices(_) => "devices".to_owned(),
         Control::Transfer { device_id } => format!("transfer {device_id}"),
-        Control::NowPlaying { .. } => "nowplaying".to_owned(),
+        Control::NowPlaying(_) => "nowplaying".to_owned(),
         Control::Show => "show".to_owned(),
     };
     match single_instance::send(&verb) {
@@ -813,33 +850,87 @@ fn app_icon() -> egui::IconData {
 mod tests {
     use super::*;
 
-    /// A link on the command line is a link, and a control verb is still a
-    /// verb: the two do not get in each other's way.
+    fn parse(args: &str) -> Result<Cli, usage::Error<'static, '_>> {
+        let args: Vec<_> = std::iter::once("fastpotify")
+            .chain(args.split_whitespace())
+            .map(std::ffi::OsStr::new)
+            .collect();
+        Cli::try_parse_from(&args)
+    }
+
     #[test]
     fn a_link_and_a_verb_are_told_apart() {
-        // #given / #when / #then
-        let launch = Cli::try_parse_from(["fastpotify", "spotify:track:4uLU6hMCjMI75M1A2tKUQC"])
-            .expect("a link parses");
-        assert_eq!(
-            launch.link.as_deref(),
-            Some("spotify:track:4uLU6hMCjMI75M1A2tKUQC")
-        );
+        let uri = "spotify:track:4uLU6hMCjMI75M1A2tKUQC";
+        let launch = parse(uri).unwrap();
+        assert_eq!(launch.link.as_deref(), Some(uri));
         assert!(launch.control.is_none());
-
-        let launch = Cli::try_parse_from([
-            "fastpotify",
-            "https://open.spotify.com/album/1DFixLWuPkv3KT3TnV35m3?si=x",
-            "--verbose",
-        ])
-        .expect("a web address parses");
-        assert!(launch.link.is_some());
-        assert!(launch.verbose);
-
-        let verb = Cli::try_parse_from(["fastpotify", "next"]).expect("a verb parses");
+        let launch =
+            parse("https://open.spotify.com/album/1DFixLWuPkv3KT3TnV35m3?si=x --verbose").unwrap();
+        assert!(launch.link.is_some() && launch.verbose);
+        let verb = parse("next").unwrap();
         assert!(matches!(verb.control, Some(Control::Next)));
         assert!(verb.link.is_none());
-
-        let bare = Cli::try_parse_from(["fastpotify"]).expect("a plain launch parses");
+        let bare = parse("").unwrap();
         assert!(bare.link.is_none() && bare.control.is_none());
+    }
+
+    #[test]
+    fn control_values_keep_their_defaults_and_limits() {
+        assert!(matches!(
+            parse("seek -15").unwrap().control,
+            Some(Control::Seek { seconds: -15 })
+        ));
+        for command in ["volume-up", "volume-down"] {
+            match parse(command).unwrap().control.unwrap() {
+                Control::VolumeUp { percent } | Control::VolumeDown { percent } => {
+                    assert_eq!(percent.0, 10)
+                }
+                other => panic!("unexpected control: {other:?}"),
+            }
+        }
+        for (args, valid) in [
+            ("volume 0", true),
+            ("volume 100", true),
+            ("volume-up 1", true),
+            ("volume-down 100", true),
+            ("shuffle on", true),
+            ("repeat track", true),
+            ("volume 101", false),
+            ("volume -1", false),
+            ("volume loud", false),
+            ("volume-up 0", false),
+            ("volume-down 0", false),
+            ("seek-to -1", false),
+            ("shuffle yes", false),
+            ("repeat all", false),
+        ] {
+            assert_eq!(parse(args).is_ok(), valid, "{args}");
+        }
+    }
+
+    #[test]
+    fn flags_remain_strict_and_help_is_available() {
+        for args in ["--unknown", "-vv", "devices --raw --raw", "next --verbose"] {
+            assert!(parse(args).is_err(), "{args}");
+        }
+        assert!(matches!(
+            parse("devices --raw").unwrap().control,
+            Some(Control::Devices(DevicesArgs { raw: true }))
+        ));
+        for args in ["--help", "seek --help"] {
+            assert!(matches!(parse(args), Err(usage::Error::Help { .. })));
+        }
+        assert!(matches!(
+            parse("--version"),
+            Err(usage::Error::Version { .. })
+        ));
+        #[cfg(not(feature = "demo"))]
+        assert!(parse("--demo").is_err());
+        #[cfg(feature = "demo")]
+        {
+            let cli = parse("--demo").unwrap();
+            assert!(cli.demo);
+            assert_eq!(cli.demo_shot_delay, 6000);
+        }
     }
 }
