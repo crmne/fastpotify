@@ -298,6 +298,10 @@ fn nav_row(
             color,
         );
     }
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), active, label)
+    });
+    theme::focus_ring(ui, &response);
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
@@ -718,10 +722,30 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
                     };
                 let pinned =
                     !entry.uri.is_empty() && app.settings.pinned_contexts.contains(&entry.uri);
-                let (rect, response) = ui.allocate_exact_size(
-                    vec2(ui.available_width(), row_height),
-                    Sense::click_and_drag(),
-                );
+                let (_, rect) = ui.allocate_space(vec2(ui.available_width(), row_height));
+                let id = ui.id().with((
+                    "library-row",
+                    &entry.uri,
+                    entry.liked,
+                    entry.folder.as_ref().map(|(id, _, _)| id),
+                ));
+                let response = ui.interact(rect, id, Sense::click_and_drag());
+                response.widget_info(|| {
+                    egui::WidgetInfo::selected(
+                        egui::WidgetType::Button,
+                        ui.is_enabled(),
+                        active,
+                        if let Some((_, collapsed, _)) = &entry.folder {
+                            format!(
+                                "{}, folder, {}",
+                                entry.name,
+                                if *collapsed { "collapsed" } else { "expanded" }
+                            )
+                        } else {
+                            entry.name.clone()
+                        },
+                    )
+                });
                 // Start reordering after the drag threshold. Liked Songs is fixed.
                 if !entry.liked
                     && !entry.uri.is_empty()
@@ -983,6 +1007,7 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
                         });
                     }
                 }
+                theme::focus_ring(ui, &response);
                 if response.clicked() {
                     if let Some((folder_id, collapsed, _)) = &entry.folder {
                         if *collapsed {

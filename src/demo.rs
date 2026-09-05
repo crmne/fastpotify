@@ -803,6 +803,379 @@ mod tests {
     use crate::paths::AppDirs;
     use crate::settings::Settings;
 
+    fn accessible_app(name: &str) -> (egui::Context, App) {
+        let root =
+            std::env::temp_dir().join(format!("fastpotify-a11y-{name}-{}", std::process::id()));
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let waker = crate::backend::Waker::default();
+        waker.attach(&ctx);
+        let mut app = App::new(
+            &waker,
+            AppDirs {
+                config: root.join("config"),
+                state: root.join("state"),
+                cache: root.join("cache"),
+            },
+            Settings::default(),
+            AppOptions {
+                media_controls: false,
+                tray: false,
+            },
+        );
+        app.attach(&ctx);
+        populate(&mut app);
+        (ctx, app)
+    }
+
+    fn accessible_frame(
+        ctx: &egui::Context,
+        app: &mut App,
+        events: Vec<egui::Event>,
+    ) -> egui::accesskit::TreeUpdate {
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1280.0, 800.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| app.frame_ui(ui),
+        );
+        output.textures_delta.clear();
+        output
+            .platform_output
+            .accesskit_update
+            .expect("screen-reader tree")
+    }
+
+    fn accessible_node(
+        tree: &egui::accesskit::TreeUpdate,
+        label: &str,
+        role: egui::accesskit::Role,
+    ) -> egui::accesskit::NodeId {
+        tree.nodes
+            .iter()
+            .find(|(_, node)| node.label() == Some(label) && node.role() == role)
+            .unwrap_or_else(|| panic!("missing {label:?} with role {role:?}"))
+            .0
+    }
+
+    fn accessible_action(
+        target: egui::accesskit::NodeId,
+        action: egui::accesskit::Action,
+        data: Option<egui::accesskit::ActionData>,
+    ) -> egui::Event {
+        egui::Event::AccessKitActionRequest(egui::accesskit::ActionRequest {
+            target_tree: egui::accesskit::TreeId::ROOT,
+            target_node: target,
+            action,
+            data,
+        })
+    }
+
+    fn keyboard(key: egui::Key, modifiers: egui::Modifiers) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        }
+    }
+
+    #[test]
+    fn accessible_navigation_and_pause_work_without_a_pointer() {
+        use egui::accesskit::{Action, Role};
+        let (ctx, mut app) = accessible_app("navigate");
+        accessible_frame(&ctx, &mut app, vec![]);
+        let tree = accessible_frame(&ctx, &mut app, vec![]);
+        let liked = accessible_node(&tree, "Liked Songs", Role::Button);
+        accessible_frame(
+            &ctx,
+            &mut app,
+            vec![accessible_action(liked, Action::Click, None)],
+        );
+        assert_eq!(app.page(), &Page::LikedSongs);
+        let tree = accessible_frame(&ctx, &mut app, vec![]);
+        let pause = accessible_node(&tree, "Pause", Role::Button);
+        assert!(app.believed_playing());
+        accessible_frame(
+            &ctx,
+            &mut app,
+            vec![accessible_action(pause, Action::Focus, None)],
+        );
+        let tree = accessible_frame(
+            &ctx,
+            &mut app,
+            vec![keyboard(egui::Key::Space, egui::Modifiers::NONE)],
+        );
+        assert!(
+            !app.believed_playing(),
+            "focused Space must pause once, without firing the global shortcut too"
+        );
+        assert_eq!(tree.focus, pause);
+        app.backend.shutdown();
+    }
+
+    #[test]
+    fn accessible_sliders_accept_keyboard_and_screen_reader_values() {
+        use crate::ui::widgets::{SliderEvent, thin_slider};
+        use egui::accesskit::{Action, ActionData, Role};
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        crate::theme::install(&ctx);
+        let palette = crate::theme::Palette::dark();
+        let mut value = 0.5;
+        let mut render = |events| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    if let SliderEvent::Committed(next) = thin_slider(
+                        ui,
+                        &palette,
+                        egui::Id::new("test-volume"),
+                        "Volume (%)",
+                        value,
+                        200.0,
+                        Some(0.05),
+                    ) {
+                        value = next;
+                    }
+                },
+            );
+            output.textures_delta.clear();
+            (value, output.platform_output.accesskit_update.unwrap())
+        };
+        let (_, tree) = render(vec![]);
+        let slider = accessible_node(&tree, "Volume (%)", Role::Slider);
+        render(vec![accessible_action(slider, Action::Focus, None)]);
+        let (value, _) = render(vec![keyboard(egui::Key::ArrowRight, egui::Modifiers::NONE)]);
+        assert!((value - 0.55).abs() < 0.001);
+        let (value, tree) = render(vec![accessible_action(
+            slider,
+            Action::SetValue,
+            Some(ActionData::NumericValue(35.0)),
+        )]);
+        assert!((value - 0.35).abs() < 0.001);
+        let node = &tree.nodes.iter().find(|(id, _)| *id == slider).unwrap().1;
+        assert!((node.numeric_value().unwrap() - 35.0).abs() < 0.001);
+        assert_eq!(node.min_numeric_value(), Some(0.0));
+        assert_eq!(node.max_numeric_value(), Some(100.0));
+        let (value, _) = render(vec![accessible_action(
+            slider,
+            Action::SetValue,
+            Some(ActionData::NumericValue(200.0)),
+        )]);
+        assert_eq!(value, 1.0);
+        let (value, _) = render(vec![accessible_action(
+            slider,
+            Action::SetValue,
+            Some(ActionData::NumericValue(f64::NAN)),
+        )]);
+        assert_eq!(value, 1.0);
+    }
+
+    #[test]
+    fn accessible_switch_has_a_name_state_and_keyboard_activation() {
+        use egui::accesskit::{Action, Role, Toggled};
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        crate::theme::install(&ctx);
+        let palette = crate::theme::Palette::dark();
+        let mut on = false;
+        let mut render = |events| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    crate::ui::widgets::switch(ui, &palette, "Autoplay", &mut on);
+                },
+            );
+            output.textures_delta.clear();
+            (on, output.platform_output.accesskit_update.unwrap())
+        };
+        let (_, tree) = render(vec![]);
+        let switch = accessible_node(&tree, "Autoplay", Role::CheckBox);
+        let node = &tree.nodes.iter().find(|(id, _)| *id == switch).unwrap().1;
+        assert_eq!(node.toggled(), Some(Toggled::False));
+        render(vec![accessible_action(switch, Action::Focus, None)]);
+        let (on, tree) = render(vec![keyboard(egui::Key::Space, egui::Modifiers::NONE)]);
+        assert!(on);
+        let node = &tree.nodes.iter().find(|(id, _)| *id == switch).unwrap().1;
+        assert_eq!(node.toggled(), Some(Toggled::True));
+    }
+
+    #[test]
+    fn accessible_song_focus_survives_visible_row_changes_and_keeps_duplicates_distinct() {
+        use crate::ui::widgets::{TrackRow, track_row};
+        use egui::accesskit::{Action as AccessibleAction, Role};
+        let (ctx, mut app) = accessible_app("rows");
+        let item = app.queue.get().unwrap().queue[0].clone();
+        let context = crate::model::RowContext::Uris(vec![item.uri().to_string(); 2]);
+        let label = format!("Play {}, {}", item.name(), item.subtitle());
+        let mut render = |first, events| {
+            app.actions.clear();
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    for index in first..2 {
+                        track_row(
+                            ui,
+                            &mut app,
+                            TrackRow {
+                                index,
+                                number: Some(index + 1),
+                                item: &item,
+                                context: &context,
+                                show_cover: false,
+                                show_album: false,
+                                added_at: None,
+                                added_by: None,
+                                show_added_by: false,
+                                compact: false,
+                                thin: false,
+                                shift: 0.0,
+                                picked: false,
+                                picked_songs: &[],
+                            },
+                        );
+                    }
+                },
+            );
+            output.textures_delta.clear();
+            (
+                output.platform_output.accesskit_update.unwrap(),
+                app.actions.clone(),
+            )
+        };
+        let (tree, _) = render(0, vec![]);
+        let mut positioned_rows: Vec<_> = tree
+            .nodes
+            .iter()
+            .filter(|(_, node)| node.label() == Some(label.as_str()) && node.role() == Role::Button)
+            .map(|(id, node)| (*id, node.bounds().unwrap().y0))
+            .collect();
+        positioned_rows.sort_by(|a, b| a.1.total_cmp(&b.1));
+        let rows: Vec<_> = positioned_rows.into_iter().map(|(id, _)| id).collect();
+        assert_eq!(rows.len(), 2);
+        assert_ne!(rows[0], rows[1]);
+        render(
+            0,
+            vec![accessible_action(rows[1], AccessibleAction::Focus, None)],
+        );
+        let (tree, _) = render(1, vec![]);
+        assert_eq!(
+            accessible_node(&tree, &label, Role::Button),
+            rows[1],
+            "scrolling must not give a song another row's identity"
+        );
+        assert_eq!(tree.focus, rows[1]);
+        let (_, actions) = render(1, vec![keyboard(egui::Key::Enter, egui::Modifiers::NONE)]);
+        assert!(matches!(
+            actions.as_slice(),
+            [crate::model::Action::PlayFromRow { index: 1, .. }]
+        ));
+        let (tree, _) = render(1, vec![]);
+        let more = accessible_node(&tree, "More", Role::Button);
+        render(
+            1,
+            vec![accessible_action(more, AccessibleAction::Focus, None)],
+        );
+        let (tree, _) = render(1, vec![]);
+        assert_eq!(
+            tree.focus, more,
+            "More must remain reachable after focus leaves the song row"
+        );
+        let (tree, _) = render(1, vec![keyboard(egui::Key::Enter, egui::Modifiers::NONE)]);
+        assert!(
+            tree.nodes
+                .iter()
+                .any(|(_, node)| node.label() == Some("Play next")),
+            "the keyboard opens the song menu"
+        );
+        app.backend.shutdown();
+    }
+
+    #[test]
+    fn accessible_tab_reaches_songs_beyond_the_visible_list() {
+        use crate::ui::widgets::{TrackRow, track_row, virtual_rows};
+        use egui::accesskit::{Action as AccessibleAction, Role};
+        let (ctx, mut app) = accessible_app("scroll");
+        let item = app.queue.get().unwrap().queue[0].clone();
+        let context = crate::model::RowContext::Uris(vec![item.uri().to_string(); 20]);
+        let label = format!("Play {}, {}", item.name(), item.subtitle());
+        let mut reached_last = false;
+        let mut render = |events| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(700.0, 200.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::ScrollArea::vertical().animated(false).show(ui, |ui| {
+                        virtual_rows(ui, 20, crate::theme::ROW_HEIGHT, |ui, index| {
+                            if index == 19 && ui.cursor().top() < ui.clip_rect().bottom() {
+                                reached_last = true;
+                            }
+                            track_row(
+                                ui,
+                                &mut app,
+                                TrackRow {
+                                    index,
+                                    number: Some(index + 1),
+                                    item: &item,
+                                    context: &context,
+                                    show_cover: false,
+                                    show_album: false,
+                                    added_at: None,
+                                    added_by: None,
+                                    show_added_by: false,
+                                    compact: false,
+                                    thin: false,
+                                    shift: 0.0,
+                                    picked: false,
+                                    picked_songs: &[],
+                                },
+                            );
+                        });
+                    });
+                },
+            );
+            output.textures_delta.clear();
+            output.platform_output.accesskit_update.unwrap()
+        };
+        let tree = render(vec![]);
+        let first = accessible_node(&tree, &label, Role::Button);
+        render(vec![accessible_action(
+            first,
+            AccessibleAction::Focus,
+            None,
+        )]);
+        for _ in 0..120 {
+            render(vec![keyboard(egui::Key::Tab, egui::Modifiers::NONE)]);
+        }
+        assert!(
+            reached_last,
+            "Tab must scroll through the virtual list instead of trapping focus in its first visible rows"
+        );
+        app.backend.shutdown();
+    }
+
     fn frame(ctx: &egui::Context, app: &mut App) {
         frame_events(ctx, app, Vec::new());
     }

@@ -28,7 +28,8 @@ env_logger = { version = "0.11", default-features = false, features = ["auto-col
 directories = "6"
 # The whole UI. glow keeps the binary and the dependency tree small; wgpu is
 # not needed for a 2D music client.
-eframe = { version = "0.36", default-features = false, features = ["glow", "default_fonts", "links", "wayland", "x11", "persistence"] }
+# AccessKit connects egui's control names, states, and actions to native screen readers.
+eframe = { version = "0.36", default-features = false, features = ["accesskit", "glow", "default_fonts", "links", "wayland", "x11", "persistence"] }
 egui = "0.36"
 egui_extras = { version = "0.36", features = ["image", "svg"] }
 # Reading what a system font covers, so the app can borrow a face for a script

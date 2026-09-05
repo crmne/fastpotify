@@ -289,7 +289,7 @@ fn transport(app: &mut App, ui: &mut egui::Ui, now: Option<&NowPlaying>, region:
 
     let shuffle_color = if shuffle { palette.accent } else { dim };
     let mut cell = centered(ui, slot(widths[0]));
-    if theme::icon_button(
+    let shuffle_button = theme::icon_button(
         &mut cell,
         Icon::Shuffle,
         17.0,
@@ -300,9 +300,16 @@ fn transport(app: &mut App, ui: &mut egui::Ui, now: Option<&NowPlaying>, region:
             palette.text
         },
         "Shuffle",
-    )
-    .clicked()
-    {
+    );
+    shuffle_button.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::WidgetType::Checkbox,
+            cell.is_enabled(),
+            shuffle,
+            "Shuffle",
+        )
+    });
+    if shuffle_button.clicked() {
         app.actions.push(Action::ToggleShuffle);
     }
 
@@ -430,9 +437,9 @@ fn transport(app: &mut App, ui: &mut egui::Ui, now: Option<&NowPlaying>, region:
         &mut slider_ui,
         &palette,
         egui::Id::new("seek-slider"),
+        "Playback position (%)",
         fraction,
         slider_width,
-        palette.accent,
         None,
     ) {
         SliderEvent::Dragging(value) => app.seek_preview = Some(value),
@@ -468,9 +475,9 @@ fn extras(app: &mut App, ui: &mut egui::Ui, now: Option<&NowPlaying>) {
         ui,
         &palette,
         egui::Id::new("volume-slider"),
+        "Volume (%)",
         shown as f32 / 100.0,
         92.0,
-        palette.accent,
         Some(0.05),
     ) {
         SliderEvent::Dragging(value) => {

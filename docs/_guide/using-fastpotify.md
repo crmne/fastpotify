@@ -4,6 +4,24 @@ description: Library ordering and local play history.
 nav_order: 3
 ---
 
+## Keyboard and screen readers
+
+The main window provides screen-reader names for playback controls, library
+and song rows, menus, sliders, and settings switches. `Tab` and `Shift+Tab`
+move keyboard focus, shown by an outline. `Enter` or `Space` activates the
+focused control; on a song row, it plays that song. The row's **More** button
+opens its menu from the keyboard too.
+
+Left and right arrows adjust a focused volume slider by five percentage
+points, or the seek slider by one percent of the song. Screen readers can
+also read and set these sliders' values. `Ctrl+F` (`Cmd+F` on macOS) focuses
+search. The playback shortcuts remain available; unmodified letter and
+Space shortcuts yield to the focused control.
+
+This is the first part of screen-reader support. Windows testing with NVDA
+remains tracked in [#262](https://github.com/crmne/fastpotify/issues/262).
+Winamp skins do not yet have equivalent accessibility coverage.
+
 ## Library order
 
 By default, the sidebar sorts playlists by when you last played them. Drag a

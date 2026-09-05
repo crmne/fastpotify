@@ -184,6 +184,13 @@ those things, and [CONTRIBUTING.md](CONTRIBUTING.md) prohibits them.
 
 ## Keyboard shortcuts
 
+The main window exposes named playback controls, library and song rows,
+menus, sliders, and settings switches to screen readers. Use `Tab` and
+`Shift+Tab` to move focus, then `Enter` or `Space` to activate a control or
+play a focused song. Left and right arrows adjust a focused volume or seek
+slider. Windows testing with NVDA and accessibility for Winamp skins are
+still in progress.
+
 | Shortcut | What it does |
 | --- | --- |
 | `Space` | Play or pause |
