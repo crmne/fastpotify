@@ -505,6 +505,7 @@ pub fn context_menu_items(
     if let Some(playlist) = owned_playlist {
         if menu_item(ui, &palette, Some(Icon::Pencil), "Edit details") {
             app.actions.push(Action::ShowDialog(Dialog::EditPlaylist {
+                cover: Default::default(),
                 id: playlist.id.clone(),
                 name: playlist.name.clone(),
                 description: playlist

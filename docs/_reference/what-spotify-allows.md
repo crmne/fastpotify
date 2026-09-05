@@ -23,8 +23,7 @@ Fastpotify uses the Web API for:
   also save and remove items.
 - **Playlists:** reading, creating, renaming, changing the description and
   visibility, adding and removing songs, reordering songs, and following and
-  unfollowing. The API also supports cover uploads, but Fastpotify does not yet
-  use them.
+  unfollowing, and uploading custom playlist covers.
 - **Catalogue:** albums, artists, tracks, shows, episodes, search, and
   recommendations. Artist pages include top tracks, releases, and related
   artists.
