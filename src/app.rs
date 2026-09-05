@@ -4283,28 +4283,31 @@ impl App {
                 _ => {}
             }
         }
-        if let Some(uri) = self.playing_context_uri() {
-            if let Some(kind) = util::uri_kind(&uri)
-                && let Some(id) = util::uri_id(&uri)
-            {
-                match kind {
-                    "playlist" => {
-                        keep_playlists.insert(id.to_string());
-                    }
-                    "album" => {
-                        keep_albums.insert(id.to_string());
-                    }
-                    "artist" => {
-                        keep_artists.insert(id.to_string());
-                    }
-                    "show" => {
-                        keep_shows.insert(id.to_string());
-                    }
-                    _ => {}
+        if let Some(uri) = self.playing_context_uri()
+            && let Some(kind) = util::uri_kind(&uri)
+            && let Some(id) = util::uri_id(&uri)
+        {
+            match kind {
+                "playlist" => {
+                    keep_playlists.insert(id.to_string());
                 }
+                "album" => {
+                    keep_albums.insert(id.to_string());
+                }
+                "artist" => {
+                    keep_artists.insert(id.to_string());
+                }
+                "show" => {
+                    keep_shows.insert(id.to_string());
+                }
+                _ => {}
             }
         }
-        evict_id_map(&mut self.playlist_pages, &keep_playlists, MAX_PLAYLIST_PAGES);
+        evict_id_map(
+            &mut self.playlist_pages,
+            &keep_playlists,
+            MAX_PLAYLIST_PAGES,
+        );
         evict_id_map(&mut self.album_pages, &keep_albums, MAX_ALBUM_PAGES);
         evict_id_map(&mut self.artist_pages, &keep_artists, MAX_ARTIST_PAGES);
         evict_id_map(&mut self.show_pages, &keep_shows, MAX_SHOW_PAGES);
@@ -4313,18 +4316,14 @@ impl App {
                 .now_playing()
                 .and_then(|now| now.id)
                 .into_iter()
-                .chain(
-                    self.playlist_pages
-                        .values()
-                        .flat_map(|page| {
-                            page.items.items.iter().filter_map(|item| {
-                                item.playable().and_then(|p| match p {
-                                    PlayableItem::Track(track) => track.id.clone(),
-                                    PlayableItem::Episode(episode) => Some(episode.id.clone()),
-                                })
-                            })
-                        }),
-                )
+                .chain(self.playlist_pages.values().flat_map(|page| {
+                    page.items.items.iter().filter_map(|item| {
+                        item.playable().and_then(|p| match p {
+                            PlayableItem::Track(track) => track.id.clone(),
+                            PlayableItem::Episode(episode) => Some(episode.id.clone()),
+                        })
+                    })
+                }))
                 .collect();
             let mut removable: Vec<String> = self
                 .track_cache
@@ -4333,7 +4332,10 @@ impl App {
                 .cloned()
                 .collect();
             removable.sort();
-            for id in removable.into_iter().take(self.track_cache.len() - MAX_TRACK_CACHE) {
+            for id in removable
+                .into_iter()
+                .take(self.track_cache.len() - MAX_TRACK_CACHE)
+            {
                 self.track_cache.remove(&id);
             }
         }
@@ -6679,7 +6681,6 @@ where
         map.remove(&key);
     }
 }
-
 
 #[cfg(test)]
 mod tests {
