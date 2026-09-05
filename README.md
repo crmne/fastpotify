@@ -21,6 +21,8 @@ everyday use, and connection details.
   device. Select it from your phone or play music in the app. Playback is
   gapless and supports up to 320 kbps, with
   optional volume normalisation and an on-disk audio cache.
+  Stalled Spotify connections time out after five seconds per attempt so
+  playback can try another endpoint.
 - **Controls other devices.** Move playback to a speaker, a phone, or
   another computer from the device picker, and keep controlling it: play,
   pause, skip, seek, shuffle, repeat, volume.

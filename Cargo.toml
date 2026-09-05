@@ -173,7 +173,8 @@ opt-level = 0
 projectm-sys = { git = "https://github.com/crmne/projectm-rs", branch = "respect-cmake-generator" }
 # librespot 0.8.0 plus the small patches Fastpotify needs: queue controls,
 # normalisation-factor reporting for the visualisers, and a distinct event
-# when Spotify refuses an audio key. Every librespot crate comes from the
+# when Spotify refuses an audio key, and a connection deadline that includes
+# socket setup. Every librespot crate comes from the
 # fork so one copy exists. Drop patches as upstream takes them.
 librespot-audio = { git = "https://github.com/crmne/librespot", branch = "fastpotify-0.8" }
 librespot-connect = { git = "https://github.com/crmne/librespot", branch = "fastpotify-0.8" }

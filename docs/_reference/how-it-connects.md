@@ -92,3 +92,8 @@ The engine discovers access points through `apresolve.spotify.com` and
 connects over TCP in the resolver's preference order: port 4070 first,
 falling back to 443 and 80. Only outbound connections are needed; no
 inbound ports have to be open.
+
+Each access-point attempt gives socket setup and the handshake a combined
+five seconds. A stalled TCP connection or HTTP proxy tunnel therefore lets
+librespot retry and move on to another endpoint instead of waiting for the
+operating system's longer connection timeout.
