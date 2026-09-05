@@ -38,17 +38,16 @@ struct Cli {
     #[arg(long)]
     demo_page: Option<String>,
 
-    /// Extra demo surfaces: a comma-separated list of `queue`, `devices`,
-    /// `shortcuts`, `create`, `light`, `focus`.
+    /// Extra demo surfaces: a comma-separated list of `queue`, `playing-next`,
+    /// `devices`, `shortcuts`, `create`, `light`, `focus`.
     #[cfg(feature = "demo")]
     #[arg(long)]
     demo_show: Option<String>,
 
     /// Write a PNG of the demo window to this path and exit. Implies
-    /// `--demo`. The shot is the window's own frame buffer, so it is however
-    /// large the window is: full screen where that request is honoured, and
-    /// the size of the tile under a tiling window manager, which decides for
-    /// itself.
+    /// `--demo`. Without `--demo-size`, the shot is the window's own frame
+    /// buffer: full screen where that request is honoured, and the size of
+    /// the tile under a tiling window manager, which decides for itself.
     #[cfg(feature = "demo")]
     #[arg(long, value_name = "PATH")]
     demo_shot: Option<std::path::PathBuf>,

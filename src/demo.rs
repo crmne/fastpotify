@@ -607,6 +607,17 @@ pub fn apply_flags(app: &mut App, page: Option<&str>, show: Option<&str>) {
     for surface in show.unwrap_or("").split(',').map(str::trim) {
         match surface {
             "queue" => app.show_queue_panel = true,
+            "playing-next" => {
+                app.show_queue_panel = true;
+                if let Loadable::Loaded(queue) = &app.queue {
+                    app.manual_queue = queue
+                        .queue
+                        .iter()
+                        .take(6)
+                        .map(|item| item.uri().to_string())
+                        .collect();
+                }
+            }
             "recents" => {
                 app.show_queue_panel = true;
                 app.queue_tab = QueueTab::Recents;
