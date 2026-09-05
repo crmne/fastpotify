@@ -326,6 +326,8 @@ pub struct App {
     #[cfg(feature = "milkdrop")]
     milkdrop_host: Option<crate::milkdrop::host::Host>,
     last_eviction: Instant,
+    /// Playback snapshot for the current frame, built once per redraw.
+    frame_now: Option<NowPlaying>,
     pub sign_in_url: Option<String>,
     /// The verified personal Web API application, when acceleration is ready.
     pub web_app: Option<String>,
@@ -600,6 +602,7 @@ impl App {
             #[cfg(feature = "milkdrop")]
             milkdrop_host: None,
             last_eviction: Instant::now(),
+            frame_now: None,
             sign_in_url: None,
             web_app: None,
             pending_remote_position: None,
@@ -989,7 +992,14 @@ impl App {
     }
 
     pub fn now_playing(&self) -> Option<NowPlaying> {
+        if let Some(now) = &self.frame_now {
+            return Some(now.clone());
+        }
         self.now_playing_live().or_else(|| self.resume_preview())
+    }
+
+    fn refresh_frame_now(&mut self) {
+        self.frame_now = self.now_playing_live().or_else(|| self.resume_preview());
     }
 
     /// What a device is actually playing, here or elsewhere.
@@ -6156,6 +6166,7 @@ impl App {
     pub fn frame_ui(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         let ctx = &ctx;
+        self.refresh_frame_now();
         self.apply_theme(ctx);
         self.lock_scroll_axis(ctx);
         // Switch to the main window when sign-in is required.
@@ -6193,7 +6204,11 @@ impl App {
             ctx.request_repaint_after(Duration::from_millis(120));
         }
         if self.is_connected() {
-            ctx.request_repaint_after(REMOTE_POLL_ACTIVE);
+            let interval = match self.target() {
+                Target::Local if self.local.is_active() => REMOTE_POLL_IDLE,
+                _ => REMOTE_POLL_ACTIVE,
+            };
+            ctx.request_repaint_after(interval);
         }
         if ctx.input(|input| input.viewport().close_requested())
             && !self.quit_requested
