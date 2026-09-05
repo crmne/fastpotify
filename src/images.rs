@@ -1,8 +1,4 @@
 //! Album art: fetched once, kept on disk, decoded by egui on demand.
-//!
-//! [`ArtLoader`] handles `http(s)` URIs in egui's image pipeline. The first
-//! request starts a background download or disk-cache read. A size limit keeps
-//! long sessions from retaining unlimited textures.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -25,7 +21,7 @@ const MAX_ART_BYTES: usize = 8 * 1024 * 1024;
 enum Entry {
     Pending,
     Ready {
-        bytes: Arc<[u8]>,
+        bytes: Option<Arc<[u8]>>,
         last_used: Instant,
     },
     Failed(String),
@@ -61,6 +57,19 @@ impl ArtLoader {
         self.inner.fetch(url).await
     }
 
+    /// Marks artwork as visible so size-based eviction keeps it stable.
+    pub fn touch(&self, url: &str) {
+        if let Some(Entry::Ready { last_used, .. }) = self
+            .inner
+            .entries
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get_mut(url)
+        {
+            *last_used = Instant::now();
+        }
+    }
+
     /// Evicts failed entries and the oldest artwork above the memory limit.
     pub fn evict(&self, ctx: &egui::Context) {
         let letting_go: Vec<String> = {
@@ -72,7 +81,8 @@ impl ArtLoader {
                     // Forget failures so a later request can retry.
                     Entry::Failed(_) => failed.push(url.clone()),
                     Entry::Ready { bytes, last_used } => {
-                        held.push((url.clone(), *last_used, bytes.len()))
+                        let bytes = bytes.as_ref().map_or(0, |bytes| bytes.len());
+                        held.push((url.clone(), *last_used, bytes));
                     }
                     Entry::Pending => {}
                 }
@@ -82,6 +92,7 @@ impl ArtLoader {
         };
         for url in letting_go {
             ctx.forget_image(&url);
+            self.inner.drop_bytes(&url);
         }
     }
 
@@ -97,6 +108,12 @@ impl ArtLoader {
         std::fs::metadata(&path)
             .is_ok_and(|meta| meta.is_file() && meta.len() > 0)
             .then_some(path)
+    }
+
+    /// Drops held JPEG bytes once egui has made a texture. The disk cache
+    /// remains for later reloads.
+    pub fn release_bytes(&self, url: &str) {
+        self.inner.drop_bytes(url);
     }
 
     pub fn clear_disk_cache(&self) -> std::io::Result<u64> {
@@ -150,7 +167,9 @@ impl Inner {
     }
 
     async fn fetch(self: &Arc<Self>, url: &str) -> Result<Arc<[u8]>, String> {
-        if let Some(Entry::Ready { bytes, .. }) = self
+        if let Some(Entry::Ready {
+            bytes: Some(bytes), ..
+        }) = self
             .entries
             .lock()
             .unwrap_or_else(|p| p.into_inner())
@@ -204,7 +223,7 @@ impl Inner {
             let result = loader.fetch(&url).await;
             let entry = match result {
                 Ok(bytes) => Entry::Ready {
-                    bytes,
+                    bytes: Some(bytes),
                     last_used: Instant::now(),
                 },
                 Err(error) => Entry::Failed(error),
@@ -216,6 +235,26 @@ impl Inner {
                 .insert(url, entry);
             ctx.request_repaint();
         });
+    }
+
+    fn drop_bytes(&self, url: &str) {
+        if let Some(entry) = self
+            .entries
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get_mut(url)
+            && let Entry::Ready { bytes, .. } = entry
+        {
+            *bytes = None;
+        }
+    }
+
+    fn read_disk(&self, url: &str) -> Option<Arc<[u8]>> {
+        let path = self.cache_path(url);
+        std::fs::read(path)
+            .ok()
+            .filter(|bytes| !bytes.is_empty())
+            .map(Arc::from)
     }
 }
 
@@ -230,13 +269,34 @@ impl BytesLoader for ArtLoader {
         }
         let mut entries = self.inner.entries.lock().unwrap_or_else(|p| p.into_inner());
         match entries.get_mut(uri) {
-            Some(Entry::Ready { bytes, last_used }) => {
+            Some(Entry::Ready {
+                bytes: Some(bytes),
+                last_used,
+            }) => {
                 *last_used = Instant::now();
                 Ok(BytesPoll::Ready {
                     size: None,
                     bytes: Bytes::Shared(Arc::clone(bytes)),
                     mime: None,
                 })
+            }
+            Some(Entry::Ready {
+                bytes: None,
+                last_used,
+            }) => {
+                *last_used = Instant::now();
+                if let Some(bytes) = self.inner.read_disk(uri) {
+                    Ok(BytesPoll::Ready {
+                        size: None,
+                        bytes: Bytes::Shared(bytes),
+                        mime: None,
+                    })
+                } else {
+                    entries.insert(uri.to_string(), Entry::Pending);
+                    drop(entries);
+                    self.inner.start(ctx, uri.to_string());
+                    Ok(BytesPoll::Pending { size: None })
+                }
             }
             Some(Entry::Pending) => Ok(BytesPoll::Pending { size: None }),
             Some(Entry::Failed(error)) => Err(LoadError::Loading(error.clone())),
@@ -272,7 +332,10 @@ impl BytesLoader for ArtLoader {
             .unwrap_or_else(|p| p.into_inner())
             .values()
             .map(|entry| match entry {
-                Entry::Ready { bytes, .. } => bytes.len(),
+                Entry::Ready {
+                    bytes: Some(bytes),
+                    ..
+                } => bytes.len(),
                 _ => 0,
             })
             .sum()

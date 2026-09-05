@@ -97,6 +97,7 @@ fn quick_access(app: &mut App, ui: &mut egui::Ui) {
                             cover,
                             6.0,
                             Icon::Music,
+                            Some(app.backend.art()),
                         );
                     }
                     let play_room = if hovered && uri.is_some() { 52.0 } else { 12.0 };

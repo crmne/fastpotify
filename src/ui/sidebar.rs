@@ -92,7 +92,7 @@ fn art_panel(app: &mut App, ui: &mut egui::Ui) {
                 ui.max_rect().left_top(),
                 Vec2::splat(side.min(ui.available_width())),
             );
-            super::widgets::paint_cover(ui, &palette, Some(&url), rect, 8.0, Icon::Music);
+            super::widgets::paint_cover(ui, &palette, Some(&url), rect, 8.0, Icon::Music, None);
             let art = ui
                 .interact(rect, egui::Id::new("sidebar-art"), Sense::click())
                 .on_hover_cursor(egui::CursorIcon::PointingHand);
@@ -859,6 +859,7 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
                                 cover_rect,
                                 if entry.round { 22.0 } else { 6.0 },
                                 if entry.round { Icon::User } else { Icon::Music },
+                                Some(app.backend.art()),
                             );
                         }
                         let text_left = cover_rect.right() + 12.0;

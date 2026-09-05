@@ -48,6 +48,7 @@ pub fn hero(app: &mut App, ui: &mut egui::Ui, hero: Hero<'_>) {
                 rect,
                 radius,
                 if hero.round { Icon::User } else { Icon::Music },
+                Some(app.backend.art()),
             );
         }
         ui.vertical(|ui| {
