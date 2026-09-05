@@ -36,8 +36,8 @@ cannot play music through Fastpotify on this computer or another device.
   episodes, with artist pages, discographies, and related artists.
 - **Background playback.** Closing the window keeps the music playing from
   the system tray. On Linux, MPRIS supports media keys and `playerctl`.
-- **Themes.** Use light, dark, or system mode. Pages can take a colour from
-  album art.
+- **Themes.** Use light, dark, system mode, or the active Omarchy palette on
+  Linux. Pages can take a colour from album art.
 
 ## What it does not do
 

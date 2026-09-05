@@ -158,6 +158,12 @@ struct Listening {
     recorded: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AppliedInterfaceFont {
+    Bundled,
+    Omarchy(u64),
+}
+
 pub struct App {
     pub dirs: AppDirs,
     pub settings: Settings,
@@ -194,7 +200,13 @@ pub struct App {
     /// Sample data is loaded; Spotify requests are disabled.
     pub offline: bool,
     pub palette: Palette,
-    applied_dark: Option<bool>,
+    applied_palette: Option<Palette>,
+    pub omarchy_theme_available: bool,
+    omarchy_palette: Option<Palette>,
+    omarchy_font: Option<theme::InterfaceFont>,
+    omarchy_font_revision: u64,
+    applied_interface_font: Option<AppliedInterfaceFont>,
+    omarchy_watcher: Option<crate::omarchy::ThemeWatcher>,
 
     pub auth: AuthStatus,
     pub user: Option<User>,
@@ -439,6 +451,14 @@ const GLIDE_DECAY: f32 = 0.35;
 const GLIDE_START: f32 = 120.0;
 const GLIDE_STOP: f32 = 40.0;
 
+fn theme_preference(choice: ThemeChoice) -> egui::ThemePreference {
+    match choice {
+        ThemeChoice::Dark => egui::ThemePreference::Dark,
+        ThemeChoice::Light => egui::ThemePreference::Light,
+        ThemeChoice::System | ThemeChoice::Omarchy => egui::ThemePreference::System,
+    }
+}
+
 impl App {
     pub fn new(waker: &Waker, dirs: AppDirs, settings: Settings, options: AppOptions) -> Self {
         let plays = crate::history::History::load(&dirs.history_file());
@@ -487,6 +507,30 @@ impl App {
             .filter(|page| !matches!(page, Page::Settings | Page::Queue))
             .unwrap_or(Page::Home);
 
+        let omarchy_palette = crate::omarchy::load_palette();
+        if settings.theme == ThemeChoice::Omarchy
+            && let Err(error) = &omarchy_palette
+        {
+            log::warn!("unable to load the selected Omarchy theme: {error}");
+        }
+        let omarchy_theme_available = omarchy_palette.is_ok();
+        let omarchy_palette = omarchy_palette.ok();
+        let omarchy_font = if settings.theme == ThemeChoice::Omarchy {
+            match crate::omarchy::load_font() {
+                Ok(font) => {
+                    log::info!("using Omarchy interface font {}", font.family);
+                    Some(font)
+                }
+                Err(error) => {
+                    log::warn!("unable to load the selected Omarchy font: {error}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let omarchy_font_revision = u64::from(omarchy_font.is_some());
+
         let mut app = Self {
             dirs,
             settings,
@@ -506,7 +550,13 @@ impl App {
             control_devices_stale: true,
             offline: false,
             palette: Palette::dark(),
-            applied_dark: None,
+            applied_palette: None,
+            omarchy_theme_available,
+            omarchy_palette,
+            omarchy_font,
+            omarchy_font_revision,
+            applied_interface_font: None,
+            omarchy_watcher: None,
             auth: AuthStatus::Starting,
             user: None,
             local_device_id: None,
@@ -665,14 +715,22 @@ impl App {
     /// Per-window setup: fonts, icons, loaders, theme. Called every time a
     /// window is (re)created around this long-lived application state.
     pub fn attach(&mut self, ctx: &egui::Context) {
-        theme::install(ctx);
+        let applied_font =
+            if self.settings.theme == ThemeChoice::Omarchy && self.omarchy_font.is_some() {
+                AppliedInterfaceFont::Omarchy(self.omarchy_font_revision)
+            } else {
+                AppliedInterfaceFont::Bundled
+            };
+        let font = match applied_font {
+            AppliedInterfaceFont::Bundled => None,
+            AppliedInterfaceFont::Omarchy(_) => self.omarchy_font.as_ref(),
+        };
+        theme::install_with_font(ctx, font);
+        self.applied_interface_font = Some(applied_font);
         ctx.add_bytes_loader(std::sync::Arc::new(self.backend.art().clone()));
-        ctx.set_theme(match self.settings.theme {
-            ThemeChoice::Dark => egui::ThemePreference::Dark,
-            ThemeChoice::Light => egui::ThemePreference::Light,
-            ThemeChoice::System => egui::ThemePreference::System,
-        });
-        self.applied_dark = None;
+        ctx.set_theme(theme_preference(self.settings.theme));
+        self.applied_palette = None;
+        self.omarchy_watcher = None;
         self.winamp.forget_textures();
         self.window_hidden = false;
         self.hide_intent = false;
@@ -723,6 +781,7 @@ impl App {
         self.window_hidden = true;
         self.hide_intent = false;
         self.wants_show = false;
+        self.omarchy_watcher = None;
         if let Some(tray) = &mut self.tray {
             tray.hidden();
         }
@@ -1921,7 +1980,7 @@ impl App {
             && self.winamp.worn != self.settings.skin
         {
             match self.settings.skin.clone() {
-                None => self.winamp.wear(None, crate::skin::Skin::builtin()),
+                None => self.refresh_builtin_skin(),
                 Some(name) => self.winamp.load(name, &self.dirs.skins_dir(), ctx),
             }
         }
@@ -2104,18 +2163,89 @@ impl App {
     }
 
     fn apply_theme(&mut self, ctx: &egui::Context) {
+        self.sync_omarchy_theme(ctx);
+        self.apply_interface_font(ctx);
         let dark = ctx.theme() == egui::Theme::Dark;
-        if self.applied_dark != Some(dark) {
-            self.palette = if dark {
-                Palette::dark()
-            } else {
-                Palette::light()
-            };
+        let palette = if self.settings.theme == ThemeChoice::Omarchy {
+            self.omarchy_palette.unwrap_or_else(|| {
+                if dark {
+                    Palette::dark()
+                } else {
+                    Palette::light()
+                }
+            })
+        } else if dark {
+            Palette::dark()
+        } else {
+            Palette::light()
+        };
+        if self.applied_palette != Some(palette) {
+            self.palette = palette;
             theme::apply(ctx, &self.palette);
-            self.applied_dark = Some(dark);
+            self.refresh_builtin_skin();
+            self.applied_palette = Some(palette);
             self.accents.clear();
             self.accent_pending.clear();
         }
+    }
+
+    fn refresh_builtin_skin(&mut self) {
+        if self.settings.skin.is_none() {
+            self.winamp
+                .wear(None, crate::skin::Skin::builtin_for(&self.palette));
+        }
+    }
+
+    fn sync_omarchy_theme(&mut self, ctx: &egui::Context) {
+        if self.settings.theme != ThemeChoice::Omarchy {
+            self.omarchy_watcher = None;
+            return;
+        }
+        if self.omarchy_watcher.is_none() {
+            self.omarchy_watcher = crate::omarchy::ThemeWatcher::spawn(ctx.clone());
+        }
+        let update = self
+            .omarchy_watcher
+            .as_ref()
+            .and_then(crate::omarchy::ThemeWatcher::latest_palette);
+        match update {
+            Some(Ok(palette)) => {
+                self.omarchy_theme_available = true;
+                self.omarchy_palette = Some(palette);
+            }
+            Some(Err(error)) => log::warn!("unable to update the Omarchy theme: {error}"),
+            None => {}
+        }
+        let font_update = self
+            .omarchy_watcher
+            .as_ref()
+            .and_then(crate::omarchy::ThemeWatcher::latest_font);
+        match font_update {
+            Some(Ok(font)) => {
+                log::info!("using Omarchy interface font {}", font.family);
+                self.omarchy_font = Some(font);
+                self.omarchy_font_revision = self.omarchy_font_revision.wrapping_add(1).max(1);
+            }
+            Some(Err(error)) => log::warn!("unable to update the Omarchy font: {error}"),
+            None => {}
+        }
+    }
+
+    fn apply_interface_font(&mut self, ctx: &egui::Context) {
+        let wanted = if self.settings.theme == ThemeChoice::Omarchy && self.omarchy_font.is_some() {
+            AppliedInterfaceFont::Omarchy(self.omarchy_font_revision)
+        } else {
+            AppliedInterfaceFont::Bundled
+        };
+        if self.applied_interface_font == Some(wanted) {
+            return;
+        }
+        let font = match wanted {
+            AppliedInterfaceFont::Bundled => None,
+            AppliedInterfaceFont::Omarchy(_) => self.omarchy_font.as_ref(),
+        };
+        theme::apply_interface_font(ctx, font);
+        self.applied_interface_font = Some(wanted);
     }
 
     fn handle_tray(&mut self) {
@@ -5679,11 +5809,9 @@ impl App {
             Action::CheckForUpdates => self.check_for_updates(true),
             Action::SettingsChanged => {
                 self.settings_dirty = true;
-                ctx.set_theme(match self.settings.theme {
-                    ThemeChoice::Dark => egui::ThemePreference::Dark,
-                    ThemeChoice::Light => egui::ThemePreference::Light,
-                    ThemeChoice::System => egui::ThemePreference::System,
-                });
+                ctx.set_theme(theme_preference(self.settings.theme));
+                self.applied_palette = None;
+                ctx.request_repaint();
             }
             Action::RestartEngine => {
                 self.save_settings();
@@ -9273,6 +9401,26 @@ mod tests {
         });
         assert_eq!(app.winamp.worn.as_deref(), Some("A.wsz"));
         assert_eq!(app.settings.skin.as_deref(), Some("B.wsz"));
+    }
+
+    #[test]
+    fn palette_changes_recolour_only_the_built_in_skin() {
+        let mut app = headless_app();
+        app.settings.skin = None;
+        app.palette = Palette::light();
+        app.refresh_builtin_skin();
+        assert_eq!(
+            app.winamp.skin.sheet(crate::skin::Sheet::Main).pixel(1, 1),
+            Some([0xff, 0xff, 0xff, 0xff])
+        );
+
+        let custom = std::sync::Arc::new(some_skin("Custom"));
+        app.winamp
+            .wear(Some("Custom.wsz".into()), std::sync::Arc::clone(&custom));
+        app.settings.skin = Some("Custom.wsz".into());
+        app.palette = Palette::dark();
+        app.refresh_builtin_skin();
+        assert!(std::sync::Arc::ptr_eq(&app.winamp.skin, &custom));
     }
 
     #[test]

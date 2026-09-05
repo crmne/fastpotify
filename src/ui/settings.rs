@@ -469,27 +469,42 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         });
     });
 
+    let omarchy_theme_visible = cfg!(target_os = "linux")
+        && (app.omarchy_theme_available || app.settings.theme == ThemeChoice::Omarchy);
     section(ui, &palette, "Appearance", |ui| {
-        widgets::setting_row(ui, &palette, "Theme", "", |ui| {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 6.0;
-                for choice in ThemeChoice::ALL {
-                    if theme::soft_button(
-                        ui,
-                        &palette,
-                        None,
-                        choice.label(),
-                        app.settings.theme == choice,
-                    )
-                    .clicked()
-                        && app.settings.theme != choice
-                    {
-                        app.settings.theme = choice;
-                        changed = true;
+        widgets::setting_row(
+            ui,
+            &palette,
+            "Theme",
+            if omarchy_theme_visible {
+                "Omarchy follows the active desktop palette."
+            } else {
+                ""
+            },
+            |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    for choice in ThemeChoice::ALL {
+                        if choice == ThemeChoice::Omarchy && !omarchy_theme_visible {
+                            continue;
+                        }
+                        if theme::soft_button(
+                            ui,
+                            &palette,
+                            None,
+                            choice.label(),
+                            app.settings.theme == choice,
+                        )
+                        .clicked()
+                            && app.settings.theme != choice
+                        {
+                            app.settings.theme = choice;
+                            changed = true;
+                        }
                     }
-                }
-            });
-        });
+                });
+            },
+        );
         widgets::setting_row(
             ui,
             &palette,

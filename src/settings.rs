@@ -11,6 +11,7 @@ pub enum ThemeChoice {
     Dark,
     Light,
     System,
+    Omarchy,
 }
 
 /// Mini-player visualizer mode.
@@ -35,13 +36,14 @@ impl VisMode {
 }
 
 impl ThemeChoice {
-    pub const ALL: [ThemeChoice; 3] = [Self::Dark, Self::Light, Self::System];
+    pub const ALL: [ThemeChoice; 4] = [Self::Dark, Self::Light, Self::System, Self::Omarchy];
 
     pub fn label(self) -> &'static str {
         match self {
             Self::Dark => "Dark",
             Self::Light => "Light",
             Self::System => "Follow system",
+            Self::Omarchy => "Omarchy",
         }
     }
 }
@@ -270,7 +272,7 @@ impl Settings {
 
 #[cfg(test)]
 mod tests {
-    use super::Settings;
+    use super::{Settings, ThemeChoice};
 
     #[test]
     fn older_settings_keep_the_sidebar_visible() {
@@ -329,6 +331,18 @@ mod tests {
         let json = serde_json::to_string(&settings).unwrap();
         let restored: Settings = serde_json::from_str(&json).unwrap();
         assert!(!restored.sidebar_visible);
+    }
+
+    #[test]
+    fn an_omarchy_theme_choice_round_trips() {
+        let settings = Settings {
+            theme: ThemeChoice::Omarchy,
+            ..Settings::default()
+        };
+        let json = serde_json::to_string(&settings).unwrap();
+        assert!(json.contains(r#""theme":"omarchy""#));
+        let restored: Settings = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.theme, ThemeChoice::Omarchy);
     }
 
     #[test]

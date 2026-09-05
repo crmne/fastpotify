@@ -52,10 +52,12 @@ everyday use, and connection details.
   starts.
 - **Album-art colour.** Pages and the player bar take a tint from the cover
   of what you are looking at or listening to. Turn it off in Settings.
-- **Light and dark**, or follow the system.
+- **Light and dark**, follow the system, or follow the active Omarchy palette
+  on Linux.
 - **Winamp mini player.** `Ctrl+M` opens a small player for classic `.wsz`
   skins, drawn at 1x to 4x scale. It includes a spectrum analyser, playlist,
-  and equalizer. Drop a skin from the
+  and equalizer. The built-in skin follows the app palette, including live
+  Omarchy theme changes. Drop a skin from the
   [Winamp Skin Museum](https://skins.webamp.org) on either window to add it.
 
   ![The mini player wearing the built-in skin](docs/assets/images/winamp.png)
@@ -262,7 +264,9 @@ Settings live in one readable JSON file (`~/.config/fastpotify/settings.json`
 on Linux). They include the Connect device name, bitrate, normalisation,
 autoplay, gapless playback, the audio backend (PulseAudio/PipeWire or ALSA on
 Linux), audio cache size, theme, sidebar state, whether pages take colour
-from artwork, and the mini player's skin and size.
+from artwork, and the mini player's skin and size. On Omarchy, choosing the
+**Omarchy** theme follows the active desktop palette, including theme changes
+made while Fastpotify is open.
 Playback settings apply when you press **Apply and restart playback**.
 You can also check for a new release from Settings. On macOS, the same command
 is in the application menu.
