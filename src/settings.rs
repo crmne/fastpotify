@@ -240,8 +240,8 @@ impl Settings {
             }
         };
         let temporary = path.with_extension("json.tmp");
-        let written =
-            std::fs::write(&temporary, text).and_then(|()| replace_file(&temporary, path));
+        let written = std::fs::write(&temporary, text)
+            .and_then(|()| crate::util::replace_file(&temporary, path));
         if let Err(error) = written {
             log::warn!("unable to save settings to {}: {error}", path.display());
         }
@@ -455,39 +455,11 @@ impl SessionState {
             }
         };
         let temporary = path.with_extension("json.tmp");
-        let written =
-            std::fs::write(&temporary, text).and_then(|()| replace_file(&temporary, path));
+        let written = std::fs::write(&temporary, text)
+            .and_then(|()| crate::util::replace_file(&temporary, path));
         if let Err(error) = written {
             log::warn!("unable to save session to {}: {error}", path.display());
         }
-    }
-}
-
-#[cfg(not(windows))]
-fn replace_file(temporary: &Path, path: &Path) -> std::io::Result<()> {
-    std::fs::rename(temporary, path)
-}
-
-#[cfg(windows)]
-fn replace_file(temporary: &Path, path: &Path) -> std::io::Result<()> {
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Storage::FileSystem::{
-        MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
-    };
-
-    let temporary: Vec<u16> = temporary.as_os_str().encode_wide().chain(Some(0)).collect();
-    let path: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
-    let moved = unsafe {
-        MoveFileExW(
-            temporary.as_ptr(),
-            path.as_ptr(),
-            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-        )
-    };
-    if moved == 0 {
-        Err(std::io::Error::last_os_error())
-    } else {
-        Ok(())
     }
 }
 

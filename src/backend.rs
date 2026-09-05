@@ -2205,35 +2205,7 @@ async fn write_cached_playlist(
     let text = serde_json::to_vec(cached).map_err(std::io::Error::other)?;
     let temporary = path.with_extension("json.tmp");
     tokio::fs::write(&temporary, text).await?;
-    replace_file(&temporary, path)
-}
-
-#[cfg(not(windows))]
-fn replace_file(temporary: &std::path::Path, path: &std::path::Path) -> std::io::Result<()> {
-    std::fs::rename(temporary, path)
-}
-
-#[cfg(windows)]
-fn replace_file(temporary: &std::path::Path, path: &std::path::Path) -> std::io::Result<()> {
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Storage::FileSystem::{
-        MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
-    };
-
-    let temporary: Vec<u16> = temporary.as_os_str().encode_wide().chain(Some(0)).collect();
-    let path: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
-    let moved = unsafe {
-        MoveFileExW(
-            temporary.as_ptr(),
-            path.as_ptr(),
-            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-        )
-    };
-    if moved == 0 {
-        Err(std::io::Error::last_os_error())
-    } else {
-        Ok(())
-    }
+    crate::util::replace_file(&temporary, path)
 }
 
 #[cfg(test)]
