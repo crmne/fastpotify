@@ -78,12 +78,12 @@ fn build(sender: Sender<TrayCommand>, wake: Wake) -> Result<Item, Box<dyn std::e
         .with_icon(icon)
         .with_tooltip("Fastpotify")
         .with_menu(Box::new(menu));
-    // A plain click shows or hides the window on every platform; the menu
-    // stays on right click.
+    // On Windows and macOS, a plain click shows or hides the window; the
+    // menu stays on right click.
+    #[cfg(any(windows, target_os = "macos"))]
+    let builder = builder.with_menu_on_left_click(false);
     #[cfg(target_os = "macos")]
-    let builder = builder
-        .with_icon_as_template(true)
-        .with_menu_on_left_click(false);
+    let builder = builder.with_icon_as_template(true);
     let icon = builder.build()?;
 
     let menu_sender = sender.clone();
