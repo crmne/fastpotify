@@ -59,6 +59,12 @@ everyday use, and connection details.
   [Winamp Skin Museum](https://skins.webamp.org) on either window to add it.
 
   ![The mini player wearing the built-in skin](docs/assets/images/winamp.png)
+- **Windows Media Player skins.** Switch to a window that wears classic
+  `.wmz` skins, transparent where the skin leaves nothing and draggable on
+  its shape, at 1x to 4x scale. Transport, sliders, and the media pane work;
+  the pane shows the analyser, the scope, or MilkDrop's picture. Drop a
+  `.wmz` on either window to add it. The skin's close button or Ctrl+Esc
+  brings the main window back.
 - **Equalizer.** Winamp's ten bands and presets over the music played on
   this computer, in Settings and in the skin.
 - **MilkDrop.** The visualiser, powered by

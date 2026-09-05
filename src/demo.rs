@@ -656,6 +656,27 @@ pub fn apply_flags(app: &mut App, page: Option<&str>, show: Option<&str>) {
                 app.settings.winamp_window = true;
                 app.settings.skin = None;
             }
+            // A Windows Media Player skin, from the .wmz at
+            // $FASTPOTIFY_WMP_SKIN, worn as the window. The screenshot
+            // surface for the renderer; the path stays out of the
+            // repository.
+            "wmp" => {
+                if let Ok(path) = std::env::var("FASTPOTIFY_WMP_SKIN") {
+                    match crate::wmp::SkinDocument::load(std::path::Path::new(&path)) {
+                        Ok(document) => {
+                            app.settings.wmp_window = true;
+                            app.wmp.wear(
+                                None,
+                                crate::wmp::WmpSkin {
+                                    document: std::sync::Arc::new(document),
+                                    render: crate::ui::wmp::Render::default(),
+                                },
+                            );
+                        }
+                        Err(error) => log::warn!("wmp preview: {path}: {error}"),
+                    }
+                }
+            }
             "playlist" => app.settings.playlist_open = true,
             "shade" => app.settings.winamp_shaded = true,
             "playlist-shade" => app.settings.playlist_shaded = true,

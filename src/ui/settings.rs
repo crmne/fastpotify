@@ -685,6 +685,100 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         );
     });
 
+    section(ui, &palette, "Windows Media Player skins", |ui| {
+        widgets::setting_row(
+            ui,
+            &palette,
+            "Skin window",
+            "Fastpotify becomes the window a classic Windows Media Player skin (.wmz file) draws: transparent where the skin leaves nothing, draggable on its shape. The skin's close button or Ctrl+Esc brings this window back. Drop a skin on either window to add it.",
+            |ui| {
+                if app.settings.wmp_skin.is_none() {
+                    theme::soft_button(ui, &palette, None, "Pick a skin first", false);
+                } else if theme::pill_button(ui, &palette, "Switch to it", true).clicked() {
+                    app.actions.push(Action::ToggleWmpWindow);
+                }
+            },
+        );
+        let folder = app.dirs.skins_dir();
+        app.wmp.refresh_choices(&folder);
+        widgets::setting_row(
+            ui,
+            &palette,
+            "Skin",
+            &format!("Skins in {} are listed here.", folder.display()),
+            |ui| {
+                if theme::soft_button(ui, &palette, Some(Icon::ExternalLink), "Open folder", false)
+                    .clicked()
+                {
+                    app.actions.push(Action::OpenSkinsFolder);
+                }
+            },
+        );
+        let choices = app.wmp.choices.clone();
+        let mut options: Vec<(usize, &str)> = vec![(0, "None")];
+        options.extend(
+            choices
+                .iter()
+                .enumerate()
+                .map(|(index, choice)| (index + 1, choice.label())),
+        );
+        let current = app
+            .settings
+            .wmp_skin
+            .as_deref()
+            .and_then(|name| choices.iter().position(|choice| choice.name == name))
+            .map_or(0, |index| index + 1);
+        if let Some(picked) = widgets::chips(ui, &palette, &options, current)
+            && picked != current
+        {
+            let name = picked
+                .checked_sub(1)
+                .map(|index| choices[index].name.clone());
+            app.actions.push(Action::SetWmpSkin(name));
+        }
+        ui.add_space(4.0);
+        widgets::setting_row(
+            ui,
+            &palette,
+            "Size",
+            "Screen pixels per skin pixel, always a whole number so the pixels stay crisp. Command (or Control) with plus and minus steps it in the skin window, too.",
+            |ui| {
+                let scale =
+                    crate::ui::wmp::device_scale(&app.settings, ui.ctx().pixels_per_point());
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    for candidate in 1..=4 {
+                        let label = format!("{candidate}x");
+                        if theme::soft_button(ui, &palette, None, &label, candidate == scale)
+                            .clicked()
+                            && candidate != scale
+                        {
+                            app.actions.push(Action::SetWmpScale(candidate as u8));
+                        }
+                    }
+                });
+            },
+        );
+        widgets::setting_row(
+            ui,
+            &palette,
+            "MilkDrop picture",
+            "On shows MilkDrop's picture in a skin's video screen, rendered by a hidden child; off shows the built-in bars or scope, which cost almost nothing. The vis setting picks bars, scope, or off.",
+            |ui| {
+                if widgets::switch(
+                    ui,
+                    &palette,
+                    "MilkDrop picture",
+                    &mut app.settings.wmp_milkdrop,
+                )
+                .changed()
+                {
+                    changed = true;
+                }
+            },
+        );
+    });
+
     section(ui, &palette, "MilkDrop", |ui| {
         widgets::setting_row(
             ui,

@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use eframe::glow;
+use eframe::glow::{self, HasContext};
 use glutin::config::ConfigTemplateBuilder;
 use glutin::context::{ContextAttributesBuilder, NotCurrentGlContext, PossiblyCurrentContext};
 use glutin::display::{GetGlDisplay, GlDisplay};
@@ -69,6 +69,11 @@ pub struct Args {
     pub fps: u32,
     pub seconds: u32,
     pub scale: u32,
+    /// A framebuffer to write the picture to for a skin, instead of (or
+    /// along with) showing a window of its own. `None` is a window only.
+    pub frames: Option<PathBuf>,
+    /// No visible window: render only to write frames for a skin.
+    pub hidden: bool,
 }
 
 impl Args {
@@ -87,6 +92,8 @@ impl Args {
         let mut fps = DEFAULT_FPS;
         let mut seconds = DEFAULT_SECONDS;
         let mut scale = 1u32;
+        let mut frames = None;
+        let mut hidden = false;
         while let Some(arg) = all.next() {
             match arg.as_str() {
                 "--milkdrop-shm" => shm = all.next().map(PathBuf::from),
@@ -105,6 +112,8 @@ impl Args {
                 "--milkdrop-scale" => {
                     scale = all.next().and_then(|v| v.parse().ok()).unwrap_or(scale);
                 }
+                "--milkdrop-frames" => frames = all.next().map(PathBuf::from),
+                "--milkdrop-hidden" => hidden = true,
                 _ => {}
             }
         }
@@ -117,6 +126,8 @@ impl Args {
             fps,
             seconds,
             scale,
+            frames,
+            hidden,
         })
     }
 }
@@ -160,7 +171,12 @@ pub fn run(args: Args) -> i32 {
         });
     });
 
-    let mut app = Child::new(args, ring);
+    let frames = args.frames.as_deref().and_then(|path| {
+        super::frame::Frame::open(path)
+            .map_err(|error| eprintln!("MilkDrop: no frame buffer: {error}"))
+            .ok()
+    });
+    let mut app = Child::new(args, ring, frames);
     let _ = event_loop.run_app(&mut app);
     0
 }
@@ -184,6 +200,10 @@ struct Live {
 struct Child {
     args: Args,
     ring: Ring,
+    /// The framebuffer a skin reads, when the app asked for frames.
+    frames: Option<super::frame::Frame>,
+    /// Scratch for the readback, reused so a frame does not allocate.
+    frame_buf: Vec<u8>,
     cursor: u64,
     presets: Presets,
     live: Option<Live>,
@@ -212,13 +232,15 @@ struct Child {
 }
 
 impl Child {
-    fn new(args: Args, ring: Ring) -> Self {
+    fn new(args: Args, ring: Ring, frames: Option<super::frame::Frame>) -> Self {
         let fps = args.fps;
         let scale = args.scale;
         let seconds = args.seconds;
         Self {
             args,
             ring,
+            frames,
+            frame_buf: Vec::new(),
             cursor: 0,
             presets: Presets::new(),
             live: None,
@@ -358,6 +380,16 @@ impl Child {
         if let Some(overlay) = &mut live.overlay {
             overlay.draw(&live.gl, (size.width, size.height));
         }
+        // A skin's frames read the clean picture, before the overlay
+        // text and the window's rounded corners go on for a standalone
+        // window.
+        if self.frames.is_some() {
+            let size = live.window.inner_size();
+            let (width, height) = (size.width.max(1), size.height.max(1));
+            if let Some(frames) = &self.frames {
+                Self::write_frame(&live.gl, frames, &mut self.frame_buf, width, height);
+            }
+        }
         for corner in live.corners.iter_mut().flatten() {
             corner.draw(&live.gl, (size.width, size.height));
         }
@@ -365,11 +397,54 @@ impl Child {
             self.drawn.remove(0);
         }
         self.drawn.push(Instant::now());
-        if let Err(error) = live.surface.swap_buffers(&live.context) {
+        // A hidden child feeding a skin presents to nothing.
+        if !self.args.hidden
+            && let Err(error) = live.surface.swap_buffers(&live.context)
+        {
             eprintln!("MilkDrop: present failed: {error}");
         }
         self.update_corners();
         self.report_geometry();
+    }
+
+    /// Reads the composed picture back and hands it to a skin: RGBA,
+    /// flipped top-down the way a texture wants it.
+    fn write_frame(
+        gl: &glow::Context,
+        frames: &super::frame::Frame,
+        buf: &mut Vec<u8>,
+        width: u32,
+        height: u32,
+    ) {
+        use super::frame::{MAX_HEIGHT, MAX_WIDTH};
+        if width == 0 || height == 0 || width > MAX_WIDTH || height > MAX_HEIGHT {
+            return;
+        }
+        let bytes = width as usize * height as usize * 4;
+        buf.resize(bytes, 0);
+        // SAFETY: the context is current; reading the default framebuffer
+        // the engine just drew into.
+        unsafe {
+            gl.bind_framebuffer(glow::READ_FRAMEBUFFER, None);
+            gl.read_pixels(
+                0,
+                0,
+                width as i32,
+                height as i32,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                glow::PixelPackData::Slice(Some(buf)),
+            );
+        }
+        // GL rows run bottom-up; the framebuffer wants top-down.
+        let stride = width as usize * 4;
+        let mut top_down = vec![0u8; bytes];
+        for row in 0..height as usize {
+            let from = row * stride;
+            let to = (height as usize - 1 - row) * stride;
+            top_down[to..to + stride].copy_from_slice(&buf[from..from + stride]);
+        }
+        frames.write(width, height, &top_down);
     }
 
     /// Tells the app where the window is, when it has moved or resized.
@@ -475,18 +550,29 @@ impl ApplicationHandler<Control> for Child {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        let Some(live) = &self.live else {
+        if self.live.is_none() {
             event_loop.set_control_flow(winit::event_loop::ControlFlow::Wait);
             return;
-        };
+        }
         match self.frame_interval() {
             None => {
-                live.window.request_redraw();
+                if let Some(live) = &self.live {
+                    live.window.request_redraw();
+                }
                 event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
             }
             Some(_) => {
                 if Instant::now() >= self.next_frame {
-                    live.window.request_redraw();
+                    if self.frames.is_some() {
+                        // A hidden child feeding a skin renders on the
+                        // timer itself; a window never shown gets no
+                        // redraws to answer to.
+                        self.render();
+                        self.next_frame =
+                            Instant::now() + self.frame_interval().unwrap_or(Duration::ZERO);
+                    } else if let Some(live) = &self.live {
+                        live.window.request_redraw();
+                    }
                 } else {
                     event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(
                         self.next_frame,
@@ -919,8 +1005,17 @@ fn build(event_loop: &ActiveEventLoop, args: &Args, seconds: u32) -> Result<Live
         .with_title("MilkDrop")
         .with_decorations(false)
         .with_resizable(true)
-        .with_min_inner_size(LogicalSize::new(MIN_SIZE[0], MIN_SIZE[1]))
         .with_inner_size(LogicalSize::new(args.size[0], args.size[1]));
+    // The standalone window has a usable minimum; a hidden frame source
+    // renders small on purpose, so it takes the size it is given.
+    if !args.hidden {
+        attributes = attributes.with_min_inner_size(LogicalSize::new(MIN_SIZE[0], MIN_SIZE[1]));
+    }
+    // A skin's frames need no window of their own; the picture goes to
+    // the framebuffer a skin reads instead.
+    if args.hidden {
+        attributes = attributes.with_visible(false);
+    }
     if let Some(pos) = args.pos {
         attributes = attributes.with_position(LogicalPosition::new(pos[0], pos[1]));
     }
@@ -1021,8 +1116,11 @@ mod tests {
                 fps: 30,
                 seconds: 30,
                 scale: 1,
+                frames: None,
+                hidden: false,
             },
             ring,
+            None,
         )
     }
 

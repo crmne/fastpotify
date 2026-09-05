@@ -325,6 +325,11 @@ pub struct App {
     /// `Drop` stops the child when the app does.
     #[cfg(feature = "milkdrop")]
     milkdrop_host: Option<crate::milkdrop::host::Host>,
+    /// The hidden MilkDrop child that renders frames for a worn skin's
+    /// media pane; `None` until a skin showing one is worn. Independent
+    /// of the standalone window above.
+    #[cfg(feature = "milkdrop")]
+    pub wmp_milkdrop: Option<crate::milkdrop::host::Host>,
     last_eviction: Instant,
     pub sign_in_url: Option<String>,
     /// The verified personal Web API application, when acceleration is ready.
@@ -411,6 +416,37 @@ pub struct App {
     pub update_checking: bool,
     /// Winamp window state and active skin.
     pub winamp: crate::winamp::WinampState,
+    /// The WMP skin the skin window wears, read like the Winamp skin.
+    pub wmp: crate::wmp::WmpState,
+    /// Watching a window we minimized come back, because the interface
+    /// freezes until egui is told it did. A field a painter may write
+    /// while a skin is borrowed.
+    pub(crate) restore_watch: RestoreWatch,
+}
+
+/// Which window the event loop opens: the main player or one of the
+/// skin minis. One place decides so the loop, the frame, and the clear
+/// colour cannot drift apart. A WMP skin is only a window once worn;
+/// while it loads, the main window stands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WindowKind {
+    Main,
+    Winamp,
+    Wmp,
+}
+
+/// A window we told to minimize: egui is told on macOS only from our
+/// own command, never again from the window itself, so a window
+/// restored by hand still reads as minimized and no pass runs. The
+/// watch says the window is back once it has a place again.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum RestoreWatch {
+    #[default]
+    None,
+    /// The command went out; the window has not been seen gone yet.
+    Sent,
+    /// The window has been seen without a place; waiting for it back.
+    Gone,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -599,6 +635,8 @@ impl App {
             milkdrop_pos: session.milkdrop_pos,
             #[cfg(feature = "milkdrop")]
             milkdrop_host: None,
+            #[cfg(feature = "milkdrop")]
+            wmp_milkdrop: None,
             last_eviction: Instant::now(),
             sign_in_url: None,
             web_app: None,
@@ -646,11 +684,14 @@ impl App {
             last_update_check: None,
             update_checking: false,
             winamp: crate::winamp::WinampState::new(session.winamp_pos, tap, eq),
+            wmp: crate::wmp::WmpState::default(),
+            restore_watch: RestoreWatch::None,
         };
         app.local.volume = app.settings.volume;
         // What was played here is on disk and needs nothing from the
         // network, so the tab has rows before Spotify has answered.
         app.rebuild_recents();
+        app.wmp.restore_pos = session.wmp_pos;
         app
     }
 
@@ -660,6 +701,42 @@ impl App {
         self.control_commands = Some(guard.commands());
         self.control_now_playing = Some(guard.now_playing_slot());
         self.control_devices = Some(guard.devices_slot());
+    }
+
+    /// Which window stands: a worn WMP skin first, then Winamp,
+    /// otherwise the main player.
+    pub fn window_kind(&self) -> WindowKind {
+        if self.settings.wmp_window && self.wmp.skin.is_some() {
+            WindowKind::Wmp
+        } else if self.settings.winamp_window {
+            WindowKind::Winamp
+        } else {
+            WindowKind::Main
+        }
+    }
+
+    /// Both minis went with the window; each comes back where it was.
+    fn remember_mini_positions(&mut self) {
+        self.winamp.remember_position();
+        self.wmp.remember_position();
+    }
+
+    /// Textures belong to a window's context and go with it.
+    fn forget_mini_textures(&mut self) {
+        self.winamp.forget_textures();
+        self.wmp.forget_textures();
+    }
+
+    /// Stashes the main window's geometry for its return.
+    fn stash_main_geometry(&mut self) {
+        self.session_window_size = self.last_window_size.or(self.session_window_size);
+        self.session_window_pos = self.last_window_pos.or(self.session_window_pos);
+    }
+
+    /// Closes this window; the loop in `main` opens the other kind.
+    fn close_and_reopen(&mut self, ctx: &egui::Context) {
+        self.switch_intent = true;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     }
 
     /// Per-window setup: fonts, icons, loaders, theme. Called every time a
@@ -673,7 +750,7 @@ impl App {
             ThemeChoice::System => egui::ThemePreference::System,
         });
         self.applied_dark = None;
-        self.winamp.forget_textures();
+        self.forget_mini_textures();
         self.window_hidden = false;
         self.hide_intent = false;
         self.wants_show = false;
@@ -681,10 +758,10 @@ impl App {
         if let Some(tray) = &mut self.tray {
             tray.attach();
         }
-        if self.settings.winamp_window {
-            // The mini player sizes itself; the big window's geometry
-            // waits here for its return. Re-assert the on-top level over the
-            // first frames, once the window is mapped, because the level set
+        if self.window_kind() != WindowKind::Main {
+            // A mini sizes itself; the big window's geometry waits here
+            // for its return. Re-assert the on-top level over the first
+            // frames, once the window is mapped, because the level set
             // at creation does not stick on X11.
             if self.settings.winamp_on_top {
                 self.winamp_level_reassert = 3;
@@ -717,9 +794,8 @@ impl App {
     /// The window is gone but the process stays: audio, the tray, and the
     /// media controls keep running until Show or Quit.
     pub fn window_gone(&mut self) {
-        // The Winamp window went with it; it comes back where it was.
-        self.winamp.remember_position();
-        self.winamp.forget_textures();
+        self.remember_mini_positions();
+        self.forget_mini_textures();
         self.window_hidden = true;
         self.hide_intent = false;
         self.wants_show = false;
@@ -1913,6 +1989,20 @@ impl App {
         }
     }
 
+    /// Keeps the WMP skin window wearing the skin the settings name,
+    /// the way the Winamp window does.
+    fn sync_wmp_skin(&mut self, ctx: &egui::Context) {
+        if self.settings.wmp_window
+            && !self.wmp.is_loading()
+            && self.wmp.worn != self.settings.wmp_skin
+        {
+            match self.settings.wmp_skin.clone() {
+                None => self.wmp.skin = None,
+                Some(name) => self.wmp.load(name, &self.dirs.skins_dir(), ctx),
+            }
+        }
+    }
+
     /// Loads and applies the skin selected in settings.
     /// On failure, restores the active skin setting to avoid repeated retries.
     fn sync_skin(&mut self, ctx: &egui::Context) {
@@ -1927,6 +2017,10 @@ impl App {
         }
         if let Some(loaded) = self.winamp.poll() {
             self.skin_loaded(loaded);
+        }
+        self.sync_wmp_skin(ctx);
+        if let Some(loaded) = self.wmp.poll() {
+            self.wmp_loaded(ctx, loaded);
         }
         let fetched = self.winamp.presets.poll();
         if let Some(fetched) = fetched {
@@ -2008,6 +2102,74 @@ impl App {
         }
     }
 
+    /// Whether a view holds a media pane (effects, video) the skin would
+    /// show a picture in. The pane need not be visible now; a drawer that
+    /// opens holds one all the same.
+    #[cfg(feature = "milkdrop")]
+    fn has_media_pane(view: &crate::wmp::View) -> bool {
+        view.children
+            .iter()
+            .flat_map(crate::wmp::Element::walk)
+            .any(|element| {
+                matches!(
+                    element,
+                    crate::wmp::Element::Other(other)
+                        if matches!(other.name.as_str(), "wmpvideo" | "effects" | "video")
+                )
+            })
+    }
+
+    /// Runs a hidden MilkDrop child that renders frames for a worn skin's
+    /// media pane, and stops it when no skin showing one is worn. The
+    /// picture the child draws is what the pane wears instead of bars.
+    #[cfg(feature = "milkdrop")]
+    fn sync_wmp_milkdrop(&mut self) {
+        let want = self.settings.wmp_window
+            && self.settings.wmp_milkdrop
+            && self
+                .wmp
+                .skin
+                .as_ref()
+                .is_some_and(|skin| skin.document.views.iter().any(Self::has_media_pane));
+        if !want {
+            if let Some(host) = self.wmp_milkdrop.as_mut()
+                && host.is_running()
+            {
+                host.close();
+            }
+            // A stopped child leaves no picture; the pane falls back to
+            // bars instead of a frozen frame.
+            if let Some(skin) = self.wmp.skin.as_mut() {
+                skin.render.milkdrop = None;
+            }
+            return;
+        }
+        if self.wmp_milkdrop.is_none() {
+            let tap = std::sync::Arc::clone(&self.winamp.tap);
+            self.wmp_milkdrop = Some(crate::milkdrop::host::Host::new(tap));
+        }
+        let host = self.wmp_milkdrop.as_mut().expect("the host was just made");
+        if !host.is_running() {
+            let presets = self.dirs.milkdrop_dir();
+            // The hidden child follows the standalone window's own
+            // settings; a skin pane scales whatever picture comes.
+            host.open_hidden(
+                &presets,
+                [320.0, 240.0],
+                self.settings.milkdrop_fps,
+                self.settings.milkdrop_seconds,
+                self.settings.milkdrop_scale.max(1),
+            );
+        }
+        // A start that failed leaves no picture; the pane falls back to
+        // bars instead of a frozen frame.
+        if !host.is_running()
+            && let Some(skin) = self.wmp.skin.as_mut()
+        {
+            skin.render.milkdrop = None;
+        }
+    }
+
     /// Records the MilkDrop screen refresh rate and uses it as the initial FPS.
     /// Later screen changes do not override a configured FPS.
     #[cfg(feature = "milkdrop")]
@@ -2071,6 +2233,44 @@ impl App {
                     self.settings.skin = self.winamp.worn.clone();
                     self.settings_dirty = true;
                 }
+            }
+        }
+    }
+
+    /// Puts a freshly read WMP skin on. The first one arrives while the
+    /// big window is up — the skin window's size is only known from the
+    /// skin — so the loop opens the small one.
+    fn wmp_loaded(&mut self, ctx: &egui::Context, loaded: crate::wmp::Loaded) {
+        match loaded.result {
+            Ok(document) => {
+                let was_none = self.wmp.skin.is_none();
+                self.wmp.wear(
+                    Some(loaded.name.clone()),
+                    crate::wmp::WmpSkin {
+                        document: std::sync::Arc::new(document),
+                        render: crate::ui::wmp::Render::default(),
+                    },
+                );
+                if was_none && self.settings.wmp_window {
+                    // The window that opened before the skin was read was
+                    // the plain one, since a skin window needs the skin's
+                    // size to open. Stand the skin window now: the loop
+                    // in `main` closes this and reopens the other kind.
+                    self.close_and_reopen(ctx);
+                }
+            }
+            Err(error) => {
+                self.toast_error(format!("{}: {error}", crate::wmp::label(&loaded.name)));
+                self.settings.wmp_skin = self.wmp.worn.clone();
+                // Nothing worn to fall back on: the skin window is over,
+                // and the plain player is what the person has again. A
+                // window showing now is the plain one already — the
+                // skin window only stands where a skin was worn — so
+                // the setting alone comes back, with no window dance.
+                if self.settings.wmp_window && self.wmp.skin.is_none() {
+                    self.settings.wmp_window = false;
+                }
+                self.settings_dirty = true;
             }
         }
     }
@@ -5195,6 +5395,30 @@ impl App {
 
     // ---- actions -----------------------------------------------------------------
 
+    /// Arms the watch when a window is minimized by a command, and says
+    /// the window is back when it has a place again. egui-winit learns
+    /// "minimized" on macOS only from our command, so a window restored
+    /// by hand still reads as minimized and the interface freezes until
+    /// it is corrected. winit answers the command with the truth of the
+    /// window, and one already shown is left alone.
+    pub fn watch_window_restore(&mut self, ctx: &egui::Context) {
+        let positioned = ctx.input(|input| input.viewport().inner_rect.is_some());
+        match self.restore_watch {
+            RestoreWatch::Sent if !positioned => self.restore_watch = RestoreWatch::Gone,
+            RestoreWatch::Gone if positioned => {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                ctx.request_repaint();
+                self.restore_watch = RestoreWatch::None;
+            }
+            _ => {}
+        }
+    }
+
+    /// The window was minimized by a command; watch for it coming back.
+    pub fn arm_restore_watch(&mut self) {
+        self.restore_watch = RestoreWatch::Sent;
+    }
+
     fn apply_actions(&mut self, ctx: &egui::Context) {
         let mut actions = std::mem::take(&mut self.actions);
         while !actions.is_empty() {
@@ -5768,16 +5992,21 @@ impl App {
             },
             Action::ToggleWinampWindow => {
                 // One window at a time: this one closes and the loop in
-                // `main` opens the other kind where each was last.
-                if self.settings.winamp_window {
-                    self.winamp.remember_position();
+                // `main` opens the other kind where each was last. Enabling
+                // one mini stands down the other.
+                let enabling = !self.settings.winamp_window;
+                // Leaving a mini: each comes back where it was. Leaving
+                // the main window: its geometry waits for its return.
+                self.remember_mini_positions();
+                if self.window_kind() == WindowKind::Main {
+                    self.stash_main_geometry();
                 }
-                self.session_window_size = self.last_window_size.or(self.session_window_size);
-                self.session_window_pos = self.last_window_pos.or(self.session_window_pos);
-                self.settings.winamp_window = !self.settings.winamp_window;
+                self.settings.winamp_window = enabling;
+                if enabling {
+                    self.settings.wmp_window = false;
+                }
                 self.settings_dirty = true;
-                self.switch_intent = true;
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                self.close_and_reopen(ctx);
             }
             Action::SetSkin(name) => {
                 self.settings.skin = name;
@@ -5796,6 +6025,30 @@ impl App {
                 // The window level is set at creation, so push the new level to
                 // the live window.
                 self.push_winamp_level(ctx);
+            }
+            Action::ToggleWmpWindow => {
+                // One window at a time, like the Winamp one: enabling it
+                // stands the Winamp mini down.
+                // The skin window comes back where it was.
+                let enabling = !self.settings.wmp_window;
+                self.remember_mini_positions();
+                if self.window_kind() == WindowKind::Main {
+                    self.stash_main_geometry();
+                }
+                self.settings.wmp_window = enabling;
+                if enabling {
+                    self.settings.winamp_window = false;
+                }
+                self.settings_dirty = true;
+                self.close_and_reopen(ctx);
+            }
+            Action::SetWmpSkin(name) => {
+                self.settings.wmp_skin = name;
+                self.settings_dirty = true;
+            }
+            Action::SetWmpScale(scale) => {
+                self.settings.wmp_scale = Some(scale);
+                self.settings_dirty = true;
             }
             Action::ToggleWinampPlaylist => {
                 self.settings.playlist_open = !self.settings.playlist_open;
@@ -6080,6 +6333,10 @@ impl App {
         // Poll it before applying actions because its keys produce actions.
         #[cfg(feature = "milkdrop")]
         self.sync_milkdrop(ctx);
+        // A worn skin's media pane wears the hidden child's picture; the
+        // child runs only while such a pane stands, window or not.
+        #[cfg(feature = "milkdrop")]
+        self.sync_wmp_milkdrop();
         self.apply_actions(ctx);
         self.sync_media_controls();
         self.sync_window_title(ctx);
@@ -6159,18 +6416,26 @@ impl App {
         let needs_sign_in = !(self.is_connected() && self.user.is_some())
             && !matches!(self.auth, AuthStatus::Connecting | AuthStatus::Starting)
             && !(self.is_connected() && self.user.is_none());
-        if self.settings.winamp_window && needs_sign_in && !self.switch_intent {
-            self.actions.push(Action::ToggleWinampWindow);
+        if needs_sign_in && !self.switch_intent {
+            // The skin windows want a signed-in player to answer to; the
+            // sign-in screen comes back first.
+            match self.window_kind() {
+                WindowKind::Winamp => self.actions.push(Action::ToggleWinampWindow),
+                WindowKind::Wmp => self.actions.push(Action::ToggleWmpWindow),
+                WindowKind::Main => {}
+            }
         }
-        if self.settings.winamp_window {
-            crate::ui::winamp::show(self, ui);
-        } else {
-            crate::ui::show(self, ui);
+        // The skin is the window: no sign-in screen, no Spotify chrome,
+        // only the view the skin defines.
+        match self.window_kind() {
+            WindowKind::Wmp => crate::ui::wmp::show_window(self, ui),
+            WindowKind::Winamp => crate::ui::winamp::show(self, ui),
+            WindowKind::Main => crate::ui::show(self, ui),
         }
         self.apply_actions(ctx);
         self.sync_media_controls();
 
-        if !self.settings.winamp_window && !self.switch_intent {
+        if self.window_kind() == WindowKind::Main && !self.switch_intent {
             if let Some(rect) = ctx.input(|input| input.viewport().inner_rect) {
                 self.last_window_size = Some([rect.width(), rect.height()]);
             }
@@ -6344,6 +6609,7 @@ impl App {
                 queue_open: Some(self.show_queue_panel),
                 queue_tab: Some(self.queue_tab.encode().to_string()),
                 winamp_pos: self.winamp.last_pos.or(self.winamp.restore_pos),
+                wmp_pos: self.wmp.last_pos.or(self.wmp.restore_pos),
                 milkdrop_pos: self.milkdrop_pos,
             }
             .save(&self.dirs.session_file());
@@ -9091,6 +9357,234 @@ mod tests {
             app.actions
         );
         assert!(queue.lock().expect("the queue").is_empty());
+    }
+
+    /// The skin window toggles like the Winamp one: the setting flips,
+    /// the loop is told to open the other kind of window, and the window
+    /// being shown closes.
+    #[test]
+    fn the_wmp_window_toggles_like_the_winamp_one() {
+        // #given
+        let mut app = headless_app();
+
+        // #when
+        app.actions.push(Action::ToggleWmpWindow);
+        app.apply_actions(&egui::Context::default());
+
+        // #then
+        assert!(app.settings.wmp_window);
+        assert!(app.switch_intent);
+
+        // #when
+        app.actions.push(Action::ToggleWmpWindow);
+        app.apply_actions(&egui::Context::default());
+
+        // #then
+        assert!(!app.settings.wmp_window);
+        assert!(app.switch_intent);
+    }
+
+    /// One skin window at a time: opening one stands the other down,
+    /// so the loop never has two minis to choose between.
+    #[test]
+    fn the_skin_windows_stand_each_other_down() {
+        // #given
+        let mut app = headless_app();
+        app.settings.winamp_window = true;
+
+        // #when
+        app.actions.push(Action::ToggleWmpWindow);
+        app.apply_actions(&egui::Context::default());
+
+        // #then
+        assert!(app.settings.wmp_window);
+        assert!(!app.settings.winamp_window);
+
+        // #when
+        app.actions.push(Action::ToggleWinampWindow);
+        app.apply_actions(&egui::Context::default());
+
+        // #then
+        assert!(app.settings.winamp_window);
+        assert!(!app.settings.wmp_window);
+    }
+
+    /// The window kind is the worn WMP skin first, then Winamp,
+    /// otherwise the main player.
+    #[test]
+    fn the_window_kind_follows_the_worn_skin() {
+        // #given
+        let mut app = headless_app();
+
+        // #then
+        assert_eq!(app.window_kind(), WindowKind::Main);
+
+        // #when
+        app.settings.winamp_window = true;
+
+        // #then
+        assert_eq!(app.window_kind(), WindowKind::Winamp);
+
+        // #when
+        app.settings.wmp_window = true;
+        let document =
+            crate::wmp::SkinDocument::from_files("toothy", [("toothy.wms", b"<theme/>".to_vec())])
+                .unwrap();
+        app.wmp.wear(
+            Some("Toothy.wmz".into()),
+            crate::wmp::WmpSkin {
+                document: std::sync::Arc::new(document),
+                render: crate::ui::wmp::Render::default(),
+            },
+        );
+
+        // #then
+        assert_eq!(app.window_kind(), WindowKind::Wmp);
+    }
+
+    /// The skin window comes back where it was, like the Winamp one.
+    #[test]
+    fn the_skin_window_remembers_where_it_was() {
+        // #given
+        let mut app = headless_app();
+        app.settings.wmp_window = true;
+        app.wmp.last_pos = Some([120.0, 80.0]);
+
+        // #when
+        app.actions.push(Action::ToggleWmpWindow);
+        app.apply_actions(&egui::Context::default());
+
+        // #then
+        assert!(!app.settings.wmp_window);
+        assert_eq!(app.wmp.restore_pos, Some([120.0, 80.0]));
+    }
+
+    /// The first skin a window mode wears arrives while the big window is
+    /// up - the small one's size is only known from the skin - so the
+    /// loop is asked for the small window; a re-worn skin asks for
+    /// nothing.
+    #[test]
+    fn the_first_skin_worn_opens_the_skin_window() {
+        // #given
+        let mut app = headless_app();
+        app.settings.wmp_window = true;
+        app.settings.wmp_skin = Some("Toothy.wmz".into());
+
+        // #when
+        let document =
+            crate::wmp::SkinDocument::from_files("toothy", [("toothy.wms", b"<theme/>".to_vec())])
+                .unwrap();
+        app.wmp_loaded(
+            &egui::Context::default(),
+            crate::wmp::Loaded {
+                name: "Toothy.wmz".into(),
+                result: Ok(document),
+            },
+        );
+
+        // #then
+        assert!(app.wmp.skin.is_some());
+        assert_eq!(app.wmp.worn.as_deref(), Some("Toothy.wmz"));
+        assert!(app.switch_intent, "the small window opens");
+
+        // #when
+        app.switch_intent = false;
+        let document =
+            crate::wmp::SkinDocument::from_files("toothy", [("toothy.wms", b"<theme/>".to_vec())])
+                .unwrap();
+        app.wmp_loaded(
+            &egui::Context::default(),
+            crate::wmp::Loaded {
+                name: "Toothy.wmz".into(),
+                result: Ok(document),
+            },
+        );
+
+        // #then
+        assert!(!app.switch_intent, "the window is already the small one");
+    }
+
+    /// A skin window whose skin the settings forget wears nothing, and
+    /// the big window shows instead.
+    #[test]
+    fn a_skin_window_without_a_skin_wears_none() {
+        // #given
+        let mut app = headless_app();
+        app.settings.wmp_window = true;
+        let document =
+            crate::wmp::SkinDocument::from_files("toothy", [("toothy.wms", b"<theme/>".to_vec())])
+                .unwrap();
+        app.wmp.wear(
+            Some("Toothy.wmz".into()),
+            crate::wmp::WmpSkin {
+                document: std::sync::Arc::new(document),
+                render: crate::ui::wmp::Render::default(),
+            },
+        );
+
+        // #when
+        app.settings.wmp_skin = None;
+        app.sync_wmp_skin(&egui::Context::default());
+
+        // #then
+        assert!(app.wmp.skin.is_none());
+    }
+
+    /// A skin that will not assemble does not leave the app saying the
+    /// skin window is on with nothing to show in it: the plain player
+    /// is what the person has, and the setting says so.
+    #[test]
+    fn a_skin_that_fails_to_assemble_restores_the_plain_player() {
+        // #given
+        let mut app = headless_app();
+        app.settings.wmp_window = true;
+        app.settings.wmp_skin = Some("Broken.wmz".into());
+
+        // #when
+        app.wmp_loaded(
+            &egui::Context::default(),
+            crate::wmp::Loaded {
+                name: "Broken.wmz".into(),
+                result: Err(crate::wmp::WmpError::NoDefinition),
+            },
+        );
+
+        // #then
+        assert!(!app.settings.wmp_window);
+        assert_eq!(app.settings.wmp_skin, None);
+    }
+
+    /// A skin that fails while another is worn falls back to the one
+    /// still on, and the skin window stays on.
+    #[test]
+    fn a_skin_that_fails_falls_back_to_the_one_worn() {
+        // #given
+        let mut app = headless_app();
+        app.settings.wmp_window = true;
+        let document =
+            crate::wmp::SkinDocument::from_files("toothy", [("toothy.wms", b"<theme/>".to_vec())])
+                .unwrap();
+        app.wmp.wear(
+            Some("Toothy.wmz".into()),
+            crate::wmp::WmpSkin {
+                document: std::sync::Arc::new(document),
+                render: crate::ui::wmp::Render::default(),
+            },
+        );
+        app.settings.wmp_skin = Some("Broken.wmz".into());
+
+        // #when
+        app.wmp_loaded(
+            &egui::Context::default(),
+            crate::wmp::Loaded {
+                name: "Broken.wmz".into(),
+                result: Err(crate::wmp::WmpError::NoDefinition),
+            },
+        );
+
+        // #then
+        assert!(app.settings.wmp_window);
+        assert_eq!(app.settings.wmp_skin, Some("Toothy.wmz".into()));
     }
 
     /// Control clients can set state, seek, play a URI, and transfer playback.

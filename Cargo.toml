@@ -39,8 +39,9 @@ egui_extras = { version = "0.36", features = ["image", "svg"] }
 # question.
 skrifa = "0.44"
 memmap2 = "0.9"
-# bmp is for Winamp skins, whose bitmaps are BMP files.
-image = { version = "0.25", default-features = false, features = ["jpeg", "png", "bmp"] }
+# bmp and gif are for skin bitmaps: Winamp skins are BMP files, and
+# Windows Media Player skins (src/wmp) use BMP, GIF, and the odd PNG.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "bmp", "gif"] }
 # Inflating the zip a Winamp skin comes as (src/skin/zip.rs). Already
 # compiled for reqwest's gzip support, so this adds no code to the build.
 flate2 = "1"

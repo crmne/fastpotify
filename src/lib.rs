@@ -47,4 +47,5 @@ pub mod util;
 pub mod vis;
 pub mod winamp;
 pub mod window;
+pub mod wmp;
 pub mod zeroconf;

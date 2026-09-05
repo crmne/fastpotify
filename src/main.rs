@@ -24,6 +24,11 @@ struct Cli {
     #[arg(long)]
     device_name: Option<String>,
 
+    /// Print a summary of a Windows Media Player skin package (.wmz)
+    /// and exit.
+    #[arg(long, value_name = "PATH")]
+    inspect_wmp_skin: Option<std::path::PathBuf>,
+
     /// Log more from librespot and the Web API client.
     #[arg(short, long)]
     verbose: bool,
@@ -281,6 +286,11 @@ fn main() -> eframe::Result<()> {
     }
 
     let cli = Cli::parse();
+    // A skin inspection is a print-and-leave job: nothing of the app's
+    // state, log file, or single-instance guard is wanted.
+    if let Some(path) = &cli.inspect_wmp_skin {
+        std::process::exit(fastpotify::wmp::inspect::run(path));
+    }
     // A control launch is a client, not a second app: talk to the running
     // instance and exit before touching the log file it is writing to.
     if let Some(control) = cli.control {
@@ -358,12 +368,13 @@ fn main() -> eframe::Result<()> {
         fastpotify::mac_links::install(guard.commands(), waker.clone());
     }
 
-    // A capture run is a throwaway process next to the real one: no tray
-    // icon of its own, and no second MPRIS service to fight over media keys.
+    // A demo run is a throwaway process next to the real one, whether it
+    // stays for a screenshot or for hands on it: no tray icon of its own,
+    // and no second MPRIS service to fight over media keys.
     #[allow(unused_mut)]
     let mut options = app::AppOptions::default();
     #[cfg(feature = "demo")]
-    if cli.demo_shot.is_some() {
+    if demo {
         options = app::AppOptions {
             media_controls: false,
             tray: false,
@@ -537,11 +548,21 @@ struct MiniWindow {
 
 impl MiniWindow {
     fn wanted(app: &app::App) -> Option<Self> {
-        app.settings.winamp_window.then(|| Self {
-            size: fastpotify::ui::winamp::initial_size(&app.settings),
-            position: app.winamp.restore_pos,
-            on_top: app.settings.winamp_on_top,
-        })
+        // A WMP skin is the window: transparent and chromeless, sized
+        // to the view, wherever the skin sits.
+        match app.window_kind() {
+            app::WindowKind::Wmp => app.wmp.skin.as_ref().map(|skin| Self {
+                size: fastpotify::ui::wmp::initial_size(&skin.document, &app.settings),
+                position: app.wmp.restore_pos,
+                on_top: false,
+            }),
+            app::WindowKind::Winamp => Some(Self {
+                size: fastpotify::ui::winamp::initial_size(&app.settings),
+                position: app.winamp.restore_pos,
+                on_top: app.settings.winamp_on_top,
+            }),
+            app::WindowKind::Main => None,
+        }
     }
 }
 
@@ -700,6 +721,9 @@ impl Shell {
 impl eframe::App for Shell {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         if let Some(app) = self.app.as_mut() {
+            // The watch runs in logic, which goes on while the pass is
+            // skipped for a window egui still believes minimized.
+            app.watch_window_restore(ctx);
             #[cfg(target_os = "macos")]
             for command in fastpotify::mac_menu::drain_commands() {
                 use fastpotify::mac_menu::MenuCommand;
@@ -775,11 +799,11 @@ impl eframe::App for Shell {
     /// The mini player's window is see-through where the skin leaves it
     /// out; the big window paints itself over eframe's own ground.
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
-        if self
+        let skinned = self
             .app
             .as_ref()
-            .is_some_and(|app| app.settings.winamp_window)
-        {
+            .is_some_and(|app| !matches!(app.window_kind(), app::WindowKind::Main));
+        if skinned {
             [0.0; 4]
         } else {
             egui::Color32::from_rgba_unmultiplied(12, 12, 12, 180).to_normalized_gamma_f32()
