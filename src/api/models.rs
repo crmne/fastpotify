@@ -201,9 +201,13 @@ pub struct Copyright {
 
 impl Album {
     pub fn year(&self) -> Option<&str> {
+        // `get` rather than a slice, the way `util::format_date` reads the
+        // same field: `min` clamps the length and says nothing about
+        // character boundaries, so a date whose fourth byte is inside a
+        // character is a panic rather than a date that does not parse.
         self.release_date
             .as_deref()
-            .map(|date| &date[..date.len().min(4)])
+            .map(|date| date.get(..4).unwrap_or(date))
     }
 
     pub fn kind_label(&self) -> &'static str {
@@ -752,6 +756,33 @@ pub struct ApiErrorDetail {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_albums_year_reads_a_date_the_way_format_date_does() {
+        let dated = |date: &str| {
+            let json = format!(
+                r#"{{"id":"a","name":"A","uri":"spotify:album:a","release_date":"{date}"}}"#
+            );
+            serde_json::from_str::<Album>(&json).unwrap()
+        };
+        // The dates Spotify documents, at all three precisions.
+        assert_eq!(dated("2024-03-15").year(), Some("2024"));
+        assert_eq!(dated("2024-03").year(), Some("2024"));
+        assert_eq!(dated("2024").year(), Some("2024"));
+        // Shorter than a year, which `min` was there to hold.
+        assert_eq!(dated("20").year(), Some("20"));
+        // A date whose fourth byte is inside a character. `min` clamps the
+        // length and says nothing about boundaries, so this used to panic;
+        // `util::format_date` reads the same field with `get` and does not.
+        assert_eq!(dated("\u{c791}\u{b144}").year(), Some("\u{c791}\u{b144}"));
+        assert_eq!(
+            crate::util::format_date("\u{c791}\u{b144}"),
+            "\u{c791}\u{b144}"
+        );
+        // No date at all is still no year.
+        let json = r#"{"id":"a","name":"A","uri":"spotify:album:a"}"#;
+        assert_eq!(serde_json::from_str::<Album>(json).unwrap().year(), None);
+    }
 
     #[test]
     fn playlist_items_accept_both_item_and_track_keys() {
