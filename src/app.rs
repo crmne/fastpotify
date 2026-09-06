@@ -3013,13 +3013,24 @@ impl App {
         if !matches!(self.target(), Target::Local) {
             return;
         }
+        // `queue_one` writes every queued song to both lists, so they hold
+        // the same wishes and adding their counts asks for twice the rows
+        // Next up was given. The extra row taken is the context's own copy
+        // of that song, which stays. Neither list alone is the count
+        // either: a pending add outlives its `manual_queue` entry once the
+        // song starts, and `manual_queue` drops its oldest past a hundred.
+        // Take as many rows as the longer of the two holds.
         let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-        for uri in self
-            .manual_queue
-            .iter()
-            .chain(self.pending_queue_adds.iter().map(|(uri, _)| uri))
-        {
+        for uri in &self.manual_queue {
             *counts.entry(uri.clone()).or_insert(0) += 1;
+        }
+        let mut pending: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+        for (uri, _) in &self.pending_queue_adds {
+            *pending.entry(uri.as_str()).or_insert(0) += 1;
+        }
+        for (uri, count) in pending {
+            let held = counts.entry(uri.to_string()).or_insert(0);
+            *held = (*held).max(count);
         }
         if let Loadable::Loaded(queue) = &mut self.queue {
             // Remove one row per queued copy, starting at the front.
@@ -7582,6 +7593,59 @@ mod tests {
         assert!(
             app.queue_recheck_at.is_some(),
             "a fetch follows to sweep rows queued from other devices"
+        );
+    }
+
+    /// Rule: clearing takes back the rows Play next added, and the
+    /// context's own copy of the same song is not one of them, however
+    /// recently the song was queued.
+    #[test]
+    fn clearing_a_just_queued_song_leaves_the_contexts_copy_of_it() {
+        let ctx = egui::Context::default();
+        let mut app = headless_app();
+        app.local.track = Some(crate::player::LocalTrack {
+            uri: "spotify:track:a".into(),
+            ..Default::default()
+        });
+        app.local.playback = Playback::Playing;
+        // What is playing comes to b on its own later on.
+        app.queue = loaded_queue(
+            "spotify:track:a",
+            &[
+                "spotify:track:ctx1",
+                "spotify:track:b",
+                "spotify:track:ctx2",
+            ],
+        );
+        app.apply(
+            Action::AddToQueue {
+                uri: "spotify:track:b".into(),
+                label: "b".into(),
+            },
+            &ctx,
+        );
+        let (_, next) = queue_uris(&app);
+        assert_eq!(
+            next,
+            vec![
+                "spotify:track:b",
+                "spotify:track:ctx1",
+                "spotify:track:b",
+                "spotify:track:ctx2",
+            ],
+            "one row queued on top, the context's own b still below"
+        );
+        assert!(app.can_clear_queue());
+        app.apply(Action::ClearQueue, &ctx);
+        let (_, next) = queue_uris(&app);
+        assert_eq!(
+            next,
+            vec![
+                "spotify:track:ctx1",
+                "spotify:track:b",
+                "spotify:track:ctx2",
+            ],
+            "the queued b goes and the context keeps the b it was going to play"
         );
     }
 
