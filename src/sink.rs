@@ -215,6 +215,15 @@ impl Envelope {
         self.target.store(0, Ordering::Relaxed);
     }
 
+    /// Puts the envelope at silence at once, wherever its ramp had reached.
+    /// Callers use this once the sound has stopped and there is no longer
+    /// anything for a ramp to ride.
+    fn close(&self) {
+        self.step.store(self.full_step, Ordering::Relaxed);
+        self.target.store(0, Ordering::Relaxed);
+        self.level.store(0, Ordering::Relaxed);
+    }
+
     fn silent(&self) -> bool {
         self.level.load(Ordering::Relaxed) == 0
     }
@@ -498,6 +507,7 @@ impl Sink for RodioSink {
                 thread::sleep(Duration::from_millis(10));
             }
             output.sink.pause();
+            output.transport.close();
             output.fed = false;
             output.last_write = None;
         }
@@ -950,6 +960,26 @@ mod tests {
         let transport = Envelope::open(RATE, TRANSPORT_FADE);
         transport.fade_out();
         falls_silent_after(&transport, fade_frames(RATE, TRANSPORT_FADE));
+    }
+
+    /// An underrun leaves the pause with no frames to fade through,
+    /// so the ramp never moves and the level is still up.
+    /// Settling it at the stop is what keeps the next Play coming up
+    /// from silence rather than resuming at full gain.
+    #[test]
+    fn a_pause_with_nothing_queued_still_resumes_from_silence() {
+        let transport = Envelope::open(RATE, TRANSPORT_FADE);
+        transport.fade_out_over(0);
+        // No frame is pulled here, because there is none to pull. That is
+        // the underrun, and it leaves the ramp exactly where it started.
+        assert!(!transport.silent());
+
+        transport.close();
+        assert!(transport.silent());
+
+        transport.fade_in();
+        assert_eq!(transport.next_gain(), 0.0);
+        assert!(transport.next_gain() > 0.0);
     }
 
     /// The ramp is clocked by the sound, not by the wall, so it cannot run
