@@ -1451,6 +1451,8 @@ impl App {
         self.search.results = Loadable::NotLoaded;
         self.search.committed.clear();
         self.table_rows.clear();
+        self.page_used.clear();
+        self.track_used.clear();
     }
 
     /// Drop table-row caches whose pages are gone, and cap what remains.
@@ -4263,7 +4265,7 @@ impl App {
     // ---- navigation ------------------------------------------------------------
 
     pub fn open(&mut self, page: Page) {
-        self.page_used.insert(page.clone(), Instant::now());
+        self.touch_page(&page);
         if *self.page() == page {
             self.ensure_loaded(page.clone());
             self.retain_table_rows(&page);
@@ -4306,7 +4308,7 @@ impl App {
         let id = util::uri_id(&uri).unwrap_or_default().to_string();
         match util::uri_kind(&uri) {
             Some("track") => {
-                if let Some(track) = self.track_cache.get(&id) {
+                if let Some(track) = self.read_cached_track(&id) {
                     self.pending_link = None;
                     let album = track
                         .album
@@ -4340,6 +4342,16 @@ impl App {
 
     pub fn can_go_forward(&self) -> bool {
         self.history_index + 1 < self.history.len()
+    }
+
+    fn touch_page(&mut self, page: &Page) {
+        self.page_used.insert(page.clone(), Instant::now());
+    }
+
+    fn read_cached_track(&mut self, id: &str) -> Option<Track> {
+        let track = self.track_cache.get(id).cloned()?;
+        self.track_used.insert(id.to_owned(), Instant::now());
+        Some(track)
     }
 
     /// Drops page caches that exceed the cap, keeping the open page, the
@@ -5426,6 +5438,7 @@ impl App {
                 if self.can_go_back() {
                     self.history_index -= 1;
                     let page = self.page().clone();
+                    self.touch_page(&page);
                     self.ensure_loaded(page.clone());
                     self.retain_table_rows(&page);
                     self.evict_stale_pages();
@@ -5435,6 +5448,7 @@ impl App {
                 if self.can_go_forward() {
                     self.history_index += 1;
                     let page = self.page().clone();
+                    self.touch_page(&page);
                     self.ensure_loaded(page.clone());
                     self.retain_table_rows(&page);
                     self.evict_stale_pages();
@@ -8442,6 +8456,24 @@ mod tests {
         app
     }
 
+    fn seed_playlist(app: &mut App, id: &str) {
+        app.playlist_pages
+            .insert(id.to_string(), PlaylistPage::default());
+        app.open(Page::Playlist(id.to_string()));
+        std::thread::sleep(Duration::from_millis(1));
+    }
+
+    fn store_track(app: &mut App, id: &str) {
+        app.track_cache.insert(
+            id.to_string(),
+            Track {
+                id: Some(id.to_string()),
+                uri: format!("spotify:track:{id}"),
+                ..Track::default()
+            },
+        );
+    }
+
     #[test]
     fn two_toggle_play_actions_in_one_batch_return_to_playing() {
         let mut app = headless_app();
@@ -8466,17 +8498,9 @@ mod tests {
     #[test]
     fn page_cache_stays_bounded_when_history_is_long() {
         let mut app = headless_app();
-        let now = Instant::now();
         for i in 0..20 {
-            let id = format!("pl{i}");
-            app.playlist_pages
-                .insert(id.clone(), PlaylistPage::default());
-            app.history.push(Page::Playlist(id.clone()));
-            app.page_used
-                .insert(Page::Playlist(id), now - Duration::from_secs(20 - i));
+            seed_playlist(&mut app, &format!("pl{i}"));
         }
-        app.history_index = app.history.len() - 1;
-        app.evict_stale_pages();
         assert!(
             app.playlist_pages.len() <= 12,
             "history must not protect more pages than the cap: {}",
@@ -8530,26 +8554,38 @@ mod tests {
     }
 
     #[test]
+    fn going_back_refreshes_page_recency() {
+        let mut app = headless_app();
+        let ctx = egui::Context::default();
+        for i in 0..12 {
+            seed_playlist(&mut app, &format!("pl{i}"));
+        }
+        for _ in 0..11 {
+            app.apply(Action::Back, &ctx);
+        }
+        assert_eq!(app.page(), &Page::Playlist("pl0".into()));
+        seed_playlist(&mut app, "pl12");
+        assert!(
+            app.playlist_pages.contains_key("pl0"),
+            "a playlist revisited through Back must not be the oldest"
+        );
+        assert!(
+            !app.playlist_pages.contains_key("pl11"),
+            "the page left behind by history is the one that goes"
+        );
+    }
+
+    #[test]
     fn page_cache_trims_data_that_arrives_after_navigation() {
         let mut app = headless_app();
-        app.open(Page::Playlist("current".into()));
         for i in 0..12 {
-            let id = format!("pl{i}");
-            app.playlist_pages
-                .insert(id.clone(), PlaylistPage::default());
-            app.page_used
-                .insert(Page::Playlist(id), Instant::now() - Duration::from_secs(30));
+            seed_playlist(&mut app, &format!("pl{i}"));
         }
+        app.open(Page::Playlist("current".into()));
         app.playlist_pages
             .insert("current".into(), PlaylistPage::default());
-        app.page_used
-            .insert(Page::Playlist("current".into()), Instant::now());
         app.playlist_pages
             .insert("late".into(), PlaylistPage::default());
-        app.page_used.insert(
-            Page::Playlist("late".into()),
-            Instant::now() - Duration::from_secs(60),
-        );
         app.evict_stale_pages();
         assert!(app.playlist_pages.len() <= 12);
         assert!(app.playlist_pages.contains_key("current"));
@@ -8613,24 +8649,32 @@ mod tests {
     #[test]
     fn track_cache_is_an_lru_of_eight_hundred() {
         let mut app = headless_app();
-        let now = Instant::now();
         for i in 0..900 {
-            let id = format!("t{i}");
-            app.track_cache.insert(
-                id.clone(),
-                Track {
-                    id: Some(id.clone()),
-                    uri: format!("spotify:track:{id}"),
-                    ..Track::default()
-                },
-            );
-            app.track_used
-                .insert(id, now - Duration::from_secs(900 - i));
+            store_track(&mut app, &format!("t{i}"));
+        }
+        for i in 100..900 {
+            let _ = app.read_cached_track(&format!("t{i}"));
         }
         app.evict_stale_pages();
         assert_eq!(app.track_cache.len(), 800);
-        assert!(app.track_cache.contains_key("t899"));
+        assert!(
+            app.track_cache.contains_key("t899"),
+            "a cache hit must keep that track"
+        );
         assert!(!app.track_cache.contains_key("t0"));
+    }
+
+    #[test]
+    fn reset_data_clears_cache_recency() {
+        let mut app = headless_app();
+        seed_playlist(&mut app, "pl0");
+        store_track(&mut app, "t0");
+        let _ = app.read_cached_track("t0");
+        assert!(!app.page_used.is_empty());
+        assert!(!app.track_used.is_empty());
+        app.reset_data();
+        assert!(app.page_used.is_empty());
+        assert!(app.track_used.is_empty());
     }
 
     #[test]
