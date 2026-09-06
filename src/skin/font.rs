@@ -34,7 +34,9 @@ pub fn cell(character: char) -> (u32, u32) {
 /// Whether the font has a real cell for the character, rather than the
 /// question mark it falls back to.
 pub fn covered(character: char) -> bool {
-    character == '?' || cell(character) != cell('?')
+    // Asked after folding, so a character that folds onto the question mark
+    // is covered by it: the full-width one is the same question mark.
+    fold(character) == '?' || cell(character) != cell('?')
 }
 
 /// The sprite for a character.
@@ -120,6 +122,10 @@ mod tests {
         assert_eq!(cell('\u{3000}'), cell(' '));
         // The full-width tilde takes the dash the ASCII one already took.
         assert_eq!(cell('\u{ff5e}'), cell('-'));
+        // The full-width question mark is the question mark, so it is a cell
+        // the font has rather than the fallback for one it does not.
+        assert_eq!(cell('\u{ff1f}'), cell('?'));
+        assert!(covered('\u{ff1f}'));
     }
 
     #[test]
