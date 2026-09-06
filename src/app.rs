@@ -2105,12 +2105,18 @@ impl App {
 
     fn apply_theme(&mut self, ctx: &egui::Context) {
         let dark = ctx.theme() == egui::Theme::Dark;
-        if self.applied_dark != Some(dark) {
-            self.palette = if dark {
-                Palette::dark()
-            } else {
-                Palette::light()
-            };
+        let palette = if self.settings.theme == ThemeChoice::System {
+            // Linux desktop palettes can change while the window is idle.
+            #[cfg(target_os = "linux")]
+            ctx.request_repaint_after(Duration::from_secs(1));
+            Palette::from_system(dark)
+        } else if dark {
+            Palette::dark()
+        } else {
+            Palette::light()
+        };
+        if self.applied_dark != Some(dark) || self.palette != palette {
+            self.palette = palette;
             theme::apply(ctx, &self.palette);
             self.applied_dark = Some(dark);
             self.accents.clear();

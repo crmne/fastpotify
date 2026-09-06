@@ -52,7 +52,9 @@ everyday use, and connection details.
   starts.
 - **Album-art colour.** Pages and the player bar take a tint from the cover
   of what you are looking at or listening to. Turn it off in Settings.
-- **Light and dark**, or follow the system.
+- **Light and dark**, or follow the system. On Linux, follow system also
+  uses the active Omarchy desktop palette when
+  `~/.config/omarchy/current/theme/colors.toml` is present.
 - **Winamp mini player.** `Ctrl+M` opens a small player for classic `.wsz`
   skins, drawn at 1x to 4x scale. It includes a spectrum analyser, playlist,
   and equalizer. Drop a skin from the

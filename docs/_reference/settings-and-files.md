@@ -72,7 +72,7 @@ main fields are:
 | `gapless` | `true` | Gapless playback |
 | `audio_backend` | platform | `pulseaudio` or `rodio` on Linux |
 | `audio_cache_mb` | `1024` | On-disk audio cache budget |
-| `theme` | `dark` | `dark`, `light`, or `system` |
+| `theme` | `dark` | `dark`, `light`, or `system`. `system` follows the OS light/dark setting. On Linux it also reads Omarchy's `~/.config/omarchy/current/theme/colors.toml` when that file exists. |
 | `accent_from_art` | `true` | Tint pages with album art |
 | `sidebar_compact` | `false` | Names only in the library sidebar, no covers |
 | `tracklist_compact` | `false` | One-line track rows without covers |

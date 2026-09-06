@@ -72,6 +72,110 @@ impl Palette {
         }
     }
 
+    /// Follows the OS light/dark setting, and on Linux also the active
+    /// desktop palette when Omarchy publishes one. Missing or unreadable
+    /// palette files use the built-in light or dark colours. A half-written
+    /// file keeps the last complete palette; deleting the file drops back
+    /// to the built-in colours.
+    pub fn from_system(dark: bool) -> Self {
+        #[cfg(not(target_os = "linux"))]
+        {
+            if dark { Self::dark() } else { Self::light() }
+        }
+        #[cfg(target_os = "linux")]
+        {
+            Self::from_linux_desktop(dark)
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn from_linux_desktop(dark: bool) -> Self {
+        use std::sync::{Mutex, OnceLock};
+        use std::time::SystemTime;
+
+        struct Cache {
+            mtime: Option<SystemTime>,
+            last_good: Option<Palette>,
+        }
+
+        static CACHE: OnceLock<Mutex<Cache>> = OnceLock::new();
+        let cache = CACHE.get_or_init(|| {
+            Mutex::new(Cache {
+                mtime: None,
+                last_good: None,
+            })
+        });
+        let mut cached = cache.lock().unwrap_or_else(|poison| poison.into_inner());
+        let Some(path) = linux_palette_file() else {
+            cached.mtime = None;
+            cached.last_good = None;
+            return if dark { Self::dark() } else { Self::light() };
+        };
+        let mtime = std::fs::metadata(&path)
+            .ok()
+            .and_then(|meta| meta.modified().ok());
+        if mtime.is_none() {
+            cached.mtime = None;
+            cached.last_good = None;
+            return if dark { Self::dark() } else { Self::light() };
+        }
+        if cached.mtime == mtime
+            && let Some(palette) = cached.last_good
+        {
+            return palette;
+        }
+        cached.mtime = mtime;
+        match std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|colors| Self::from_desktop_colors(&colors))
+        {
+            Some(palette) => {
+                cached.last_good = Some(palette);
+                palette
+            }
+            None => cached
+                .last_good
+                .unwrap_or_else(|| if dark { Self::dark() } else { Self::light() }),
+        }
+    }
+
+    fn from_desktop_colors(colors: &str) -> Option<Self> {
+        let color = |name: &str| color_from_toml(colors, name);
+        let window = color("background")?;
+        let text = color("selection_foreground").or_else(|| color("foreground"))?;
+        let accent = color("accent")?;
+        let dark = luminance(window) < luminance(text);
+        let panel = blend(window, text, 0.035);
+        let surface = blend(window, text, 0.075);
+        Some(Self {
+            dark,
+            window,
+            panel,
+            surface,
+            surface_hover: blend(window, text, 0.13),
+            surface_active: color("selection_background").unwrap_or(blend(window, accent, 0.20)),
+            outline: blend(window, text, 0.18),
+            text,
+            secondary: blend(window, text, 0.80),
+            dim: blend(window, text, 0.68),
+            accent,
+            accent_hover: blend(
+                accent,
+                if dark { Color32::WHITE } else { Color32::BLACK },
+                0.10,
+            ),
+            on_accent: if luminance(accent) > 0.179 {
+                Color32::BLACK
+            } else {
+                Color32::WHITE
+            },
+            danger: color("color1").unwrap_or(accent),
+            warning: color("color3").unwrap_or(accent),
+            overlay: window,
+            shadow: Color32::from_black_alpha(if dark { 140 } else { 50 }),
+        })
+    }
+
     /// A colour derived from album art, softened so it can sit behind text.
     pub fn tint_from_art(&self, rgb: [u8; 3]) -> Color32 {
         let [r, g, b] = rgb.map(|c| c as f32 / 255.0);
@@ -91,6 +195,96 @@ impl Palette {
         };
         Color32::from_rgb((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8)
     }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_palette_file() -> Option<std::path::PathBuf> {
+    let config = std::env::var_os("XDG_CONFIG_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".config"))
+        })?;
+    Some(config.join("omarchy/current/theme/colors.toml"))
+}
+
+fn color_from_toml(colors: &str, name: &str) -> Option<Color32> {
+    colors.lines().find_map(|line| {
+        let line = toml_without_comment(line).trim();
+        let (key, value) = line.split_once('=')?;
+        (key.trim() == name).then(|| parse_hex_color(toml_string(value)))?
+    })
+}
+
+fn toml_without_comment(line: &str) -> &str {
+    let trimmed = line.trim_start();
+    if trimmed.starts_with('#') {
+        return "";
+    }
+    let mut in_single = false;
+    let mut in_double = false;
+    for (index, ch) in line.char_indices() {
+        match ch {
+            '\'' if !in_double => in_single = !in_single,
+            '"' if !in_single => in_double = !in_double,
+            '#' if !in_single && !in_double => return &line[..index],
+            _ => {}
+        }
+    }
+    line
+}
+
+fn toml_string(value: &str) -> &str {
+    let value = value.trim();
+    value
+        .strip_prefix('"')
+        .and_then(|rest| rest.split('"').next())
+        .or_else(|| {
+            value
+                .strip_prefix('\'')
+                .and_then(|rest| rest.split('\'').next())
+        })
+        .unwrap_or(value)
+}
+
+fn parse_hex_color(value: &str) -> Option<Color32> {
+    let hex = value.trim().strip_prefix('#')?;
+    if !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    let pair = |start: usize| u8::from_str_radix(&hex[start..start + 2], 16).ok();
+    match hex.len() {
+        3 => {
+            let digit = |start: usize| {
+                let value = u8::from_str_radix(&hex[start..start + 1], 16).ok()?;
+                Some(value * 17)
+            };
+            Some(Color32::from_rgb(digit(0)?, digit(1)?, digit(2)?))
+        }
+        6 => Some(Color32::from_rgb(pair(0)?, pair(2)?, pair(4)?)),
+        8 => Some(Color32::from_rgb(pair(0)?, pair(2)?, pair(4)?)),
+        _ => None,
+    }
+}
+
+fn blend(base: Color32, top: Color32, amount: f32) -> Color32 {
+    let mix = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * amount).round() as u8;
+    Color32::from_rgb(
+        mix(base.r(), top.r()),
+        mix(base.g(), top.g()),
+        mix(base.b(), top.b()),
+    )
+}
+
+fn luminance(color: Color32) -> f32 {
+    let linear = |v: u8| {
+        let v = v as f32 / 255.0;
+        if v <= 0.04045 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * linear(color.r()) + 0.7152 * linear(color.g()) + 0.0722 * linear(color.b())
 }
 
 pub const RADIUS: u8 = 8;
@@ -880,6 +1074,83 @@ pub fn subtle(ui: &mut egui::Ui, palette: &Palette, label: &str) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn omarchy_palette_uses_the_system_theme_colours() {
+        let palette = Palette::from_desktop_colors(
+            r##"
+                background = "#0d0b1a"
+                foreground = "#c4c0e0"
+                selection_foreground = "#e6e2f5"
+                selection_background = "#2a2340"
+                accent = "#a97bf0"
+                color0 = "#1b1730"
+                color1 = "#f7768e"
+                color3 = "#e0c068"
+                color7 = "#b8b2d8"
+                color8 = "#453d63"
+                color13 = "#c49bff"
+            "##,
+        )
+        .expect("valid Omarchy palette");
+
+        assert_eq!(palette.window, Color32::from_rgb(0x0d, 0x0b, 0x1a));
+        assert_eq!(palette.accent, Color32::from_rgb(0xa9, 0x7b, 0xf0));
+        assert_eq!(palette.surface_active, Color32::from_rgb(0x2a, 0x23, 0x40));
+        assert_eq!(palette.danger, Color32::from_rgb(0xf7, 0x76, 0x8e));
+    }
+
+    #[test]
+    fn desktop_palette_accepts_comments_quotes_and_short_hex() {
+        let palette = Palette::from_desktop_colors(
+            r##"
+                # a comment
+                background = '#abc' # trailing
+                foreground = "#e6e2f5"
+                accent = "#A97BF0FF"
+            "##,
+        )
+        .expect("tolerant desktop palette");
+        assert_eq!(palette.window, Color32::from_rgb(0xaa, 0xbb, 0xcc));
+        assert_eq!(palette.accent, Color32::from_rgb(0xa9, 0x7b, 0xf0));
+        assert!(Palette::from_desktop_colors("background = invalid").is_none());
+        assert_eq!(parse_hex_color("#éabcx"), None);
+        assert_eq!(parse_hex_color("#12"), None);
+    }
+
+    #[test]
+    fn system_palette_is_readable_and_rejects_invalid_hex() {
+        let contrast = |a: Color32, b: Color32| {
+            let lum = |c: Color32| {
+                let linear = |v: u8| {
+                    let v = v as f32 / 255.0;
+                    if v <= 0.04045 {
+                        v / 12.92
+                    } else {
+                        ((v + 0.055) / 1.055).powf(2.4)
+                    }
+                };
+                0.2126 * linear(c.r()) + 0.7152 * linear(c.g()) + 0.0722 * linear(c.b())
+            };
+            (lum(a).max(lum(b)) + 0.05) / (lum(a).min(lum(b)) + 0.05)
+        };
+        let p = Palette::from_desktop_colors(
+            "background = \"#0d0b1a\"\nforeground = \"#c4c0e0\"\naccent = \"#a97bf0\"",
+        )
+        .unwrap();
+        assert_eq!(p.on_accent, Color32::BLACK);
+        assert_ne!(p.panel, p.window);
+        assert_ne!(p.surface, p.panel);
+        assert_ne!(p.surface_hover, p.surface);
+        assert!(contrast(p.secondary, p.panel) >= 4.5);
+        assert!(contrast(p.dim, p.panel) >= 4.5);
+        let light = Palette::from_desktop_colors(
+            "background = \"#fafafa\"\nforeground = \"#202020\"\naccent = \"#8050c0\"",
+        )
+        .unwrap();
+        assert!(!light.dark);
+        assert!(contrast(light.on_accent, light.accent) >= 4.5);
+    }
 
     #[test]
     fn fonts_install_and_layout_emojis() {
