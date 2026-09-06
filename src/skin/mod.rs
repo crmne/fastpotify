@@ -134,15 +134,18 @@ impl Skin {
     }
 
     /// Reads an unpacked skin: a folder with the bitmaps in it.
+    ///
+    /// Folders inside it are looked into as well. A `.wsz` names its files
+    /// under a folder often enough that the archive reader discards one, so
+    /// a skin that reads perfectly well as an archive stopped reading the
+    /// moment somebody unpacked it: the bitmaps were one level down and the
+    /// answer was "no skin bitmaps were found inside".
+    ///
+    /// The shallower copy of a repeated name wins, which is the folder the
+    /// reader pointed at winning over anything nested beneath it.
     pub fn from_dir(name: impl Into<String>, dir: &Path) -> Result<Self, SkinError> {
         let mut files = Files::new();
-        for entry in std::fs::read_dir(dir)? {
-            let entry = entry?;
-            let file_name = entry.file_name().to_string_lossy().to_ascii_lowercase();
-            if wanted(&file_name) && entry.file_type()?.is_file() {
-                files.insert(file_name, std::fs::read(entry.path())?);
-            }
-        }
+        collect(dir, &mut files, 0)?;
         Self::from_files(name.into(), files)
     }
 
@@ -248,6 +251,43 @@ impl Skin {
 
 /// Whether a file inside a skin is one this reader looks at, so cursors,
 /// readmes, and the equalizer's bitmaps are never inflated.
+/// How far down an unpacked skin is followed.
+///
+/// Not because skins are deep: they are one folder at most. A file type read
+/// from `read_dir` does not follow links, so a link to a parent is skipped
+/// rather than walked, and this is the cheap second answer to the same
+/// question on a file system where that is not true.
+const MAX_SKIN_DEPTH: usize = 8;
+
+/// The skin files in a folder and in the folders under it.
+///
+/// A folder's own files go in before its subfolders are read, so the
+/// shallower copy of a repeated name is the one that is kept.
+fn collect(dir: &Path, files: &mut Files, depth: usize) -> Result<(), SkinError> {
+    let mut folders = Vec::new();
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let kind = entry.file_type()?;
+        if kind.is_dir() {
+            folders.push(entry.path());
+            continue;
+        }
+        if !kind.is_file() {
+            continue;
+        }
+        let file_name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+        if wanted(&file_name) && !files.contains_key(&file_name) {
+            files.insert(file_name, std::fs::read(entry.path())?);
+        }
+    }
+    if depth < MAX_SKIN_DEPTH {
+        for folder in folders {
+            collect(&folder, files, depth + 1)?;
+        }
+    }
+    Ok(())
+}
+
 fn wanted(file_name: &str) -> bool {
     if matches!(
         file_name,
@@ -457,6 +497,23 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
         assert_eq!(skin.name, dir.file_name().unwrap().to_string_lossy());
         assert_eq!(skin.sheet(Sheet::Main).pixel(1, 1), Some([7, 7, 7, 255]));
+    }
+
+    #[test]
+    fn a_folder_skin_is_read_from_the_folder_it_was_unpacked_into() {
+        // The same skin, unpacked. `.wsz` archives name their files inside a
+        // folder often enough that the archive reader strips one; a reader who
+        // unpacks such a skin gets that folder on disk, and used to be told
+        // there were no bitmaps in it.
+        let dir = std::env::temp_dir().join(format!("fastpotify-nested-{}", std::process::id()));
+        let inner = dir.join("Some Skin");
+        std::fs::create_dir_all(&inner).unwrap();
+        std::fs::write(inner.join("MAIN.BMP"), png(275, 116, [9, 9, 9])).unwrap();
+        std::fs::write(inner.join("pledit.txt"), b"[Text]\nNormal=#010203\n").unwrap();
+        let skin = Skin::load(&dir).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(skin.sheet(Sheet::Main).pixel(1, 1), Some([9, 9, 9, 255]));
+        assert_eq!(skin.playlist.normal, [1, 2, 3]);
     }
 
     #[test]
