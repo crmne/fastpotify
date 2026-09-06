@@ -38,6 +38,11 @@ Successful playlist edits keep that loaded prefix and save it under Spotify's
 new snapshot. Fastpotify reloads the playlist only if the write fails and the
 optimistic edit must be reconciled.
 
+Fastpotify also keeps a small in-memory set of recently opened playlist,
+album, artist, and show pages. Going back to an older page loads it again
+from Spotify, or from the on-disk prefix cache when that still matches the
+snapshot.
+
 The last good playlist folder tree is kept in `session.json`, scoped to the
 account that supplied it. This keeps folders visible when local playback is
 temporarily unavailable. Live session data is still required for edit grants.

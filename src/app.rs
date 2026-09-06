@@ -1616,7 +1616,11 @@ impl App {
         let Some(id) = util::uri_id(&uri).map(str::to_string) else {
             return;
         };
-        if self.track_cache.contains_key(&id) || !self.track_requests.insert(id.clone()) {
+        if self.track_cache.contains_key(&id) {
+            self.track_used.insert(id, Instant::now());
+            return;
+        }
+        if !self.track_requests.insert(id.clone()) {
             return;
         }
         self.backend.api(ApiRequest::Track { id });
@@ -1697,6 +1701,7 @@ impl App {
             return;
         };
         if self.track_cache.contains_key(id) {
+            self.track_used.insert(id.to_owned(), Instant::now());
             return;
         }
         let found = if let Some(pid) = context_uri.strip_prefix("spotify:playlist:") {
@@ -4357,6 +4362,7 @@ impl App {
     /// Drops page caches that exceed the cap, keeping the open page, the
     /// playing context, and the most recently used pages. History does not
     /// protect a page from the cap. Track metadata is an LRU of 800.
+    /// Table-row copies of dropped playlist and album pages go with them.
     fn evict_stale_pages(&mut self) {
         const MAX_PLAYLIST_PAGES: usize = 12;
         const MAX_ALBUM_PAGES: usize = 16;
@@ -4460,6 +4466,8 @@ impl App {
                 self.track_used.remove(&id);
             }
         }
+        let current = self.page().clone();
+        self.retain_table_rows(&current);
     }
 
     // ---- playback --------------------------------------------------------------
@@ -8675,6 +8683,114 @@ mod tests {
         app.reset_data();
         assert!(app.page_used.is_empty());
         assert!(app.track_used.is_empty());
+    }
+
+    #[test]
+    fn stepping_resume_keeps_a_cached_preview() {
+        use crate::api::models::{PlayableItem, PlaylistItem, Track};
+        use crate::model::PagedList;
+        let row = |uri: &str| PlaylistItem {
+            item: Some(PlayableItem::Track(Track {
+                id: Some(uri.rsplit(':').next().unwrap().into()),
+                uri: uri.into(),
+                name: uri.into(),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        let mut app = headless_app();
+        let ctx = egui::Context::default();
+        store_track(&mut app, "one");
+        store_track(&mut app, "two");
+        for i in 0..798 {
+            store_track(&mut app, &format!("old{i}"));
+            let _ = app.read_cached_track(&format!("old{i}"));
+        }
+        app.playlist_pages.insert(
+            "pl1".into(),
+            PlaylistPage {
+                items: PagedList {
+                    items: vec![row("spotify:track:one"), row("spotify:track:two")],
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        );
+        app.resume_context = Some("spotify:playlist:pl1".into());
+        app.resume_track = Some("spotify:track:one".into());
+        app.apply(Action::Next, &ctx);
+        assert_eq!(app.resume_track.as_deref(), Some("spotify:track:two"));
+        store_track(&mut app, "overflow");
+        let _ = app.read_cached_track("overflow");
+        app.evict_stale_pages();
+        assert!(
+            app.track_cache.contains_key("two"),
+            "a cache hit while stepping resume must keep the song just previewed"
+        );
+        assert!(
+            !app.track_cache.contains_key("one"),
+            "the song left behind can go"
+        );
+    }
+
+    #[test]
+    fn requesting_a_cached_resume_track_keeps_it() {
+        let mut app = headless_app();
+        store_track(&mut app, "resume");
+        store_track(&mut app, "decoy");
+        for i in 0..798 {
+            store_track(&mut app, &format!("old{i}"));
+            let _ = app.read_cached_track(&format!("old{i}"));
+        }
+        app.resume_track = Some("spotify:track:resume".into());
+        app.request_resume_track();
+        store_track(&mut app, "overflow");
+        let _ = app.read_cached_track("overflow");
+        app.evict_stale_pages();
+        assert!(
+            app.track_cache.contains_key("resume"),
+            "a cache hit on the resume URI must keep that track"
+        );
+        assert!(
+            !app.track_cache.contains_key("decoy"),
+            "an untouched cached track can go"
+        );
+    }
+
+    #[test]
+    fn evict_stale_pages_drops_table_row_copies() {
+        let mut app = headless_app();
+        for i in 0..12 {
+            seed_playlist(&mut app, &format!("pl{i}"));
+        }
+        crate::ui::collection::cached_table_items(
+            &mut app,
+            Page::Playlist("pl0".into()),
+            0,
+            0,
+            0,
+            || {
+                vec![(
+                    PlayableItem::Track(Track {
+                        name: "Old".into(),
+                        uri: "spotify:track:old".into(),
+                        ..Track::default()
+                    }),
+                    None,
+                    None,
+                )]
+            },
+        );
+        assert!(app.table_rows.contains_key(&Page::Playlist("pl0".into())));
+        seed_playlist(&mut app, "pl12");
+        assert!(
+            !app.playlist_pages.contains_key("pl0"),
+            "the oldest playlist page is dropped"
+        );
+        assert!(
+            !app.table_rows.contains_key(&Page::Playlist("pl0".into())),
+            "its table-row copy must go with it"
+        );
     }
 
     #[test]
