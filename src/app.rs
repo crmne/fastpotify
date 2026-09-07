@@ -94,6 +94,14 @@ enum TrackConfirmation {
     Remote { after_poll: u64, mismatches: u8 },
 }
 
+/// Upcoming context order before shuffle was toggled, used to detect lagging responses.
+#[derive(Clone, Debug)]
+struct QueueShufflePending {
+    current_uri: Option<String>,
+    context_uris: Vec<String>,
+    at: Instant,
+}
+
 /// The playing item as the interface sees it, whichever device plays it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct NowPlaying {
@@ -237,6 +245,8 @@ pub struct App {
     queue_stale_retries: u8,
     /// Rows removed by Clear queue, used to detect stale responses.
     queue_cleared: Option<(std::collections::HashSet<String>, Instant)>,
+    /// Upcoming context order before shuffle was toggled, used to detect lagging responses.
+    queue_shuffle_pending: Option<QueueShufflePending>,
     /// What the window's title bar says, as last set.
     window_title: String,
 
@@ -542,6 +552,7 @@ impl App {
             queue_recheck_at: None,
             queue_stale_retries: 0,
             queue_cleared: None,
+            queue_shuffle_pending: None,
             window_title: String::new(),
             library: Library::default(),
             home: HomeData::default(),
@@ -1417,6 +1428,7 @@ impl App {
         self.saved_recordings.clear();
         self.saved_writes.clear();
         self.queue = Loadable::NotLoaded;
+        self.queue_shuffle_pending = None;
         self.devices.clear();
         self.control_devices_stale = true;
         self.devices_fetched_at = None;
@@ -3064,6 +3076,24 @@ impl App {
         {
             return true;
         }
+        // An unchanged context order right after toggling shuffle means the
+        // reordered queue has not landed yet.
+        if let Some(pending) = &self.queue_shuffle_pending
+            && pending.at.elapsed() < PLAYBACK_HOLD
+            && fetched.currently_playing.as_ref().map(|item| item.uri())
+                == pending.current_uri.as_deref()
+        {
+            let at = Self::end_of_queued_rows(&fetched.queue, &self.manual_queue);
+            let fetched_context = &fetched.queue[at..];
+            if fetched_context.len() == pending.context_uris.len()
+                && fetched_context
+                    .iter()
+                    .map(|item| item.uri())
+                    .eq(pending.context_uris.iter().map(String::as_str))
+            {
+                return true;
+            }
+        }
         false
     }
 
@@ -3302,6 +3332,7 @@ impl App {
                 self.queue_stale_retries = 0;
                 if result.is_ok() {
                     self.queue_cleared = None;
+                    self.queue_shuffle_pending = None;
                 }
                 self.queue = Loadable::from_result(result);
                 self.reconcile_pending_queue();
@@ -4124,6 +4155,11 @@ impl App {
                         self.remote_recheck_at = Some(Instant::now() + REMOTE_RECHECK);
                         if action == RemoteAction::Shuffle {
                             self.queue_recheck_at = Some(Instant::now() + QUEUE_RECHECK);
+                            if let Some(pending) = &mut self.queue_shuffle_pending {
+                                pending.at = Instant::now();
+                            } else {
+                                self.note_shuffle_pending();
+                            }
                         }
                     }
                     Err(error) => {
@@ -4445,6 +4481,7 @@ impl App {
         // Shuffle applies across contexts until disabled. A selected row still
         // starts first; otherwise choose a random starting track.
         let mut request = request;
+        self.queue_shuffle_pending = None;
         if shuffle_first {
             self.shuffle_wanted = true;
             self.shuffle_set_at = Some(Instant::now());
@@ -4854,6 +4891,25 @@ impl App {
         }
     }
 
+    fn note_shuffle_pending(&mut self) {
+        if let Loadable::Loaded(queue) = &self.queue {
+            let at = Self::end_of_queued_rows(&queue.queue, &self.manual_queue);
+            let context_uris: Vec<String> = queue.queue[at..]
+                .iter()
+                .map(|item| item.uri().to_string())
+                .collect();
+            if context_uris.len() > 1 && context_uris.iter().any(|uri| uri != &context_uris[0]) {
+                self.queue_shuffle_pending = Some(QueueShufflePending {
+                    current_uri: self.current_track_uri(),
+                    context_uris,
+                    at: Instant::now(),
+                });
+            } else {
+                self.queue_shuffle_pending = None;
+            }
+        }
+    }
+
     fn set_shuffle(&mut self, shuffle: bool) {
         self.shuffle_wanted = shuffle;
         self.shuffle_set_at = Some(Instant::now());
@@ -4862,6 +4918,7 @@ impl App {
             assumed.shuffle = Some(shuffle);
         }
         self.queue_recheck_at = Some(Instant::now() + QUEUE_RECHECK);
+        self.note_shuffle_pending();
         match self.target() {
             Target::Local => {
                 self.local.shuffle = shuffle;
@@ -7770,6 +7827,155 @@ mod tests {
         );
         assert_eq!(app.queue_stale_retries, 1);
         assert!(app.queue_recheck_at.is_some());
+    }
+
+    /// A lagging queue answer after a shuffle toggle with the same current song
+    /// and sequence is rejected and retried until the new order arrives.
+    #[test]
+    fn lagging_queue_after_shuffle_is_retried_until_new_order_arrives() {
+        let mut app = headless_app();
+        app.auth = AuthStatus::Connected {
+            username: "alice".into(),
+        };
+        app.local.track = Some(crate::player::LocalTrack {
+            uri: "spotify:track:playing".into(),
+            ..Default::default()
+        });
+        app.local.playback = Playback::Playing;
+        app.manual_queue = vec!["spotify:track:manual1".into()];
+        app.queue = loaded_queue(
+            "spotify:track:playing",
+            &[
+                "spotify:track:manual1",
+                "spotify:track:ctx1",
+                "spotify:track:ctx2",
+                "spotify:track:ctx3",
+            ],
+        );
+
+        app.set_shuffle(true);
+        app.refresh_queue(true);
+        let seq = app.queue_seq;
+
+        // A lagging response arrives with the same currently playing track and
+        // the current sequence, but the context rows are still in the old order.
+        let lagging_response = Queue {
+            currently_playing: Some(queued_song("spotify:track:playing")),
+            queue: vec![
+                queued_song("spotify:track:manual1"),
+                queued_song("spotify:track:ctx1"),
+                queued_song("spotify:track:ctx2"),
+                queued_song("spotify:track:ctx3"),
+            ],
+        };
+
+        app.handle_api(ApiResponse::Queue {
+            seq,
+            result: Ok(lagging_response.clone()),
+        });
+
+        // The stale pre-shuffle order is rejected, preserving the existing queue,
+        // incrementing the retry counter, and scheduling a prompt recheck.
+        assert_eq!(app.queue_stale_retries, 1);
+        assert!(app.queue_recheck_at.is_some());
+        assert_eq!(
+            queue_uris(&app).1,
+            vec![
+                "spotify:track:manual1",
+                "spotify:track:ctx1",
+                "spotify:track:ctx2",
+                "spotify:track:ctx3",
+            ]
+        );
+
+        // A second lagging response also retries.
+        app.handle_api(ApiResponse::Queue {
+            seq,
+            result: Ok(lagging_response),
+        });
+        assert_eq!(app.queue_stale_retries, 2);
+        assert!(app.queue_recheck_at.is_some());
+
+        // Once the reordered response arrives, it is accepted and pending state clears.
+        let new_order_response = Queue {
+            currently_playing: Some(queued_song("spotify:track:playing")),
+            queue: vec![
+                queued_song("spotify:track:manual1"),
+                queued_song("spotify:track:ctx3"),
+                queued_song("spotify:track:ctx1"),
+                queued_song("spotify:track:ctx2"),
+            ],
+        };
+
+        app.handle_api(ApiResponse::Queue {
+            seq,
+            result: Ok(new_order_response),
+        });
+
+        assert_eq!(app.queue_stale_retries, 0);
+        assert!(app.queue_shuffle_pending.is_none());
+        assert_eq!(
+            queue_uris(&app).1,
+            vec![
+                "spotify:track:manual1",
+                "spotify:track:ctx3",
+                "spotify:track:ctx1",
+                "spotify:track:ctx2",
+            ]
+        );
+    }
+
+    /// If Spotify returns an unchanged queue order after shuffle, Fastpotify
+    /// retries up to the limit and then accepts the result as a bounded fallback.
+    #[test]
+    fn unchanged_shuffle_result_has_bounded_fallback() {
+        let mut app = headless_app();
+        app.auth = AuthStatus::Connected {
+            username: "alice".into(),
+        };
+        app.local.track = Some(crate::player::LocalTrack {
+            uri: "spotify:track:playing".into(),
+            ..Default::default()
+        });
+        app.local.playback = Playback::Playing;
+        app.queue = loaded_queue(
+            "spotify:track:playing",
+            &["spotify:track:ctx1", "spotify:track:ctx2"],
+        );
+
+        app.set_shuffle(true);
+        app.refresh_queue(true);
+        let seq = app.queue_seq;
+
+        let unchanged_response = Queue {
+            currently_playing: Some(queued_song("spotify:track:playing")),
+            queue: vec![
+                queued_song("spotify:track:ctx1"),
+                queued_song("spotify:track:ctx2"),
+            ],
+        };
+
+        // Responses with the pre-shuffle order are rejected as stale and scheduled for retry.
+        for expected_retries in 1..=QUEUE_STALE_RETRIES {
+            app.handle_api(ApiResponse::Queue {
+                seq,
+                result: Ok(unchanged_response.clone()),
+            });
+            assert_eq!(app.queue_stale_retries, expected_retries);
+            assert!(app.queue_recheck_at.is_some());
+        }
+
+        // The next response exceeds the retry limit, so Fastpotify accepts it.
+        app.handle_api(ApiResponse::Queue {
+            seq,
+            result: Ok(unchanged_response),
+        });
+        assert_eq!(app.queue_stale_retries, 0);
+        assert!(app.queue_shuffle_pending.is_none());
+        assert_eq!(
+            queue_uris(&app).1,
+            vec!["spotify:track:ctx1", "spotify:track:ctx2"]
+        );
     }
 
     fn picked(app: &App, page: &Page) -> Vec<usize> {
