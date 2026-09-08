@@ -910,16 +910,25 @@ fn decode_folder_name(encoded: &str) -> String {
                 out.push(b' ');
                 i += 1;
             }
-            b'%' if i + 2 < bytes.len() => match u8::from_str_radix(&encoded[i + 1..i + 3], 16) {
-                Ok(byte) => {
-                    out.push(byte);
-                    i += 3;
+            // The digits are read from the bytes this loop is already
+            // walking. Taking them by slicing the text instead put the end
+            // of the slice two bytes past a `%`, which is inside a character
+            // whenever the next one is not ASCII: a panic rather than the
+            // parse error the arm below is written for, on exactly the names
+            // that arm exists for.
+            b'%' if i + 2 < bytes.len() => {
+                let digit = |byte: u8| (byte as char).to_digit(16);
+                match (digit(bytes[i + 1]), digit(bytes[i + 2])) {
+                    (Some(high), Some(low)) => {
+                        out.push((high << 4 | low) as u8);
+                        i += 3;
+                    }
+                    _ => {
+                        out.push(b'%');
+                        i += 1;
+                    }
                 }
-                Err(_) => {
-                    out.push(b'%');
-                    i += 1;
-                }
-            },
+            }
             byte => {
                 out.push(byte);
                 i += 1;
@@ -962,6 +971,39 @@ mod tests {
         // The unclosed folder still closes.
         assert_eq!(rows.last(), Some(&RootlistEntry::FolderEnd));
         assert_eq!(rows.len(), 9);
+    }
+
+    #[test]
+    fn a_folder_name_with_a_bare_percent_keeps_its_percent() {
+        // The decoder already has an answer for a `%` that begins no escape:
+        // it keeps the `%` and moves on. That answer could not be reached
+        // when the next character was multi-byte, because the two digits
+        // were taken by slicing the `&str` and the second byte of a slice
+        // that lands inside a character is a panic, not a parse error.
+        let uris: Vec<String> = ["spotify:start-group:f1:100%25 \u{c548}\u{b155}"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(
+            parse_rootlist(&uris)[0],
+            RootlistEntry::FolderStart {
+                id: "f1".into(),
+                name: "100% \u{c548}\u{b155}".into()
+            }
+        );
+
+        // The same shape with nothing to decode at all.
+        let raw: Vec<String> = ["spotify:start-group:f2:100% \u{c548}\u{b155}"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(
+            parse_rootlist(&raw)[0],
+            RootlistEntry::FolderStart {
+                id: "f2".into(),
+                name: "100% \u{c548}\u{b155}".into()
+            }
+        );
     }
 
     /// A playlist shared by invitation is editable by Spotify's word in the

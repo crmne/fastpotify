@@ -32,6 +32,30 @@ answered from there and closed.
 Duplicate, out-of-scope, or incomplete issues may be closed with a short
 explanation.
 
+## Automated triage
+
+Copilot assesses new and reopened issues, new discussions, and new or edited
+comments on either. It reads the full conversation again and can update triage
+labels when new evidence changes the report. Bot activity and pull request
+comments are ignored. Reopening a closed issue remains a maintainer decision.
+
+A rocket reaction on the triggering report or comment means that assessment
+completed successfully, including its safety checks and GitHub actions. It does
+not promise a reply, acceptance, or a fix. Clear reports may only receive a
+label. Replies ask for missing information or give a useful answer or decision;
+the agent does not repeat questions already answered or post status chatter.
+
+The marker is cleared when reassessing the same item and restored only after
+success. Failures can be retried from Actions without removing reactions by
+hand. Rockets placed before this behaviour was introduced only indicated an
+attempt had started. An older rocket never prevents a new assessment.
+
+The workflow is controlled by the `COPILOT_ISSUE_ASSESSMENT_ENABLED` repository
+variable. Edit `.github/workflows/issue-assessment.md`, then regenerate its
+lockfile with `gh aw compile issue-assessment` (gh-aw v0.88.2). The companion
+`issue-assessment-complete.yml` marks successful runs. Its small subject artifact
+contains only the GitHub node ID and, for comments, the assessed edit timestamp.
+
 ## Design principles
 
 1. **Native and fast.** Startup time, idle work, memory use, and binary size
@@ -68,6 +92,7 @@ access must be documented in the same pull request.
 Run the same checks CI runs before submitting:
 
 ```sh
+node --test .github/scripts/issue-assessment.test.cjs
 cargo fmt --all --check
 cargo clippy --locked --all-targets -- -D warnings
 cargo clippy --locked --all-targets --all-features -- -D warnings

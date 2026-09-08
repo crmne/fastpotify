@@ -1,14 +1,21 @@
 //! System fallback fonts for scripts not covered by the interface font.
 //!
 //! Inter covers Latin, Greek, and Cyrillic. Bundling fonts for every other
-//! script would greatly increase the binary size, so Fastpotify scans installed
-//! fonts and registers one suitable fallback per script.
+//! script would greatly increase the binary size, so Fastpotify registers one
+//! suitable fallback per script from what the desktop already carries.
+//!
+//! macOS answers this itself, in the language the user reads, and the
+//! `mac_fonts` module asks it. That module is compiled only there, so this
+//! names it in prose rather than linking to it. Linux and Windows offer
+//! nothing equivalent, so there the fonts are read and ranked here.
 
+#[cfg(not(target_os = "macos"))]
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use skrifa::MetadataProvider as _;
+#[cfg(not(target_os = "macos"))]
 use skrifa::raw::TableProvider as _;
 
 /// Registered font name, file bytes, and face index.
@@ -22,7 +29,10 @@ pub struct Fallback {
 ///
 /// One face is selected per entry in this order. A face covering multiple
 /// scripts is registered once. Glyphs are rasterized only when used.
-const FALLBACK_SCRIPTS: &[(&str, char, &str)] = &[
+///
+/// The hint ranks a face by name where the fonts are ranked here. CoreText
+/// needs only the probe.
+pub(crate) const FALLBACK_SCRIPTS: &[(&str, char, &str)] = &[
     ("han", '\u{4e2d}', "cjk"),
     ("kana", '\u{3042}', "cjk"),
     ("hangul", '\u{d55c}', "cjk"),
@@ -50,6 +60,7 @@ const FALLBACK_SCRIPTS: &[(&str, char, &str)] = &[
 
 /// The regional cut of a pan-CJK font a locale should be shown, longest
 /// prefix first.
+#[cfg(not(target_os = "macos"))]
 const HAN_REGIONS: &[(&str, &str)] = &[
     ("zh_tw", "tc"),
     ("zh_hant", "tc"),
@@ -67,15 +78,19 @@ const FONT_SCAN_DEPTH: usize = 4;
 
 /// A collection says how many faces it holds, and a corrupt or hostile file
 /// can say billions. No real one holds more than a few dozen.
-const MAX_FACES: u32 = 64;
+pub(crate) const MAX_FACES: u32 = 64;
 
 /// One system fallback face per unsupported script.
 ///
-/// The search happens once per process: `theme::install` runs again for
-/// every window the app creates, and this reads every font on the machine.
+/// The answer is found once per process: `theme::install` runs again for
+/// every window the app creates, and finding it costs a walk of every font
+/// on the machine, or a question per script to CoreText.
 pub fn fallbacks() -> &'static [Fallback] {
     static FONTS: OnceLock<Vec<Fallback>> = OnceLock::new();
-    FONTS.get_or_init(load)
+    #[cfg(target_os = "macos")]
+    return FONTS.get_or_init(crate::mac_fonts::load);
+    #[cfg(not(target_os = "macos"))]
+    return FONTS.get_or_init(scan);
 }
 
 /// The face Winamp's playlists were drawn in, or the nearest this desktop
@@ -178,6 +193,7 @@ fn rank_family(path: &Path, wanted: &[&str], best: &mut Option<(usize, PathBuf, 
 }
 
 /// A face that covers a script, and how well it suits the interface.
+#[cfg(not(target_os = "macos"))]
 struct Candidate {
     /// Drawn for another Han region than the locale's. A Japanese face draws
     /// 中 and so passes the coverage probe, but every simplified character it
@@ -196,7 +212,8 @@ struct Candidate {
 /// Asking every installed font what it covers is the only question that
 /// survives a distribution renaming its packages, and the answer comes from
 /// the parser epaint already uses to rasterize the glyphs.
-fn load() -> Vec<Fallback> {
+#[cfg(not(target_os = "macos"))]
+fn scan() -> Vec<Fallback> {
     let han = han_region(&locale());
     let started = std::time::Instant::now();
     let mut best: BTreeMap<&str, Candidate> = BTreeMap::new();
@@ -246,6 +263,7 @@ fn load() -> Vec<Fallback> {
 }
 
 /// Probes every font file below `dir`, keeping the best face per script.
+#[cfg(not(target_os = "macos"))]
 fn probe_dir(dir: &Path, depth: usize, han: &str, best: &mut BTreeMap<&str, Candidate>) {
     if depth >= FONT_SCAN_DEPTH {
         return;
@@ -282,6 +300,7 @@ fn is_font_file(path: &Path) -> bool {
 }
 
 /// Offers every face in one font file to every script that still wants one.
+#[cfg(not(target_os = "macos"))]
 fn probe_file(path: &Path, han: &str, best: &mut BTreeMap<&str, Candidate>) {
     let Ok(file) = std::fs::File::open(path) else {
         return;
@@ -358,6 +377,7 @@ fn probe_file(path: &Path, han: &str, best: &mut BTreeMap<&str, Candidate>) {
 /// Serif, monospace, and display cuts lose to a plain sans, and anything far
 /// from regular weight loses to something near it, so the fallback sits
 /// beside Inter rather than shouting over it.
+#[cfg(not(target_os = "macos"))]
 fn face_score(family: &str, weight: f32, han: &str, hint: &str) -> u32 {
     let mut score = ((weight - 400.0).abs() / 25.0) as u32;
     // A face that names the script was drawn for it. Liberation Sans carries
@@ -405,6 +425,7 @@ fn face_score(family: &str, weight: f32, han: &str, hint: &str) -> u32 {
 
 /// The OS/2 `ulCodePageRange1` bit a face sets to declare it covers a
 /// region's legacy character set: Shift JIS, GB 2312, Wansung, or Big5.
+#[cfg(not(target_os = "macos"))]
 fn han_code_page(region: &str) -> Option<u32> {
     match region {
         "jp" => Some(17),
@@ -417,6 +438,7 @@ fn han_code_page(region: &str) -> Option<u32> {
 
 /// Whether a face's declared code pages include the region's character set.
 /// A face too old to declare any is taken at its word: none.
+#[cfg(not(target_os = "macos"))]
 fn covers_han_region(code_pages: Option<u32>, han: &str) -> bool {
     han_code_page(han)
         .zip(code_pages)
@@ -426,6 +448,7 @@ fn covers_han_region(code_pages: Option<u32>, han: &str) -> bool {
 /// The user's locale, in the shape [`han_region`] matches, or an empty
 /// string when none is set. A variable that is set but empty does not
 /// count, as POSIX has it.
+#[cfg(not(target_os = "macos"))]
 fn locale() -> String {
     let named = ["LC_ALL", "LC_CTYPE", "LANG"]
         .iter()
@@ -440,6 +463,7 @@ fn locale() -> String {
 
 /// A language name as [`HAN_REGIONS`] writes them: lowercase, with `_`
 /// between the language and its region. Windows and BCP 47 hyphenate.
+#[cfg(not(target_os = "macos"))]
 fn normalise(name: String) -> String {
     name.to_lowercase().replace('-', "_")
 }
@@ -492,6 +516,7 @@ fn first_name(names: &[u16]) -> Option<String> {
 
 /// The pan-CJK cut a locale reads, defaulting to Simplified Chinese -- the
 /// most widely read of them, and what a desktop that never set a locale gets.
+#[cfg(not(target_os = "macos"))]
 fn han_region(locale: &str) -> &'static str {
     HAN_REGIONS
         .iter()
@@ -547,6 +572,27 @@ fn font_dirs() -> Vec<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn only_font_files_are_probed() {
+        assert!(is_font_file(Path::new("/x/NotoSans.ttf")));
+        assert!(is_font_file(Path::new("/x/NotoSansCJK.TTC")));
+        assert!(is_font_file(Path::new("/x/PingFang.otf")));
+        assert!(!is_font_file(Path::new("/x/fonts.dir")));
+        assert!(!is_font_file(Path::new("/x/README")));
+    }
+
+    #[test]
+    fn asking_the_system_never_panics() {
+        // Whatever fonts this machine has, including none.
+        let _ = fallbacks();
+    }
+}
+
+/// The ranking that serves the platforms with no answer of their own.
+#[cfg(all(test, not(target_os = "macos")))]
+mod ranking_tests {
     use super::*;
 
     #[test]
@@ -632,24 +678,9 @@ mod tests {
     }
 
     #[test]
-    fn only_font_files_are_probed() {
-        assert!(is_font_file(Path::new("/x/NotoSans.ttf")));
-        assert!(is_font_file(Path::new("/x/NotoSansCJK.TTC")));
-        assert!(is_font_file(Path::new("/x/PingFang.otf")));
-        assert!(!is_font_file(Path::new("/x/fonts.dir")));
-        assert!(!is_font_file(Path::new("/x/README")));
-    }
-
-    #[test]
     fn symbols_faces_are_scored_fairly() {
         let symbol = face_score("noto sans symbols", 400.0, "sc", "symbol");
         let non_symbol = face_score("noto sans arabic", 400.0, "sc", "symbol");
         assert!(symbol < non_symbol);
-    }
-
-    #[test]
-    fn probing_the_system_never_panics() {
-        // Whatever fonts this machine has, including none.
-        let _ = fallbacks();
     }
 }

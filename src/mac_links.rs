@@ -37,9 +37,12 @@ mod mac_impl {
     /// `keyDirectObject`, the parameter that carries the URL.
     const DIRECT_OBJECT: u32 = u32::from_be_bytes(*b"----");
 
+    /// The queue a link is pushed onto, and the wake that makes the app
+    /// read it.
+    type Sink = (Arc<Mutex<Vec<ControlCommand>>>, Waker);
+
     /// Where links go, and the wake that makes the app read them.
-    type LinkSink = (Arc<Mutex<Vec<ControlCommand>>>, Waker);
-    static SINK: Mutex<Option<LinkSink>> = Mutex::new(None);
+    static SINK: Mutex<Option<Sink>> = Mutex::new(None);
 
     define_class!(
         #[unsafe(super(NSObject))]

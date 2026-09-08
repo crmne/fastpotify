@@ -1,5 +1,7 @@
 //! The Search page.
 
+use std::sync::Arc;
+
 use egui::{Align, CornerRadius, Layout, Rect, Sense, Vec2, pos2, vec2};
 
 use crate::api::models::{Artist, PlayableItem, SearchResults, pick_image};
@@ -236,6 +238,7 @@ fn top_result(
             image_rect,
             if round { 48.0 } else { 6.0 },
             if round { Icon::User } else { Icon::Music },
+            Some(app.backend.art()),
         );
         let text_clip = Rect::from_min_max(
             pos2(rect.left() + 20.0, image_rect.bottom() + 12.0),
@@ -315,8 +318,13 @@ fn songs(app: &mut App, ui: &mut egui::Ui, results: &SearchResults, limit: usize
     }
     theme::section_title(ui, &palette, "Songs");
     ui.add_space(4.0);
-    let uris: Vec<String> = page.items.iter().map(|track| track.uri.clone()).collect();
-    let context = RowContext::Uris(uris);
+    let uris: Arc<[String]> = page
+        .items
+        .iter()
+        .map(|track| track.uri.clone())
+        .collect::<Vec<_>>()
+        .into();
+    let context = RowContext::Uris(Arc::clone(&uris));
     let items: Vec<PlayableItem> = page
         .items
         .iter()

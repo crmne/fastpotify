@@ -38,17 +38,16 @@ struct Cli {
     #[arg(long)]
     demo_page: Option<String>,
 
-    /// Extra demo surfaces: a comma-separated list of `queue`, `devices`,
-    /// `shortcuts`, `create`, `light`, `focus`.
+    /// Extra demo surfaces: a comma-separated list of `queue`, `playing-next`,
+    /// `devices`, `shortcuts`, `create`, `light`, `focus`.
     #[cfg(feature = "demo")]
     #[arg(long)]
     demo_show: Option<String>,
 
     /// Write a PNG of the demo window to this path and exit. Implies
-    /// `--demo`. The shot is the window's own frame buffer, so it is however
-    /// large the window is: full screen where that request is honoured, and
-    /// the size of the tile under a tiling window manager, which decides for
-    /// itself.
+    /// `--demo`. Without `--demo-size`, the shot is the window's own frame
+    /// buffer: full screen where that request is honoured, and the size of
+    /// the tile under a tiling window manager, which decides for itself.
     #[cfg(feature = "demo")]
     #[arg(long, value_name = "PATH")]
     demo_shot: Option<std::path::PathBuf>,
@@ -57,6 +56,11 @@ struct Cli {
     #[cfg(feature = "demo")]
     #[arg(long, value_name = "MS", default_value_t = 6000)]
     demo_shot_delay: u64,
+
+    /// Inner window size for `--demo-shot`, as `WIDTHxHEIGHT`.
+    #[cfg(feature = "demo")]
+    #[arg(long, value_name = "WIDTHxHEIGHT", value_parser = parse_demo_size)]
+    demo_size: Option<[f32; 2]>,
 }
 
 /// Remote control of the running instance, for Raycast scripts, launchers,
@@ -388,6 +392,8 @@ fn main() -> eframe::Result<()> {
         due: std::time::Instant::now() + std::time::Duration::from_millis(cli.demo_shot_delay),
         asked: false,
     });
+    #[cfg(feature = "demo")]
+    let demo_inner = cli.demo_size;
     let slot = std::sync::Arc::new(std::sync::Mutex::new(Some(app)));
     loop {
         let creator_slot = std::sync::Arc::clone(&slot);
@@ -398,10 +404,15 @@ fn main() -> eframe::Result<()> {
             let guard = slot.lock().unwrap_or_else(|p| p.into_inner());
             MiniWindow::wanted(guard.as_ref().expect("application state present"))
         };
+        let mini_window = mini.is_some();
         #[cfg(feature = "demo")]
-        let options = native_options(shot.is_some() && mini.is_none(), mini);
+        let options = native_options(
+            shot.is_some() && mini.is_none() && demo_inner.is_none(),
+            mini,
+            demo_inner,
+        );
         #[cfg(not(feature = "demo"))]
-        let options = native_options(false, mini);
+        let options = native_options(false, mini, None);
         eframe::run_native(
             "Fastpotify",
             options,
@@ -425,6 +436,7 @@ fn main() -> eframe::Result<()> {
                 Ok(Box::new(Shell {
                     app: Some(app),
                     slot: std::sync::Arc::clone(&creator_slot),
+                    mini_window,
                     #[cfg(feature = "demo")]
                     shot: creator_shot.clone(),
                 }))
@@ -533,6 +545,7 @@ struct MiniWindow {
     size: egui::Vec2,
     position: Option<[f32; 2]>,
     on_top: bool,
+    storage_path: std::path::PathBuf,
 }
 
 impl MiniWindow {
@@ -541,6 +554,7 @@ impl MiniWindow {
             size: fastpotify::ui::winamp::initial_size(&app.settings),
             position: app.winamp.restore_pos,
             on_top: app.settings.winamp_on_top,
+            storage_path: app.dirs.cache.join("winamp.ron"),
         })
     }
 }
@@ -549,7 +563,37 @@ const fn main_window_decorated(on_windows: bool) -> bool {
     !on_windows
 }
 
-fn native_options(fullscreen: bool, mini: Option<MiniWindow>) -> eframe::NativeOptions {
+#[cfg(any(test, feature = "demo"))]
+fn parse_demo_size(spec: &str) -> Result<[f32; 2], String> {
+    let (width, height) = spec
+        .split_once(['x', 'X'])
+        .ok_or_else(|| format!("expected WIDTHxHEIGHT, got {spec}"))?;
+    let width: f32 = width
+        .trim()
+        .parse()
+        .map_err(|_| format!("invalid width in {spec}"))?;
+    let height: f32 = height
+        .trim()
+        .parse()
+        .map_err(|_| format!("invalid height in {spec}"))?;
+    if width < 1.0 || height < 1.0 {
+        return Err(format!("size must be at least 1x1, got {spec}"));
+    }
+    Ok([width, height])
+}
+
+fn native_options(
+    fullscreen: bool,
+    mini: Option<MiniWindow>,
+    inner_size: Option<[f32; 2]>,
+) -> eframe::NativeOptions {
+    // The app keeps the mini player's position and shaded size separately.
+    // Its closing window must not replace the main window's eframe geometry.
+    let persist_window = mini.is_none();
+    // Disabling saving does not disable eframe's startup restore. Give the
+    // mini player its own path, and Shell disables its egui-memory saving too,
+    // so it neither reads the main window's geometry nor creates a state file.
+    let persistence_path = mini.as_ref().map(|mini| mini.storage_path.clone());
     let icon = if cfg!(target_os = "macos") {
         // macOS takes the dock icon from the bundle's .icns, which is the
         // 1024px drawing with the platform's rounding. Setting a window
@@ -582,23 +626,32 @@ fn native_options(fullscreen: bool, mini: Option<MiniWindow>) -> eframe::NativeO
                 None => viewport,
             }
         }
-        None => viewport
-            // macOS: no title bar strip above the app. The content runs to
-            // the top edge and the traffic lights float over it, the way
-            // every other music player on the platform looks; the interface
-            // leaves room for them with `theme::titlebar_inset`.
-            .with_fullsize_content_view(true)
-            .with_titlebar_shown(false)
-            .with_title_shown(false)
-            // Windows has no equivalent to macOS's floating traffic lights.
-            // Removing its decorations lets the app surface fill the window.
-            .with_decorations(main_window_decorated(cfg!(windows)))
-            .with_inner_size([1240.0, 800.0])
-            .with_min_inner_size([760.0, 520.0])
-            .with_fullscreen(fullscreen),
+        None => {
+            let size = inner_size.unwrap_or([1240.0, 800.0]);
+            let mut viewport = viewport
+                // macOS: no title bar strip above the app. The content runs to
+                // the top edge and the traffic lights float over it, the way
+                // every other music player on the platform looks; the interface
+                // leaves room for them with `theme::titlebar_inset`.
+                .with_fullsize_content_view(true)
+                .with_titlebar_shown(false)
+                .with_title_shown(false)
+                // Windows has no equivalent to macOS's floating traffic lights.
+                // Removing its decorations lets the app surface fill the window.
+                .with_decorations(main_window_decorated(cfg!(windows)))
+                .with_inner_size(size)
+                .with_min_inner_size(inner_size.unwrap_or([760.0, 520.0]))
+                .with_fullscreen(fullscreen);
+            if inner_size.is_some() {
+                viewport = viewport.with_max_inner_size(size);
+            }
+            viewport
+        }
     };
     eframe::NativeOptions {
         viewport,
+        persist_window,
+        persistence_path,
         // A Wayland compositor stops sending frame callbacks to a hidden
         // window; waiting for vsync there would block the event loop.
         // Repaints are event-driven, so nothing spins.
@@ -615,12 +668,58 @@ mod native_window_tests {
     use super::*;
 
     #[test]
+    fn only_the_main_window_persists_framework_geometry() {
+        assert!(native_options(false, None, None).persist_window);
+        for shaded in [false, true] {
+            let settings = settings::Settings {
+                winamp_shaded: shaded,
+                skin_scale: Some(2),
+                ..Default::default()
+            };
+            let size = fastpotify::ui::winamp::initial_size(&settings);
+            let options = native_options(
+                false,
+                Some(MiniWindow {
+                    size,
+                    position: Some([300.0, 200.0]),
+                    on_top: false,
+                    storage_path: std::path::PathBuf::from("cache/winamp.ron"),
+                }),
+                None,
+            );
+            assert!(
+                !options.persist_window,
+                "mini geometry must not overwrite main"
+            );
+            assert_eq!(options.viewport.inner_size, Some(size));
+            assert_eq!(options.viewport.position, Some(egui::pos2(300.0, 200.0)));
+            assert!(options.persistence_path.is_some());
+        }
+    }
+
+    #[test]
     fn main_window_uses_the_platform_decoration_policy() {
-        let options = native_options(false, None);
+        let options = native_options(false, None, None);
         assert_eq!(options.viewport.decorations, Some(!cfg!(windows)));
         assert_eq!(options.viewport.fullsize_content_view, Some(true));
         assert_eq!(options.viewport.titlebar_shown, Some(false));
         assert_eq!(options.viewport.title_shown, Some(false));
+    }
+
+    #[test]
+    fn demo_size_parses_width_by_height() {
+        assert_eq!(parse_demo_size("760x800").unwrap(), [760.0, 800.0]);
+        assert!(parse_demo_size("wide").is_err());
+        let options = native_options(false, None, Some([760.0, 800.0]));
+        assert_eq!(options.viewport.inner_size, Some(egui::vec2(760.0, 800.0)));
+        assert_eq!(
+            options.viewport.min_inner_size,
+            Some(egui::vec2(760.0, 800.0))
+        );
+        assert_eq!(
+            options.viewport.max_inner_size,
+            Some(egui::vec2(760.0, 800.0))
+        );
     }
 
     #[test]
@@ -635,6 +734,8 @@ mod native_window_tests {
 struct Shell {
     app: Option<app::App>,
     slot: std::sync::Arc<std::sync::Mutex<Option<app::App>>>,
+    /// The mode this window opened in, even after an action switches modes.
+    mini_window: bool,
     /// A pending `--demo-shot` capture, if this is a screenshot run.
     #[cfg(feature = "demo")]
     shot: Option<Shot>,
@@ -698,6 +799,10 @@ impl Shell {
 }
 
 impl eframe::App for Shell {
+    fn persist_egui_memory(&self) -> bool {
+        !self.mini_window
+    }
+
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         if let Some(app) = self.app.as_mut() {
             #[cfg(target_os = "macos")]

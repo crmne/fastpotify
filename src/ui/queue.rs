@@ -1,5 +1,7 @@
 //! The playback queue, as a page or as a side panel.
 
+use std::sync::Arc;
+
 use egui::{Align, Frame, Layout, Margin};
 
 use crate::api::models::PlayableItem;
@@ -141,8 +143,8 @@ fn clear_button(app: &mut App, ui: &mut egui::Ui) {
 
 fn contents(app: &mut App, ui: &mut egui::Ui, compact: bool) {
     let palette = app.palette;
-    let queue = match &app.queue {
-        Loadable::Loaded(queue) => queue.clone(),
+    match &app.queue {
+        Loadable::Loaded(_) => {}
         Loadable::Loading | Loadable::NotLoaded => {
             widgets::loading_row(ui, &palette);
             return;
@@ -157,17 +159,21 @@ fn contents(app: &mut App, ui: &mut egui::Ui, compact: bool) {
     // Prefer the player's current track because the Web API can lag after a
     // skip.
     let current: Option<PlayableItem> = match &now {
-        Some(now) => queue
-            .currently_playing
-            .clone()
+        Some(now) => app
+            .queue
+            .get()
+            .and_then(|queue| queue.currently_playing.clone())
             .filter(|item| item.uri() == now.uri)
             .or_else(|| app.now_playing_item()),
-        None => queue.currently_playing.clone(),
+        None => app
+            .queue
+            .get()
+            .and_then(|queue| queue.currently_playing.clone()),
     };
-    if let Some(current) = &current {
+    if let Some(current) = current.as_ref() {
         theme::text(ui, "Now playing", theme::semibold(14.0), palette.text);
         ui.add_space(4.0);
-        let context = RowContext::Uris(vec![current.uri().to_string()]);
+        let context = RowContext::Uris(Arc::from([current.uri().to_string()]));
         widgets::track_row(
             ui,
             app,
@@ -190,7 +196,7 @@ fn contents(app: &mut App, ui: &mut egui::Ui, compact: bool) {
         );
         ui.add_space(14.0);
     }
-    if queue.queue.is_empty() {
+    if queue_is_empty(app) {
         widgets::empty_state(
             ui,
             &palette,
@@ -205,11 +211,11 @@ fn contents(app: &mut App, ui: &mut egui::Ui, compact: bool) {
     } else {
         theme::ROW_HEIGHT
     };
-    let items = queue.queue.clone();
+    let queue_len = app.queue.get().map(|queue| queue.queue.len()).unwrap_or(0);
     // The user's own songs get their own section on top; the playing
     // context's rows follow under the usual heading. One numbering runs
     // through both, because that is the order things play.
-    let queued_len = app.queued_rows_len().min(items.len());
+    let queued_len = app.queued_rows_len().min(queue_len);
     if queued_len > 0 {
         // The trash sits with the songs it removes: only this section is
         // the user's to clear, the context below plays itself.
@@ -220,18 +226,25 @@ fn contents(app: &mut App, ui: &mut egui::Ui, compact: bool) {
             });
         });
         ui.add_space(4.0);
-        for index in 0..queued_len {
-            queue_row(app, ui, &items, index, compact);
-        }
+        let gap = ui.spacing().item_spacing.y;
+        widgets::virtual_rows(ui, queued_len, row_height + gap, |ui, index| {
+            let width = ui.available_width();
+            queue_row(app, ui, index, compact);
+            ui.allocate_space(egui::vec2(width, gap));
+        });
         ui.add_space(14.0);
     }
-    if items.len() > queued_len {
+    if queue_len > queued_len {
         theme::text(ui, "Next up", theme::semibold(14.0), palette.text);
         ui.add_space(4.0);
-        widgets::virtual_rows(ui, items.len() - queued_len, row_height, |ui, index| {
-            queue_row(app, ui, &items, queued_len + index, compact);
+        widgets::virtual_rows(ui, queue_len - queued_len, row_height, |ui, index| {
+            queue_row(app, ui, queued_len + index, compact);
         });
     }
+}
+
+fn queue_is_empty(app: &App) -> bool {
+    app.queue.get().is_none_or(|queue| queue.queue.is_empty())
 }
 
 fn recents_contents(app: &mut App, ui: &mut egui::Ui) {
@@ -293,7 +306,7 @@ fn recents_contents(app: &mut App, ui: &mut egui::Ui) {
         let entry = &items[index];
         // Need owned PlayableItem for track_row; clone track.
         let item = PlayableItem::Track(entry.track.clone());
-        let context = RowContext::Uris(vec![entry.track.uri.clone()]);
+        let context = RowContext::Uris(Arc::from([entry.track.uri.clone()]));
         widgets::track_row(
             ui,
             app,
@@ -338,20 +351,22 @@ fn recents_contents(app: &mut App, ui: &mut egui::Ui) {
 
 /// One row of the queue, numbered and indexed by its place in the whole
 /// queue, whichever section it sits in.
-fn queue_row(
-    app: &mut App,
-    ui: &mut egui::Ui,
-    items: &[PlayableItem],
-    index: usize,
-    compact: bool,
-) {
+fn queue_row(app: &mut App, ui: &mut egui::Ui, index: usize, compact: bool) {
+    let Some(item) = app
+        .queue
+        .get()
+        .and_then(|queue| queue.queue.get(index))
+        .cloned()
+    else {
+        return;
+    };
     widgets::track_row(
         ui,
         app,
         TrackRow {
             index,
             number: Some(index + 1),
-            item: &items[index],
+            item: &item,
             context: &RowContext::Queue,
             show_cover: true,
             show_album: !compact,

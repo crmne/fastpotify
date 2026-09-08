@@ -401,7 +401,25 @@ pub fn clean_title(title: &str) -> String {
 
 /// Everything from a standalone "feat", "ft", or "featuring" on.
 fn strip_featuring(text: &str) -> String {
-    let lower = text.to_lowercase();
+    // The marker is looked for in a lower-cased copy and the cut is made in
+    // `text`, and lower casing does not preserve length: Turkish 'İ' becomes
+    // two characters and one byte longer, capital sharp s one byte shorter.
+    // An offset measured in the copy therefore means somewhere else in the
+    // title -- letters kept that should have gone, or, when it lands inside a
+    // character, a panic. `starts` carries every offset in the copy back to
+    // the same place in `text`, so no offset is ever used in the string it
+    // was not measured in.
+    let mut lower = String::with_capacity(text.len());
+    let mut starts: Vec<usize> = Vec::with_capacity(text.len() + 1);
+    for (at, character) in text.char_indices() {
+        for lowered in character.to_lowercase() {
+            for _ in 0..lowered.len_utf8() {
+                starts.push(at);
+            }
+            lower.push(lowered);
+        }
+    }
+    starts.push(text.len());
     let mut cut = None;
     for marker in ["featuring", "feat", "ft"] {
         let mut from = 0;
@@ -423,7 +441,7 @@ fn strip_featuring(text: &str) -> String {
         }
     }
     match cut {
-        Some(at) => text[..at].trim().to_string(),
+        Some(at) => text[..starts[at]].trim().to_string(),
         None => text.trim().to_string(),
     }
 }
@@ -591,6 +609,31 @@ fn write_cache(path: &Path, found: &Option<Lyrics>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_featuring_is_cut_where_it_starts_whatever_the_case_costs() {
+        // The cut is found in a lower-cased copy and applied to the original,
+        // and lower casing is not always the same number of bytes. Turkish
+        // 'İ' grows by one byte, so every offset past it points one byte too
+        // far into the title, and the letters between are kept.
+        assert_eq!(
+            clean_title("\u{130}\u{130} feat. Someone"),
+            "\u{130}\u{130}"
+        );
+        assert_eq!(clean_artist("\u{130}zel feat. Someone"), "\u{130}zel");
+
+        // Capital sharp s shrinks by one, so the offset points one byte SHORT
+        // -- and one byte short of the end of a character is a panic.
+        assert_eq!(
+            clean_title("\u{1e9e} caf\u{e9} feat. Someone"),
+            "\u{1e9e} caf\u{e9}"
+        );
+
+        // The ASCII case, which already worked, still does.
+        assert_eq!(clean_title("Song feat. Someone"), "Song");
+        assert_eq!(clean_title("Song ft. Someone"), "Song");
+        assert_eq!(clean_artist("Artist featuring Other"), "Artist");
+    }
 
     #[test]
     fn titles_lose_what_a_database_leaves_out() {

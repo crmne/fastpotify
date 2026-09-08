@@ -258,6 +258,13 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      # Include the source package so source distributions can verify it
+      # against the same published checksums as the binaries.
+      - name: Source archive
+        run: |
+          curl --fail --location --retry 3 \
+            "https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${GITHUB_REF_NAME}.tar.gz" \
+            --output "dist/fastpotify-${GITHUB_REF_NAME}-source.tar.gz"
       - name: Checksums
         run: |
           cd dist

@@ -338,6 +338,7 @@ pub struct Bar {
 pub struct Analyser {
     fft: Fft,
     spectrum: [f32; SPECTRUM_BINS],
+    wave: [f32; FFT_SAMPLES],
     /// Where each bar is, falling at a fixed rate towards the sound.
     falloff: [f32; BARS],
     /// Each peak, in 256ths of a row, and how fast it is dropping.
@@ -353,6 +354,7 @@ impl Default for Analyser {
         Self {
             fft: Fft::new(),
             spectrum: [0.0; SPECTRUM_BINS],
+            wave: [0.0; FFT_SAMPLES],
             falloff: [0.0; BARS],
             peaks: [0; BARS],
             peak_speed: [0.0; BARS],
@@ -373,8 +375,11 @@ impl Analyser {
             return self.bars;
         }
         self.last_step = Some(due.max(now - STEP));
-        let wave: Vec<f32> = samples.iter().map(|sample| sample * CHANNEL_SUM).collect();
-        self.fft.spectrum(&wave, &mut self.spectrum);
+        self.wave.fill(0.0);
+        for (slot, sample) in self.wave.iter_mut().zip(samples.iter()) {
+            *slot = sample * CHANNEL_SUM;
+        }
+        self.fft.spectrum(&self.wave, &mut self.spectrum);
         let columns = self.bands();
         let mut bars = [Bar::default(); BARS];
         for (bar, slot) in bars.iter_mut().enumerate() {
@@ -635,6 +640,35 @@ mod tests {
         assert_eq!(scope_shade(7), 0);
         assert_eq!(scope_shade(0), 3);
         assert_eq!(scope_shade(15), 4);
+    }
+
+    /// A reused analyser that just saw a full frame must match a fresh one
+    /// when the next input is short or empty. Zero-fill stops old samples
+    /// leaking into the spectrum.
+    #[test]
+    fn a_short_or_empty_input_does_not_keep_the_previous_spectrum() {
+        let mut reused = Analyser::default();
+        let mut fresh = Analyser::default();
+        let loud = sine(1000.0, 0.5, FFT_SAMPLES);
+        let t0 = Instant::now();
+        reused.step(&loud, t0);
+        let t1 = t0 + STEP;
+        let short = &loud[..32];
+        reused.step(short, t1);
+        fresh.step(short, t1);
+        assert_eq!(
+            reused.spectrum, fresh.spectrum,
+            "a short frame left the previous spectrum in the scratch buffer"
+        );
+        let mut reused_empty = Analyser::default();
+        let mut fresh_empty = Analyser::default();
+        reused_empty.step(&loud, t0);
+        reused_empty.step(&[], t1);
+        fresh_empty.step(&[], t1);
+        assert_eq!(
+            reused_empty.spectrum, fresh_empty.spectrum,
+            "an empty frame left the previous spectrum in the scratch buffer"
+        );
     }
 
     /// Rule: full scale is one when the volume is already in, and the

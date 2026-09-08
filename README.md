@@ -56,7 +56,8 @@ everyday use, and connection details.
 - **Light and dark**, or follow the system.
 - **Winamp mini player.** `Ctrl+M` opens a small player for classic `.wsz`
   skins, drawn at 1x to 4x scale. It includes a spectrum analyser, playlist,
-  and equalizer. Drop a skin from the
+  and equalizer. It keeps its shade mode and, where the desktop permits,
+  its own position when switching views. Drop a skin from the
   [Winamp Skin Museum](https://skins.webamp.org) on either window to add it.
 
   ![The mini player wearing the built-in skin](docs/assets/images/winamp.png)
@@ -145,9 +146,12 @@ into `~/Applications`.
 
 Fastpotify uses system fonts for scripts not covered by its interface font,
 including Chinese, Japanese, Korean, Arabic, Hebrew, Thai, and Indic scripts.
-macOS and Windows include common fonts. On Linux, install `noto-fonts` and
-`noto-fonts-cjk` (Arch) or `fonts-noto` and `fonts-noto-cjk` (Debian or
-Ubuntu) if titles appear as empty boxes.
+On macOS it draws each of them with the face the system itself uses, in the
+language order set in System Settings, so Chinese titles follow the
+Traditional or Simplified preference set there. Windows includes common
+fonts. On Linux, install `noto-fonts` and `noto-fonts-cjk` (Arch) or
+`fonts-noto` and `fonts-noto-cjk` (Debian or Ubuntu) if titles appear as
+empty boxes.
 
 A desktop entry is provided in `packaging/applications/fastpotify.desktop`.
 It registers Fastpotify for `spotify:` links; `xdg-mime default
@@ -184,6 +188,9 @@ accounts, track ripping, or stream manipulation. Fastpotify does none of
 those things, and [CONTRIBUTING.md](CONTRIBUTING.md) prohibits them.
 
 ## Keyboard shortcuts
+
+Hold `Shift` while turning the mouse wheel to scroll horizontal shelves,
+including Made for you and Recently played on Home.
 
 The main window exposes named playback controls, library and song rows,
 menus, sliders, and settings switches to screen readers. Use `Tab` and
@@ -294,11 +301,17 @@ cargo run --features demo -- --demo --demo-page playlist:pl1 --demo-show queue
 
 Demo mode never writes settings. `--demo-shot <PATH>` writes the window to a
 PNG and exits, which is useful for reproducible interface screenshots.
+`--demo-size WIDTHxHEIGHT` sets the window size for that shot.
 
 ## Contributing
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening an issue or pull
 request. It covers project scope and required checks.
+
+Issues and discussions receive automated triage, including reassessment after
+new or edited comments. A rocket on the report or comment means its assessment
+completed successfully; it does not promise a reply or a fix. See
+[automated triage](CONTRIBUTING.md#automated-triage) for details.
 
 ## Acknowledgements
 

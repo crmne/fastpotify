@@ -42,6 +42,11 @@ right-click menu or with Ctrl+Q.
 The shade button, or a double-click on the title bar, rolls the player up. The
 playlist and equalizer have their own shade buttons.
 
+Switching to the main window and back keeps the shade modes and restores the
+mini player's own position. It does not inherit the main window's fullscreen
+or maximized state. Wayland compositors choose window positions themselves
+and may ignore the saved position.
+
 The left display shows the spectrum analyser. Click it to switch to the
 oscilloscope, then off. You can also use the **V** menu. The visualiser uses
 local audio after the equalizer and before volume, so it still moves at zero

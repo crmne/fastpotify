@@ -1,5 +1,7 @@
 //! The artist page.
 
+use std::sync::Arc;
+
 use crate::api::models::{PlayableItem, pick_image};
 use crate::app::App;
 use crate::model::{Action, DiscographyFilter, Loadable, Page, RowContext};
@@ -102,8 +104,12 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, id: &str) {
             ui.add_space(4.0);
             match &page.top_tracks {
                 Loadable::Loaded(tracks) if !tracks.is_empty() => {
-                    let uris: Vec<String> = tracks.iter().map(|track| track.uri.clone()).collect();
-                    let context = RowContext::Uris(uris);
+                    let uris: Arc<[String]> = tracks
+                        .iter()
+                        .map(|track| track.uri.clone())
+                        .collect::<Vec<_>>()
+                        .into();
+                    let context = RowContext::Uris(Arc::clone(&uris));
                     let items: Vec<PlayableItem> =
                         tracks.iter().cloned().map(PlayableItem::Track).collect();
                     let limit = if page.show_all_top { items.len() } else { 5 };

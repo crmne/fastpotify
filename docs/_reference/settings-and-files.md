@@ -42,7 +42,9 @@ The last good playlist folder tree is kept in `session.json`, scoped to the
 account that supplied it. This keeps folders visible when local playback is
 temporarily unavailable. Live session data is still required for edit grants.
 
-The session also remembers the main window's position. On Windows, a position
+The session remembers separate positions for the main window and the Winamp
+mini player. The shade modes are kept in `settings.json`. Wayland compositors
+may ignore saved positions. On Windows, a position
 whose title bar is no longer on an available monitor's work area is discarded
 when reopening the window, keeping its initial on-screen placement instead.
 
@@ -129,7 +131,7 @@ settings.
 
 `--demo-page` opens a page, such as `home`, `playlist:pl1`, or `artist:art0`,
 and `--demo-show` adds surfaces on top of it: a comma separated list of
-`queue`, `devices`, `shortcuts`, `premium`, `create`, `duplicate`, `light`,
+`queue`, `playing-next`, `devices`, `shortcuts`, `premium`, `create`, `duplicate`, `light`,
 `focus`, `winamp`, `playlist`, `eq`, `eq-shade`, and `compact`.
 
 `--demo-shot <PATH>` writes the window to a PNG and exits, which is useful for
@@ -140,5 +142,6 @@ cargo run --release --features demo -- \
   --demo-shot docs/screenshot.png --demo-page playlist:pl1 --demo-show queue
 ```
 
-The image uses the current window size. `--demo-shot-delay <MS>` sets how long
-to wait for cover art before taking it.
+The image uses the current window size. `--demo-size WIDTHxHEIGHT` sets that
+size for a shot (for example `760x800` or `1240x800`). `--demo-shot-delay <MS>`
+sets how long to wait for cover art before taking it.

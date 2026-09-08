@@ -14,6 +14,8 @@ pub mod limiter;
 pub mod link;
 pub mod lyrics;
 #[cfg(target_os = "macos")]
+pub mod mac_fonts;
+#[cfg(target_os = "macos")]
 pub mod mac_links;
 #[cfg(target_os = "macos")]
 pub mod mac_menu;

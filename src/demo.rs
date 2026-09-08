@@ -607,6 +607,17 @@ pub fn apply_flags(app: &mut App, page: Option<&str>, show: Option<&str>) {
     for surface in show.unwrap_or("").split(',').map(str::trim) {
         match surface {
             "queue" => app.show_queue_panel = true,
+            "playing-next" => {
+                app.show_queue_panel = true;
+                if let Loadable::Loaded(queue) = &app.queue {
+                    app.manual_queue = queue
+                        .queue
+                        .iter()
+                        .take(6)
+                        .map(|item| item.uri().to_string())
+                        .collect();
+                }
+            }
             "recents" => {
                 app.show_queue_panel = true;
                 app.queue_tab = QueueTab::Recents;
@@ -811,6 +822,7 @@ mod tests {
     use crate::app::AppOptions;
     use crate::paths::AppDirs;
     use crate::settings::Settings;
+    use std::sync::Arc;
 
     fn accessible_app(name: &str) -> (egui::Context, App) {
         let root =
@@ -1098,7 +1110,7 @@ mod tests {
         use egui::accesskit::{Action as AccessibleAction, Role};
         let (ctx, mut app) = accessible_app("rows");
         let item = app.queue.get().unwrap().queue[0].clone();
-        let context = crate::model::RowContext::Uris(vec![item.uri().to_string(); 2]);
+        let context = crate::model::RowContext::Uris(Arc::from(vec![item.uri().to_string(); 2]));
         let label = format!("Play {}, {}", item.name(), item.subtitle());
         let mut render = |first, events| {
             app.actions.clear();
@@ -1192,7 +1204,7 @@ mod tests {
         use egui::accesskit::{Action as AccessibleAction, Role};
         let (ctx, mut app) = accessible_app("scroll");
         let item = app.queue.get().unwrap().queue[0].clone();
-        let context = crate::model::RowContext::Uris(vec![item.uri().to_string(); 20]);
+        let context = crate::model::RowContext::Uris(Arc::from(vec![item.uri().to_string(); 20]));
         let label = format!("Play {}, {}", item.name(), item.subtitle());
         let mut reached_last = false;
         let mut render = |events| {
@@ -1256,6 +1268,62 @@ mod tests {
     }
 
     #[test]
+    fn accessible_tab_reaches_cards_beyond_the_visible_grid() {
+        use crate::ui::widgets::{card, card_row_height, virtual_wrapped_cards};
+        use egui::accesskit::{Action as AccessibleAction, Role};
+        let (ctx, mut app) = accessible_app("card-grid");
+        let mut reached_last = false;
+        let mut render = |events| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(400.0, 280.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::ScrollArea::vertical().animated(false).show(ui, |ui| {
+                        let height = card_row_height(ui);
+                        virtual_wrapped_cards(ui, 24, height, |ui, index| {
+                            if index == 23 && ui.cursor().top() < ui.clip_rect().bottom() {
+                                reached_last = true;
+                            }
+                            card(
+                                ui,
+                                &mut app,
+                                None,
+                                &format!("Album {index}"),
+                                "Artist",
+                                false,
+                                false,
+                            );
+                        });
+                    });
+                },
+            );
+            output.textures_delta.clear();
+            output.platform_output.accesskit_update.unwrap()
+        };
+        let tree = render(vec![]);
+        let first = accessible_node(&tree, "Album 0, Artist", Role::Button);
+        render(vec![accessible_action(
+            first,
+            AccessibleAction::Focus,
+            None,
+        )]);
+        for _ in 0..80 {
+            render(vec![keyboard(egui::Key::Tab, egui::Modifiers::NONE)]);
+        }
+        assert!(
+            reached_last,
+            "Tab must scroll through the virtual card grid instead of trapping focus in its first visible row"
+        );
+        app.backend.shutdown();
+    }
+
+    #[test]
     fn accessible_playing_and_queued_copies_target_their_own_context() {
         use crate::model::RowContext;
         use crate::ui::widgets::{TrackRow, track_row};
@@ -1263,7 +1331,7 @@ mod tests {
         let (ctx, mut app) = accessible_app("queued-copy");
         let item = app.queue.get().unwrap().currently_playing.clone().unwrap();
         let contexts = [
-            RowContext::Uris(vec![item.uri().to_string()]),
+            RowContext::Uris(Arc::from([item.uri().to_string()])),
             RowContext::Queue,
         ];
         let label = format!("Play {}, {}", item.name(), item.subtitle());
@@ -1843,6 +1911,62 @@ mod tests {
             frame(&ctx, &mut app);
         }
         assert!(!app.palette.dark);
+        app.backend.shutdown();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Virtual queue rows and library cards still draw a long list, and the
+    /// library still asks for the next page when the end is near.
+    #[test]
+    fn a_long_virtual_queue_and_library_still_draw() {
+        let root =
+            std::env::temp_dir().join(format!("fastpotify-virtual-long-{}", std::process::id()));
+        let dirs = AppDirs {
+            config: root.join("config"),
+            state: root.join("state"),
+            cache: root.join("cache"),
+        };
+        let ctx = egui::Context::default();
+        let waker = crate::backend::Waker::default();
+        waker.attach(&ctx);
+        let mut app = App::new(
+            &waker,
+            dirs,
+            Settings::default(),
+            AppOptions {
+                media_controls: false,
+                tray: false,
+            },
+        );
+        app.attach(&ctx);
+        populate(&mut app);
+        if let Loadable::Loaded(queue) = &mut app.queue {
+            let seed = queue.queue.clone();
+            queue.queue = seed.iter().cloned().cycle().take(200).collect();
+            app.manual_queue = queue
+                .queue
+                .iter()
+                .take(80)
+                .map(|item| item.uri().to_string())
+                .collect();
+        }
+        app.show_queue_panel = true;
+        for _ in 0..3 {
+            frame(&ctx, &mut app);
+        }
+        app.library.albums.items = (0..80)
+            .map(|index| SavedAlbum {
+                added_at: None,
+                album: album(index % 8),
+            })
+            .collect();
+        app.library.albums.next_offset = Some(80);
+        app.library.albums.loaded_once = true;
+        app.open(Page::Albums);
+        app.actions.clear();
+        for _ in 0..3 {
+            frame(&ctx, &mut app);
+        }
         app.backend.shutdown();
         let _ = std::fs::remove_dir_all(root);
     }

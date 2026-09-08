@@ -111,7 +111,8 @@ work done with the maintainer, does not go through them.
 
 A release is not the tag alone. Do these in order:
 
-1. Change the `Cargo.toml` version and update the lockfile with a build.
+1. Change the `Cargo.toml` version, add the matching release to the Flatpak
+   metainfo, and update the lockfile with a build.
    Commit and push this before the tag so the binaries report the right
    version.
 2. Push the `v*` tag, which triggers the release workflow. Wait for every

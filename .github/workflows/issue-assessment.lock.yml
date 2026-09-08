@@ -1,5 +1,5 @@
-# gh-aw-metadata: {"schema_version":"v4","frontmatter_hash":"a17b357fb446ef037c2f8f58f3162dd93cd8ffcadf599458ec166e55c8419e24","body_hash":"deed326bee51bcf29a084fdd5e4a55dae99c3124a6edda9dc51ddc8d2d0a101d","compiler_version":"v0.88.2","strict":true,"agent_id":"copilot","engine_versions":{"copilot":"1.0.80"}}
-# gh-aw-manifest: {"version":1,"secrets":["COPILOT_GITHUB_TOKEN","GH_AW_DEFAULT_OTLP_HEADERS","GH_AW_GITHUB_MCP_SERVER_TOKEN","GH_AW_GITHUB_TOKEN","GITHUB_TOKEN"],"actions":[{"repo":"actions/cache/restore","sha":"55cc8345863c7cc4c66a329aec7e433d2d1c52a9","version":"v6.1.0"},{"repo":"actions/cache/save","sha":"55cc8345863c7cc4c66a329aec7e433d2d1c52a9","version":"v6.1.0"},{"repo":"actions/checkout","sha":"3d3c42e5aac5ba805825da76410c181273ba90b1","version":"v7.0.1"},{"repo":"actions/download-artifact","sha":"3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c","version":"v8.0.1"},{"repo":"actions/github-script","sha":"3a2844b7e9c422d3c10d287c895573f7108da1b3","version":"v9.0.0"},{"repo":"actions/upload-artifact","sha":"043fb46d1a93c77aae656e7c1c64a875d1fc6a0a","version":"v7.0.1"},{"repo":"github/gh-aw-actions/setup","sha":"9271a1804551c0dc4fb0085a97979950aa2f8489","version":"v0.88.2"}],"containers":[{"image":"ghcr.io/github/gh-aw-firewall/agent:0.28.12","digest":"sha256:390051be4ed1847f774fd8980b61d3a3523574c0175d00c3fc7cdf2002a88202","pinned_image":"ghcr.io/github/gh-aw-firewall/agent:0.28.12@sha256:390051be4ed1847f774fd8980b61d3a3523574c0175d00c3fc7cdf2002a88202"},{"image":"ghcr.io/github/gh-aw-firewall/api-proxy:0.28.12","digest":"sha256:d7d533d87c80d87ff91ac0e21e9299055c3beedff1536262b97ed700fb065a32","pinned_image":"ghcr.io/github/gh-aw-firewall/api-proxy:0.28.12@sha256:d7d533d87c80d87ff91ac0e21e9299055c3beedff1536262b97ed700fb065a32"},{"image":"ghcr.io/github/gh-aw-firewall/squid:0.28.12","digest":"sha256:52c34aca98d2a6833c329f1505912a6949c4fda16618c010c979bd59ea99254f","pinned_image":"ghcr.io/github/gh-aw-firewall/squid:0.28.12@sha256:52c34aca98d2a6833c329f1505912a6949c4fda16618c010c979bd59ea99254f"},{"image":"ghcr.io/github/gh-aw-mcpg:v0.4.15","digest":"sha256:60cd97533e93d8e7be36b979c0f08a70846189bda6190f28bbd6d427bc0d9b6e","pinned_image":"ghcr.io/github/gh-aw-mcpg:v0.4.15@sha256:60cd97533e93d8e7be36b979c0f08a70846189bda6190f28bbd6d427bc0d9b6e"},{"image":"ghcr.io/github/gh-aw-node","digest":"sha256:bac2192f6374d6262116399b34fc5e143d576f82719e90a18261cae7480f4d4e","pinned_image":"ghcr.io/github/gh-aw-node@sha256:bac2192f6374d6262116399b34fc5e143d576f82719e90a18261cae7480f4d4e"},{"image":"ghcr.io/github/github-mcp-server:v1.11.0","digest":"sha256:fbec75de11c255213fa08d80fb166abe73d851fff631c51c0079872967720699","pinned_image":"ghcr.io/github/github-mcp-server:v1.11.0@sha256:fbec75de11c255213fa08d80fb166abe73d851fff631c51c0079872967720699"}],"mcp_servers":[{"name":"github","tools":["get_commit","get_discussion","get_discussion_comments","get_file_contents","get_latest_release","get_release_by_tag","get_tag","issue_read","list_branches","list_commits","list_discussion_categories","list_discussions","list_issue_types","list_issues","list_releases","list_starred_repositories","list_tags","search_code","search_issues","search_repositories"]},{"name":"safeoutputs","tools":["add_comment","add_labels","close_issue","missing_data","missing_tool","noop"]}]}
+# gh-aw-metadata: {"schema_version":"v4","frontmatter_hash":"3a5d8e223b651e3dd1a325c45b71cb580763f77bbe4ba9e536a9edf64d6241cc","body_hash":"147bf1de928722c5f576883e3a4f95e549509b734de2a0c7b589964a93fa66cf","compiler_version":"v0.88.2","strict":true,"agent_id":"copilot","engine_versions":{"copilot":"1.0.80"}}
+# gh-aw-manifest: {"version":1,"secrets":["COPILOT_GITHUB_TOKEN","GH_AW_DEFAULT_OTLP_HEADERS","GH_AW_GITHUB_MCP_SERVER_TOKEN","GH_AW_GITHUB_TOKEN","GITHUB_TOKEN"],"actions":[{"repo":"actions/cache/restore","sha":"55cc8345863c7cc4c66a329aec7e433d2d1c52a9","version":"v6.1.0"},{"repo":"actions/cache/save","sha":"55cc8345863c7cc4c66a329aec7e433d2d1c52a9","version":"v6.1.0"},{"repo":"actions/checkout","sha":"3d3c42e5aac5ba805825da76410c181273ba90b1","version":"v7.0.1"},{"repo":"actions/download-artifact","sha":"3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c","version":"v8.0.1"},{"repo":"actions/github-script","sha":"3a2844b7e9c422d3c10d287c895573f7108da1b3","version":"v9.0.0"},{"repo":"actions/upload-artifact","sha":"043fb46d1a93c77aae656e7c1c64a875d1fc6a0a","version":"v7.0.1"},{"repo":"github/gh-aw-actions/setup","sha":"9271a1804551c0dc4fb0085a97979950aa2f8489","version":"v0.88.2"}],"containers":[{"image":"ghcr.io/github/gh-aw-firewall/agent:0.28.12","digest":"sha256:390051be4ed1847f774fd8980b61d3a3523574c0175d00c3fc7cdf2002a88202","pinned_image":"ghcr.io/github/gh-aw-firewall/agent:0.28.12@sha256:390051be4ed1847f774fd8980b61d3a3523574c0175d00c3fc7cdf2002a88202"},{"image":"ghcr.io/github/gh-aw-firewall/api-proxy:0.28.12","digest":"sha256:d7d533d87c80d87ff91ac0e21e9299055c3beedff1536262b97ed700fb065a32","pinned_image":"ghcr.io/github/gh-aw-firewall/api-proxy:0.28.12@sha256:d7d533d87c80d87ff91ac0e21e9299055c3beedff1536262b97ed700fb065a32"},{"image":"ghcr.io/github/gh-aw-firewall/squid:0.28.12","digest":"sha256:52c34aca98d2a6833c329f1505912a6949c4fda16618c010c979bd59ea99254f","pinned_image":"ghcr.io/github/gh-aw-firewall/squid:0.28.12@sha256:52c34aca98d2a6833c329f1505912a6949c4fda16618c010c979bd59ea99254f"},{"image":"ghcr.io/github/gh-aw-mcpg:v0.4.15","digest":"sha256:60cd97533e93d8e7be36b979c0f08a70846189bda6190f28bbd6d427bc0d9b6e","pinned_image":"ghcr.io/github/gh-aw-mcpg:v0.4.15@sha256:60cd97533e93d8e7be36b979c0f08a70846189bda6190f28bbd6d427bc0d9b6e"},{"image":"ghcr.io/github/gh-aw-node","digest":"sha256:bac2192f6374d6262116399b34fc5e143d576f82719e90a18261cae7480f4d4e","pinned_image":"ghcr.io/github/gh-aw-node@sha256:bac2192f6374d6262116399b34fc5e143d576f82719e90a18261cae7480f4d4e"},{"image":"ghcr.io/github/github-mcp-server:v1.11.0","digest":"sha256:fbec75de11c255213fa08d80fb166abe73d851fff631c51c0079872967720699","pinned_image":"ghcr.io/github/github-mcp-server:v1.11.0@sha256:fbec75de11c255213fa08d80fb166abe73d851fff631c51c0079872967720699"}],"mcp_servers":[{"name":"github","tools":["get_commit","get_discussion","get_discussion_comments","get_file_contents","get_latest_release","get_release_by_tag","get_tag","issue_read","list_branches","list_commits","list_discussion_categories","list_discussions","list_issue_types","list_issues","list_releases","list_starred_repositories","list_tags","search_code","search_issues","search_repositories"]},{"name":"safeoutputs","tools":["add_comment","add_labels","close_issue","missing_data","missing_tool","noop","remove_labels"]}]}
 # This file was automatically generated by gh-aw (v0.88.2). DO NOT EDIT. To debug this workflow, load the skill at https://github.com/github/gh-aw/blob/main/debug.md
 #
 #    ___                   _   _
@@ -23,7 +23,7 @@
 #
 # For more information: https://github.github.com/gh-aw/introduction/overview/
 #
-# Assess each issue and discussion once without creating code or pull requests.
+# Reassess issues and discussions as the conversation changes, without creating code or pull requests.
 #
 # Secrets used:
 #   - COPILOT_GITHUB_TOKEN
@@ -36,10 +36,12 @@
 #   - actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
 #   - actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
 #   - actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+#   - actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 (source v7)
 #   - actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
 #   - actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
 #   - actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0 (source v9)
 #   - actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+#   - actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 (source v7)
 #   - github/gh-aw-actions/setup@9271a1804551c0dc4fb0085a97979950aa2f8489 # v0.88.2
 #
 # Container images used:
@@ -55,101 +57,50 @@ on:
   discussion:
     types:
       - created
+  discussion_comment:
+    types:
+      - created
+      - edited
+  issue_comment:
+    types:
+      - created
+      - edited
   issues:
     types:
       - opened
       - reopened
   # permissions: # Permissions applied to pre-activation job
+  # contents: read
   # discussions: write
   # issues: write
   # roles: all # Roles processed as role check in pre-activation job
   # steps: # Steps injected into pre-activation job
-  # - continue-on-error: true
-  # id: assessment_needed
+  # - if: vars.COPILOT_ISSUE_ASSESSMENT_ENABLED == 'true'
+  # uses: actions/checkout@v7
+  # with:
+  # persist-credentials: false
+  # - id: assessment_needed
   # if: vars.COPILOT_ISSUE_ASSESSMENT_ENABLED == 'true'
-  # name: Skip or mark the Copilot assessment
+  # name: Prepare the Copilot assessment
   # uses: actions/github-script@v9
   # with:
   # script: |
-  # let routed = {};
-  # try {
-  # routed = JSON.parse(context.payload.inputs?.aw_context || "{}");
-  # } catch (error) {
-  # core.setFailed(`Invalid agentic workflow context: ${error.message}`);
-  # return;
+  # const { prepare } = require('./.github/scripts/issue-assessment.cjs');
+  # const target = await prepare({ github, context });
+  # core.setOutput('needed', Boolean(target));
+  # if (target) {
+  # const fs = require('node:fs');
+  # const path = require('node:path');
+  # fs.writeFileSync(path.join(process.env.RUNNER_TEMP, 'assessment-target.json'), JSON.stringify(target));
   # }
-  #
-  # const itemType = context.payload.issue
-  # ? "issue"
-  # : context.payload.discussion
-  # ? "discussion"
-  # : routed.item_type;
-  # const itemNumber = context.payload.issue?.number
-  # || context.payload.discussion?.number
-  # || routed.item_number;
-  #
-  # if (!["issue", "discussion"].includes(itemType) || !itemNumber) {
-  # core.setFailed("An issue or discussion number is required");
-  # return;
-  # }
-  #
-  # let reactions;
-  # let discussionId;
-  # if (itemType === "issue") {
-  # reactions = await github.paginate(
-  # github.rest.reactions.listForIssue,
-  # { ...context.repo, issue_number: itemNumber, per_page: 100 },
-  # );
-  # } else {
-  # const result = await github.graphql(
-  # `query($owner: String!, $repo: String!, $number: Int!) {
-  # repository(owner: $owner, name: $repo) {
-  # discussion(number: $number) {
-  # id
-  # reactions(first: 100, content: ROCKET) {
-  # nodes { content user { login } }
-  # }
-  # }
-  # }
-  # }`,
-  # { ...context.repo, number: Number(itemNumber) },
-  # );
-  # const discussion = result.repository.discussion;
-  # if (!discussion) {
-  # core.setFailed(`Discussion #${itemNumber} was not found`);
-  # return;
-  # }
-  # discussionId = discussion.id;
-  # reactions = discussion.reactions.nodes || [];
-  # }
-  #
-  # const trustedActors = new Set([context.repo.owner, "github-actions[bot]"]);
-  # const alreadyAssessed = reactions.some(reaction =>
-  # reaction.content.toLowerCase() === "rocket"
-  # && trustedActors.has(reaction.user?.login),
-  # );
-  #
-  # if (alreadyAssessed) {
-  # core.setFailed(`${itemType} #${itemNumber} was already assessed`);
-  # return;
-  # }
-  #
-  # if (itemType === "issue") {
-  # await github.rest.reactions.createForIssue({
-  # ...context.repo,
-  # issue_number: itemNumber,
-  # content: "rocket",
-  # });
-  # } else {
-  # await github.graphql(
-  # `mutation($subjectId: ID!) {
-  # addReaction(input: {subjectId: $subjectId, content: ROCKET}) {
-  # reaction { content }
-  # }
-  # }`,
-  # { subjectId: discussionId },
-  # );
-  # }
+  # - if: steps.assessment_needed.outputs.needed == 'true'
+  # name: Save the assessment subject
+  # uses: actions/upload-artifact@v7
+  # with:
+  # if-no-files-found: error
+  # name: assessment-target-${{ github.run_attempt }}
+  # path: ${{ runner.temp }}/assessment-target.json
+  # retention-days: 7
   workflow_dispatch:
     inputs:
       aw_context:
@@ -179,7 +130,7 @@ jobs:
     needs: pre_activation
     if: >
       needs.pre_activation.outputs.activated == 'true' && (vars.COPILOT_ISSUE_ASSESSMENT_ENABLED == 'true' &&
-      needs.pre_activation.outputs.assessment_needed_result == 'success')
+      needs.pre_activation.outputs.assessment_needed == 'true')
     runs-on: ubuntu-slim
     permissions:
       actions: read
@@ -380,7 +331,7 @@ jobs:
           GH_AW_ACTIONS_DIR: ${{ runner.temp }}/gh-aw/actions
           GH_AW_PROMPT: ${{ runner.temp }}/gh-aw/aw-prompts/prompt.txt
           GH_AW_SAFE_OUTPUTS: ${{ runner.temp }}/gh-aw/safeoutputs/outputs.jsonl
-          GH_AW_PROMPT_CONFIG: "{\"items\":[{\"content_env\":\"GH_AW_PROMPT_CONTENT_0000\"},{\"file\":\"xpia.md\"},{\"file\":\"temp_folder_prompt.md\"},{\"file\":\"markdown.md\"},{\"file\":\"safe_outputs_prompt.md\"},{\"content_env\":\"GH_AW_PROMPT_CONTENT_0001\"},{\"content_env\":\"GH_AW_PROMPT_CONTENT_0002\"},{\"content_env\":\"GH_AW_PROMPT_CONTENT_0003\"},{\"file\":\"github_mcp_tools_with_safeoutputs_prompt.md\"},{\"content_env\":\"GH_AW_PROMPT_CONTENT_0004\"},{\"content_env\":\"GH_AW_PROMPT_CONTENT_0005\"}]}"
+          GH_AW_PROMPT_CONFIG: "{\"items\":[{\"content_env\":\"GH_AW_PROMPT_CONTENT_0000\"},{\"file\":\"xpia.md\"},{\"file\":\"temp_folder_prompt.md\"},{\"file\":\"markdown.md\"},{\"file\":\"safe_outputs_prompt.md\"},{\"content_env\":\"GH_AW_PROMPT_CONTENT_0001\"},{\"content_env\":\"GH_AW_PROMPT_CONTENT_0002\"},{\"content_env\":\"GH_AW_PROMPT_CONTENT_0003\"},{\"file\":\"github_mcp_tools_with_safeoutputs_prompt.md\"},{\"file\":\"pr_context_prompt.md\",\"condition_env\":\"GH_AW_INCLUDE_PR_CONTEXT\"},{\"content_env\":\"GH_AW_PROMPT_CONTENT_0004\"},{\"content_env\":\"GH_AW_PROMPT_CONTENT_0005\"}]}"
           GH_AW_EXPR_1A3A194A: ${{ github.event.discussion.number || (fromJSON(github.event.inputs.aw_context || github.event.client_payload.aw_context || '{}').item_type == 'discussion' && fromJSON(github.event.inputs.aw_context || github.event.client_payload.aw_context || '{}').item_number) }}
           GH_AW_EXPR_463A214A: ${{ github.event.pull_request.number || (fromJSON(github.event.inputs.aw_context || github.event.client_payload.aw_context || '{}').item_type == 'pull_request' && fromJSON(github.event.inputs.aw_context || github.event.client_payload.aw_context || '{}').item_number) }}
           GH_AW_EXPR_802A9F6A: ${{ github.event.issue.number || (fromJSON(github.event.inputs.aw_context || github.event.client_payload.aw_context || '{}').item_type == 'issue' && fromJSON(github.event.inputs.aw_context || github.event.client_payload.aw_context || '{}').item_number) }}
@@ -389,8 +340,9 @@ jobs:
           GH_AW_GITHUB_REPOSITORY: ${{ github.repository }}
           GH_AW_GITHUB_RUN_ID: ${{ github.run_id }}
           GH_AW_GITHUB_WORKSPACE: ${{ github.workspace }}
+          GH_AW_INCLUDE_PR_CONTEXT: ${{ (github.event_name == 'issue_comment' && github.event.issue.pull_request != null) || github.event_name == 'pull_request_review_comment' || github.event_name == 'pull_request_review' }}
           GH_AW_PROMPT_CONTENT_0000: "<system>\n"
-          GH_AW_PROMPT_CONTENT_0001: "<safe-output-tools>\nTools: add_comment, close_issue, add_labels(max:2), missing_tool, missing_data, noop\n"
+          GH_AW_PROMPT_CONTENT_0001: "<safe-output-tools>\nTools: add_comment, close_issue, add_labels(max:2), remove_labels(max:2), missing_tool, missing_data, noop\n"
           GH_AW_PROMPT_CONTENT_0002: "</safe-output-tools>\n"
           GH_AW_PROMPT_CONTENT_0003: "<github-context>\nThe following GitHub context information is available for this workflow:\n{{#if github.actor}}\n- **actor**: __GH_AW_GITHUB_ACTOR__\n{{/if}}\n{{#if github.repository}}\n- **repository**: __GH_AW_GITHUB_REPOSITORY__\n{{/if}}\n{{#if github.workspace}}\n- **workspace**: __GH_AW_GITHUB_WORKSPACE__\n{{/if}}\n{{#if github.event.issue.number || (github.aw.context.item_type == 'issue' && github.aw.context.item_number)}}\n- **issue-number**: #__GH_AW_EXPR_802A9F6A__\n{{/if}}\n{{#if github.event.discussion.number || (github.aw.context.item_type == 'discussion' && github.aw.context.item_number)}}\n- **discussion-number**: #__GH_AW_EXPR_1A3A194A__\n{{/if}}\n{{#if github.event.pull_request.number || (github.aw.context.item_type == 'pull_request' && github.aw.context.item_number)}}\n- **pull-request-number**: #__GH_AW_EXPR_463A214A__\n{{/if}}\n{{#if github.event.comment.id || github.aw.context.comment_id}}\n- **comment-id**: __GH_AW_EXPR_FF1D34CE__\n{{/if}}\n{{#if github.run_id}}\n- **workflow-run-id**: __GH_AW_GITHUB_RUN_ID__\n{{/if}}\n</github-context>\n\n"
           GH_AW_PROMPT_CONTENT_0004: "</system>\n"
@@ -426,6 +378,7 @@ jobs:
           GH_AW_GITHUB_REPOSITORY: ${{ github.repository }}
           GH_AW_GITHUB_RUN_ID: ${{ github.run_id }}
           GH_AW_GITHUB_WORKSPACE: ${{ github.workspace }}
+          GH_AW_INCLUDE_PR_CONTEXT: ${{ (github.event_name == 'issue_comment' && github.event.issue.pull_request != null) || github.event_name == 'pull_request_review_comment' || github.event_name == 'pull_request_review' }}
           GH_AW_NEEDS_PRE_ACTIVATION_OUTPUTS_ACTIVATED: ${{ needs.pre_activation.outputs.activated }}
         with:
           script: |
@@ -448,6 +401,7 @@ jobs:
                 GH_AW_GITHUB_REPOSITORY: process.env.GH_AW_GITHUB_REPOSITORY,
                 GH_AW_GITHUB_RUN_ID: process.env.GH_AW_GITHUB_RUN_ID,
                 GH_AW_GITHUB_WORKSPACE: process.env.GH_AW_GITHUB_WORKSPACE,
+                GH_AW_INCLUDE_PR_CONTEXT: process.env.GH_AW_INCLUDE_PR_CONTEXT,
                 GH_AW_NEEDS_PRE_ACTIVATION_OUTPUTS_ACTIVATED: process.env.GH_AW_NEEDS_PRE_ACTIVATION_OUTPUTS_ACTIVATED
               }
             });
@@ -655,7 +609,7 @@ jobs:
         env:
           GH_AW_FILE_ROOT: "${{ runner.temp }}/gh-aw"
           GH_AW_FILE_CONFIG: "{\"files\":[{\"path\":\"safeoutputs/config.json\",\"content_env\":\"GH_AW_SAFE_OUTPUTS_CONFIG\"}]}"
-          GH_AW_SAFE_OUTPUTS_CONFIG: "{\"add_comment\":{\"discussions\":true,\"max\":1},\"add_labels\":{\"allowed\":[\"accessibility\",\"bug\",\"documentation\",\"duplicate\",\"enhancement\",\"invalid\",\"needs-info\",\"out-of-scope\",\"question\",\"wontfix\"],\"issue_intent\":true,\"max\":2},\"close_issue\":{\"max\":1,\"state_reason\":\"duplicate\"},\"create_report_incomplete_issue\":{},\"missing_data\":{},\"missing_tool\":{},\"noop\":{\"max\":1,\"report-as-issue\":\"false\"},\"report_incomplete\":{}}"
+          GH_AW_SAFE_OUTPUTS_CONFIG: "{\"add_comment\":{\"discussions\":true,\"max\":1},\"add_labels\":{\"allowed\":[\"accessibility\",\"bug\",\"documentation\",\"duplicate\",\"enhancement\",\"invalid\",\"needs-info\",\"out-of-scope\",\"question\",\"wontfix\"],\"issue_intent\":true,\"max\":2},\"close_issue\":{\"max\":1,\"state_reason\":\"duplicate\"},\"create_report_incomplete_issue\":{},\"missing_data\":{},\"missing_tool\":{},\"noop\":{\"max\":1,\"report-as-issue\":\"false\"},\"remove_labels\":{\"allowed\":[\"accessibility\",\"bug\",\"documentation\",\"duplicate\",\"enhancement\",\"invalid\",\"needs-info\",\"out-of-scope\",\"question\",\"wontfix\"],\"max\":2},\"report_incomplete\":{}}"
         with:
           script: |
             const path = require('path');
@@ -671,7 +625,8 @@ jobs:
               "description_suffixes": {
                 "add_comment": " CONSTRAINTS: Maximum 1 comment(s) can be added. Supports reply_to_id for discussion threading.",
                 "add_labels": " CONSTRAINTS: Maximum 2 label(s) can be added. Only these labels are allowed: [\"accessibility\" \"bug\" \"documentation\" \"duplicate\" \"enhancement\" \"invalid\" \"needs-info\" \"out-of-scope\" \"question\" \"wontfix\"].",
-                "close_issue": " CONSTRAINTS: Maximum 1 issue(s) can be closed."
+                "close_issue": " CONSTRAINTS: Maximum 1 issue(s) can be closed.",
+                "remove_labels": " CONSTRAINTS: Maximum 2 label(s) can be removed. Only these labels can be removed: [accessibility bug documentation duplicate enhancement invalid needs-info out-of-scope question wontfix]."
               },
               "repo_params": {},
               "dynamic_tools": []
@@ -827,6 +782,22 @@ jobs:
                     "type": "string",
                     "sanitize": true,
                     "maxLength": 65000
+                  }
+                }
+              },
+              "remove_labels": {
+                "defaultMax": 5,
+                "fields": {
+                  "item_number": {
+                    "issueNumberOrTemporaryId": true
+                  },
+                  "labels": {
+                    "required": true,
+                    "type": "array"
+                  },
+                  "repo": {
+                    "type": "string",
+                    "maxLength": 256
                   }
                 }
               },
@@ -1674,7 +1645,7 @@ jobs:
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           WORKFLOW_NAME: "Copilot issue assessment"
-          WORKFLOW_DESCRIPTION: "Assess each issue and discussion once without creating code or pull requests."
+          WORKFLOW_DESCRIPTION: "Reassess issues and discussions as the conversation changes, without creating code or pull requests."
           HAS_PATCH: ${{ needs.agent.outputs.has_patch }}
           GH_AW_DETECTION_CONTINUE_ON_ERROR: "true"
           GH_AW_DETECTION_SKIP_PROMPT_SUMMARY: "true"
@@ -1737,7 +1708,7 @@ jobs:
           RUNNER_TEMP: ${{ runner.temp }}
           TRACEPARENT: ${{ env.GITHUB_AW_OTEL_TRACE_ID != '' && env.GITHUB_AW_OTEL_PARENT_SPAN_ID != '' && format('00-{0}-{1}-01', env.GITHUB_AW_OTEL_TRACE_ID, env.GITHUB_AW_OTEL_PARENT_SPAN_ID) || '' }}
           WORKFLOW_NAME: "Copilot issue assessment"
-          WORKFLOW_DESCRIPTION: "Assess each issue and discussion once without creating code or pull requests."
+          WORKFLOW_DESCRIPTION: "Reassess issues and discussions as the conversation changes, without creating code or pull requests."
           HAS_PATCH: ${{ needs.agent.outputs.has_patch }}
           GH_AW_DETECTION_CONTINUE_ON_ERROR: "true"
         run: |
@@ -1839,12 +1810,14 @@ jobs:
   pre_activation:
     runs-on: ubuntu-slim
     permissions:
+      contents: read
       discussions: write
       issues: write
     env:
       GH_AW_RUNTIME_FEATURES: ${{ vars.GH_AW_RUNTIME_FEATURES }}
     outputs:
       activated: ${{ 'true' }}
+      assessment_needed: ${{ steps.assessment_needed.outputs.needed }}
       assessment_needed_result: ${{ steps.assessment_needed.outcome }}
       matched_command: ''
       setup-parent-span-id: ${{ steps.setup.outputs.parent-span-id || steps.setup.outputs.span-id }}
@@ -1863,92 +1836,32 @@ jobs:
           GH_AW_INFO_VERSION: "1.0.80"
           GH_AW_INFO_AWF_VERSION: "v0.28.12"
           GH_AW_INFO_ENGINE_ID: "copilot"
-      - name: Skip or mark the Copilot assessment
+      - if: vars.COPILOT_ISSUE_ASSESSMENT_ENABLED == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 (source v7)
+        with:
+          persist-credentials: false
+      - name: Prepare the Copilot assessment
         id: assessment_needed
         if: vars.COPILOT_ISSUE_ASSESSMENT_ENABLED == 'true'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0 (source v9)
         with:
           script: |
-            let routed = {};
-            try {
-              routed = JSON.parse(context.payload.inputs?.aw_context || "{}");
-            } catch (error) {
-              core.setFailed(`Invalid agentic workflow context: ${error.message}`);
-              return;
+            const { prepare } = require('./.github/scripts/issue-assessment.cjs');
+            const target = await prepare({ github, context });
+            core.setOutput('needed', Boolean(target));
+            if (target) {
+              const fs = require('node:fs');
+              const path = require('node:path');
+              fs.writeFileSync(path.join(process.env.RUNNER_TEMP, 'assessment-target.json'), JSON.stringify(target));
             }
-
-            const itemType = context.payload.issue
-              ? "issue"
-              : context.payload.discussion
-                ? "discussion"
-                : routed.item_type;
-            const itemNumber = context.payload.issue?.number
-              || context.payload.discussion?.number
-              || routed.item_number;
-
-            if (!["issue", "discussion"].includes(itemType) || !itemNumber) {
-              core.setFailed("An issue or discussion number is required");
-              return;
-            }
-
-            let reactions;
-            let discussionId;
-            if (itemType === "issue") {
-              reactions = await github.paginate(
-                github.rest.reactions.listForIssue,
-                { ...context.repo, issue_number: itemNumber, per_page: 100 },
-              );
-            } else {
-              const result = await github.graphql(
-                `query($owner: String!, $repo: String!, $number: Int!) {
-                  repository(owner: $owner, name: $repo) {
-                    discussion(number: $number) {
-                      id
-                      reactions(first: 100, content: ROCKET) {
-                        nodes { content user { login } }
-                      }
-                    }
-                  }
-                }`,
-                { ...context.repo, number: Number(itemNumber) },
-              );
-              const discussion = result.repository.discussion;
-              if (!discussion) {
-                core.setFailed(`Discussion #${itemNumber} was not found`);
-                return;
-              }
-              discussionId = discussion.id;
-              reactions = discussion.reactions.nodes || [];
-            }
-
-            const trustedActors = new Set([context.repo.owner, "github-actions[bot]"]);
-            const alreadyAssessed = reactions.some(reaction =>
-              reaction.content.toLowerCase() === "rocket"
-                && trustedActors.has(reaction.user?.login),
-            );
-
-            if (alreadyAssessed) {
-              core.setFailed(`${itemType} #${itemNumber} was already assessed`);
-              return;
-            }
-
-            if (itemType === "issue") {
-              await github.rest.reactions.createForIssue({
-                ...context.repo,
-                issue_number: itemNumber,
-                content: "rocket",
-              });
-            } else {
-              await github.graphql(
-                `mutation($subjectId: ID!) {
-                  addReaction(input: {subjectId: $subjectId, content: ROCKET}) {
-                    reaction { content }
-                  }
-                }`,
-                { subjectId: discussionId },
-              );
-            }
-        continue-on-error: true
+      - name: Save the assessment subject
+        if: steps.assessment_needed.outputs.needed == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 (source v7)
+        with:
+          if-no-files-found: error
+          name: assessment-target-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/assessment-target.json
+          retention-days: 7
 
   safe_outputs:
     needs:
@@ -2046,7 +1959,7 @@ jobs:
           GH_AW_ALLOWED_DOMAINS: "api.snapcraft.io,archive.ubuntu.com,azure.archive.ubuntu.com,crl.geotrust.com,crl.globalsign.com,crl.identrust.com,crl.sectigo.com,crl.thawte.com,crl.usertrust.com,crl.verisign.com,crl3.digicert.com,crl4.digicert.com,crls.ssl.com,fastpotify.rocks,json-schema.org,json.schemastore.org,keyserver.ubuntu.com,ocsp.digicert.com,ocsp.geotrust.com,ocsp.globalsign.com,ocsp.identrust.com,ocsp.sectigo.com,ocsp.ssl.com,ocsp.thawte.com,ocsp.usertrust.com,ocsp.verisign.com,packagecloud.io,packages.cloud.google.com,packages.microsoft.com,ppa.launchpad.net,s.symcb.com,s.symcd.com,security.ubuntu.com,ts-crl.ws.symantec.com,ts-ocsp.ws.symantec.com,www.googleapis.com"
           GITHUB_SERVER_URL: ${{ github.server_url }}
           GITHUB_API_URL: ${{ github.api_url }}
-          GH_AW_SAFE_OUTPUTS_HANDLER_CONFIG: "{\"add_comment\":{\"discussions\":true,\"max\":1},\"add_labels\":{\"allowed\":[\"accessibility\",\"bug\",\"documentation\",\"duplicate\",\"enhancement\",\"invalid\",\"needs-info\",\"out-of-scope\",\"question\",\"wontfix\"],\"issue_intent\":true,\"max\":2},\"close_issue\":{\"max\":1,\"state_reason\":\"duplicate\"},\"create_report_incomplete_issue\":{},\"missing_data\":{},\"missing_tool\":{},\"noop\":{\"max\":1,\"report-as-issue\":\"false\"},\"report_incomplete\":{}}"
+          GH_AW_SAFE_OUTPUTS_HANDLER_CONFIG: "{\"add_comment\":{\"discussions\":true,\"max\":1},\"add_labels\":{\"allowed\":[\"accessibility\",\"bug\",\"documentation\",\"duplicate\",\"enhancement\",\"invalid\",\"needs-info\",\"out-of-scope\",\"question\",\"wontfix\"],\"issue_intent\":true,\"max\":2},\"close_issue\":{\"max\":1,\"state_reason\":\"duplicate\"},\"create_report_incomplete_issue\":{},\"missing_data\":{},\"missing_tool\":{},\"noop\":{\"max\":1,\"report-as-issue\":\"false\"},\"remove_labels\":{\"allowed\":[\"accessibility\",\"bug\",\"documentation\",\"duplicate\",\"enhancement\",\"invalid\",\"needs-info\",\"out-of-scope\",\"question\",\"wontfix\"],\"max\":2},\"report_incomplete\":{}}"
         with:
           github-token: ${{ secrets.GH_AW_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
           script: |

@@ -34,7 +34,9 @@ pub fn cell(character: char) -> (u32, u32) {
 /// Whether the font has a real cell for the character, rather than the
 /// question mark it falls back to.
 pub fn covered(character: char) -> bool {
-    character == '?' || cell(character) != cell('?')
+    // Asked after folding, so a character that folds onto the question mark
+    // is covered by it: the full-width one is the same question mark.
+    fold(character) == '?' || cell(character) != cell('?')
 }
 
 /// The sprite for a character.
@@ -45,6 +47,17 @@ pub fn glyph(character: char) -> Sprite {
 
 /// Reduces a character to one the font has a cell for.
 fn fold(character: char) -> char {
+    // Full-width forms are the ASCII punctuation, digits and letters again,
+    // shifted up by 0xFEE0, and a Japanese or Korean release writes a title
+    // with them: a star is U+FF0A, a tilde U+FF5E, the brackets U+FF08 and
+    // U+FF09. Folding them is the same move as dropping an accent, and it
+    // matters more, because one uncovered character sends the whole line to
+    // a borrowed face instead of the skin's own font.
+    let character = match character {
+        '\u{ff01}'..='\u{ff5e}' => ((character as u32 - 0xfee0) as u8) as char,
+        '\u{3000}' => ' ',
+        other => other,
+    };
     match character {
         'a'..='z' => character.to_ascii_uppercase(),
         ' ' | '\t' | '\u{a0}' => ' ',
@@ -96,6 +109,36 @@ mod tests {
         assert_eq!(cell('('), (1, 13));
         assert_eq!(cell('-'), (1, 15));
         assert_eq!(cell('#'), (1, 30));
+    }
+
+    #[test]
+    fn full_width_forms_fold_to_the_shapes_they_are() {
+        assert_eq!(cell('\u{ff0a}'), cell('*'));
+        assert_eq!(cell('\u{ff08}'), cell('('));
+        assert_eq!(cell('\u{ff09}'), cell(')'));
+        assert_eq!(cell('\u{ff21}'), cell('A'));
+        assert_eq!(cell('\u{ff41}'), cell('A'));
+        assert_eq!(cell('\u{ff10}'), cell('0'));
+        assert_eq!(cell('\u{3000}'), cell(' '));
+        // The full-width tilde takes the dash the ASCII one already took.
+        assert_eq!(cell('\u{ff5e}'), cell('-'));
+        // The full-width question mark is the question mark, so it is a cell
+        // the font has rather than the fallback for one it does not.
+        assert_eq!(cell('\u{ff1f}'), cell('?'));
+        assert!(covered('\u{ff1f}'));
+    }
+
+    #[test]
+    fn a_title_punctuated_full_width_keeps_the_skin_font() {
+        // One uncovered character sends the whole line to a borrowed face,
+        // so a title written this way used to lose the skin's font outright.
+        assert!(
+            "\u{ff08}2026\u{ff09}\u{3000}REMIX\u{ff5e}"
+                .chars()
+                .all(covered)
+        );
+        // Kana is still not in the font, and still falls back.
+        assert!(!"\u{3042}".chars().all(covered));
     }
 
     #[test]

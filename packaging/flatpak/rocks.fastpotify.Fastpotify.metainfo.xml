@@ -50,6 +50,9 @@
     <control>keyboard</control>
   </supports>
   <releases>
+    <release version="0.7.0" date="2026-09-06">
+      <url>https://github.com/crmne/fastpotify/releases/tag/v0.7.0</url>
+    </release>
     <release version="0.5.0-rc1" date="2026-09-01" type="development">
       <url>https://github.com/crmne/fastpotify/releases/tag/v0.5.0-rc1</url>
     </release>

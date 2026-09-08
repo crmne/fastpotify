@@ -44,6 +44,8 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Formatting
         run: cargo fmt --all --check
+      - name: Issue assessment regression tests
+        run: node --test .github/scripts/issue-assessment.test.cjs
       - name: Clippy (default features)
         run: cargo clippy --locked --all-targets -- -D warnings
       - name: Clippy (all features)

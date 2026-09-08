@@ -261,6 +261,8 @@ pub struct App {
     pub show_pages: HashMap<String, ShowPage>,
     pub track_cache: HashMap<String, Track>,
     track_requests: HashSet<String>,
+    /// Built table rows, keyed by page. Capped; dropped on reset and eviction.
+    pub table_rows: HashMap<Page, TableRowsCache>,
 
     pub history: Vec<Page>,
     pub history_index: usize,
@@ -329,6 +331,8 @@ pub struct App {
     #[cfg(feature = "milkdrop")]
     milkdrop_host: Option<crate::milkdrop::host::Host>,
     last_eviction: Instant,
+    /// Playback snapshot for the current frame, built once per redraw.
+    frame_now: Option<NowPlaying>,
     pub sign_in_url: Option<String>,
     /// The verified personal Web API application, when acceleration is ready.
     pub web_app: Option<String>,
@@ -566,6 +570,7 @@ impl App {
             show_pages: HashMap::new(),
             track_cache: HashMap::new(),
             track_requests: HashSet::new(),
+            table_rows: HashMap::new(),
             history: vec![first_page],
             history_index: 0,
             saved: HashMap::new(),
@@ -605,6 +610,7 @@ impl App {
             #[cfg(feature = "milkdrop")]
             milkdrop_host: None,
             last_eviction: Instant::now(),
+            frame_now: None,
             sign_in_url: None,
             web_app: None,
             pending_remote_position: None,
@@ -688,7 +694,18 @@ impl App {
         }
         if self.settings.winamp_window {
             // The mini player sizes itself; the big window's geometry
-            // waits here for its return. Re-assert the on-top level over the
+            // waits here for its return. eframe may have restored the big
+            // window's fullscreen/maximized state before creating this one.
+            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(false));
+            if let Some(pos) = self.winamp.restore_pos
+                && crate::window::can_restore(pos, ctx.pixels_per_point())
+            {
+                ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(
+                    pos[0], pos[1],
+                )));
+            }
+            // Re-assert the on-top level over the
             // first frames, once the window is mapped, because the level set
             // at creation does not stick on X11.
             if self.settings.winamp_on_top {
@@ -992,7 +1009,14 @@ impl App {
     }
 
     pub fn now_playing(&self) -> Option<NowPlaying> {
+        if let Some(now) = &self.frame_now {
+            return Some(now.clone());
+        }
         self.now_playing_live().or_else(|| self.resume_preview())
+    }
+
+    fn refresh_frame_now(&mut self) {
+        self.frame_now = self.now_playing_live().or_else(|| self.resume_preview());
     }
 
     /// What a device is actually playing, here or elsewhere.
@@ -1435,6 +1459,54 @@ impl App {
         self.devices_fetched_at = None;
         self.search.results = Loadable::NotLoaded;
         self.search.committed.clear();
+        self.table_rows.clear();
+    }
+
+    /// Drop table-row caches whose pages are gone, and cap what remains.
+    pub fn retain_table_rows(&mut self, current: &Page) {
+        const MAX_TABLE_ROW_CACHES: usize = 2;
+        self.table_rows.retain(|page, _| {
+            page == current
+                || match page {
+                    Page::Playlist(id) => self.playlist_pages.contains_key(id),
+                    Page::Album(id) => self.album_pages.contains_key(id),
+                    Page::LikedSongs | Page::TopSongs => true,
+                    _ => false,
+                }
+        });
+        if self.table_rows.len() <= MAX_TABLE_ROW_CACHES {
+            return;
+        }
+        let mut keep = HashSet::from([current.clone()]);
+        if let Some(page) = self.history.get(self.history_index) {
+            keep.insert(page.clone());
+        }
+        if self.history_index > 0
+            && let Some(page) = self.history.get(self.history_index - 1)
+        {
+            keep.insert(page.clone());
+        }
+        self.table_rows.retain(|page, _| keep.contains(page));
+        while self.table_rows.len() > MAX_TABLE_ROW_CACHES {
+            let drop = self
+                .table_rows
+                .keys()
+                .find(|page| *page != current)
+                .cloned();
+            match drop {
+                Some(page) => {
+                    self.table_rows.remove(&page);
+                }
+                None => break,
+            }
+        }
+    }
+
+    pub fn table_rows_retained_bytes(&self) -> usize {
+        self.table_rows
+            .values()
+            .map(TableRowsCache::retained_bytes)
+            .sum()
     }
 
     fn handle_local(&mut self, state: LocalState) {
@@ -2464,6 +2536,16 @@ impl App {
                 self.request_contains(vec![format!("spotify:playlist:{id}")]);
             }
             Page::Album(id) => {
+                if !self.album_pages.contains_key(&id) {
+                    self.load_generation = self.load_generation.wrapping_add(1);
+                    self.album_pages.insert(
+                        id.clone(),
+                        AlbumPage {
+                            generation: self.load_generation,
+                            ..Default::default()
+                        },
+                    );
+                }
                 let page = self.album_pages.entry(id.clone()).or_default();
                 if page.album.needs_load() {
                     page.album = Loadable::Loading;
@@ -2862,7 +2944,7 @@ impl App {
             if uris.is_empty() {
                 return;
             }
-            let (uris, index) = cap_uris(uris, index as u32);
+            let (uris, index) = cap_uris(&uris, index as u32);
             self.play_request(PlayRequest::tracks(uris).starting_at_index(index), false);
             return;
         }
@@ -4315,7 +4397,8 @@ impl App {
 
     pub fn open(&mut self, page: Page) {
         if *self.page() == page {
-            self.ensure_loaded(page);
+            self.ensure_loaded(page.clone());
+            self.retain_table_rows(&page);
             return;
         }
         self.history.truncate(self.history_index + 1);
@@ -4325,7 +4408,8 @@ impl App {
         }
         self.history_index = self.history.len() - 1;
         self.show_devices = false;
-        self.ensure_loaded(page);
+        self.ensure_loaded(page.clone());
+        self.retain_table_rows(&page);
     }
 
     /// Hands the app a Spotify link from outside, a canonical URI as
@@ -5339,6 +5423,7 @@ impl App {
         for cover in self.uploaded_covers.values() {
             ctx.include_bytes(cover.cover.uri.clone(), cover.cover.jpeg.clone());
         }
+        self.frame_now = None;
         let mut actions = std::mem::take(&mut self.actions);
         while !actions.is_empty() {
             for action in actions.drain(..) {
@@ -5367,14 +5452,16 @@ impl App {
                 if self.can_go_back() {
                     self.history_index -= 1;
                     let page = self.page().clone();
-                    self.ensure_loaded(page);
+                    self.ensure_loaded(page.clone());
+                    self.retain_table_rows(&page);
                 }
             }
             Action::Forward => {
                 if self.can_go_forward() {
                     self.history_index += 1;
                     let page = self.page().clone();
-                    self.ensure_loaded(page);
+                    self.ensure_loaded(page.clone());
+                    self.retain_table_rows(&page);
                 }
             }
             Action::PlayContext {
@@ -5417,7 +5504,7 @@ impl App {
                 if uris.is_empty() {
                     return;
                 }
-                let (uris, index) = cap_uris(uris, index);
+                let (uris, index) = cap_uris(&uris, index);
                 let request = PlayRequest::tracks(uris).starting_at_index(index);
                 self.play_request(request, false);
             }
@@ -5433,13 +5520,13 @@ impl App {
                     self.play_request(request, false);
                 }
                 RowContext::Uris(uris) => {
-                    let (uris, index) = cap_uris(uris, index);
+                    let (uris, index) = cap_uris(uris.as_ref(), index);
                     let request = PlayRequest::tracks(uris).starting_at_index(index);
                     self.play_request(request, false);
                 }
                 RowContext::Queue => self.play_queue_item(index as usize, uri),
                 RowContext::View { uris, context_uri } => {
-                    let (uris, index) = cap_uris(uris, index);
+                    let (uris, index) = cap_uris(uris.as_ref(), index);
                     let request = PlayRequest::tracks(uris).starting_at_index(index);
                     self.play_request(request, false);
                     self.note_recent_context(&context_uri);
@@ -6352,6 +6439,7 @@ impl App {
     pub fn frame_ui(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         let ctx = &ctx;
+        self.refresh_frame_now();
         self.apply_theme(ctx);
         self.lock_scroll_axis(ctx);
         // Switch to the main window when sign-in is required.
@@ -6367,6 +6455,7 @@ impl App {
             crate::ui::show(self, ui);
         }
         self.apply_actions(ctx);
+        self.refresh_frame_now();
         self.sync_media_controls();
 
         if !self.settings.winamp_window && !self.switch_intent {
@@ -6389,7 +6478,7 @@ impl App {
             ctx.request_repaint_after(Duration::from_millis(120));
         }
         if self.is_connected() {
-            ctx.request_repaint_after(REMOTE_POLL_ACTIVE);
+            ctx.request_repaint_after(self.connected_repaint_interval());
         }
         if ctx.input(|input| input.viewport().close_requested())
             && !self.quit_requested
@@ -6399,6 +6488,20 @@ impl App {
             // Close the window and keep the process running in the tray.
             self.hide_intent = true;
         }
+        self.frame_now = None;
+    }
+
+    /// How soon the window asks for another frame while signed in.
+    ///
+    /// API polling already uses 20s during local playback. This only changes
+    /// the UI deadline. While a track is playing, the 250ms progress refresh
+    /// still wins, so the saving is idle-local frames: 4s -> 20s, 80% fewer
+    /// wakeups when paused on this device.
+    fn connected_repaint_interval(&self) -> Duration {
+        match self.target() {
+            Target::Local if self.local.is_active() => REMOTE_POLL_IDLE,
+            _ => REMOTE_POLL_ACTIVE,
+        }
     }
 
     /// Locks each scroll gesture to one axis.
@@ -6406,21 +6509,39 @@ impl App {
     /// Trackpads report small cross-axis deltas. Choose from the first movement
     /// and hold that axis until the gesture ends.
     fn lock_scroll_axis(&mut self, ctx: &egui::Context) {
-        let (raw, from_trackpad, ended) = ctx.input(|input| {
+        let options = ctx.options(|options| options.input_options);
+        let (raw, from_trackpad, ended, forced_axis) = ctx.input(|input| {
             let mut sum = egui::Vec2::ZERO;
             let mut pointish = false;
             let mut ended = false;
+            let mut forced_axis = None;
             for event in &input.events {
                 if let egui::Event::MouseWheel {
-                    unit, delta, phase, ..
+                    unit,
+                    delta,
+                    phase,
+                    modifiers,
                 } = event
                 {
-                    sum += *delta;
+                    // egui applies scroll modifiers before producing smooth
+                    // deltas. Lock and measure momentum in that same direction.
+                    let horizontal = modifiers.matches_any(options.horizontal_scroll_modifier);
+                    let vertical = modifiers.matches_any(options.vertical_scroll_modifier);
+                    forced_axis = match (horizontal, vertical) {
+                        (true, false) => Some(ScrollAxis::Horizontal),
+                        (false, true) => Some(ScrollAxis::Vertical),
+                        _ => None,
+                    };
+                    sum += match forced_axis {
+                        Some(ScrollAxis::Horizontal) => egui::vec2(delta.x + delta.y, 0.0),
+                        Some(ScrollAxis::Vertical) => egui::vec2(0.0, delta.x + delta.y),
+                        None => *delta,
+                    };
                     pointish |= *unit == egui::MouseWheelUnit::Point;
                     ended |= matches!(phase, egui::TouchPhase::End | egui::TouchPhase::Cancel);
                 }
             }
-            (sum, pointish, ended)
+            (sum, pointish, ended, forced_axis)
         });
         let now = Instant::now();
         if raw != egui::Vec2::ZERO {
@@ -6474,11 +6595,16 @@ impl App {
             }
             ctx.request_repaint();
         }
-        let held = self
-            .scroll_lock
-            .filter(|(_, at)| now.duration_since(*at) < SCROLL_GESTURE_GAP)
-            .map(|(axis, _)| axis);
         let moved = raw != egui::Vec2::ZERO;
+        // Separate wheel notches may change direction immediately, including
+        // when Shift is pressed or released. Only trackpad gestures hold it.
+        let held = forced_axis.or_else(|| {
+            self.scroll_lock
+                .filter(|(_, at)| {
+                    now.duration_since(*at) < SCROLL_GESTURE_GAP && (!moved || from_trackpad)
+                })
+                .map(|(axis, _)| axis)
+        });
         let axis = match held {
             Some(axis) => axis,
             None if moved && raw.x.abs() > raw.y.abs() * 1.2 => ScrollAxis::Horizontal,
@@ -6759,12 +6885,12 @@ fn autoplay_seed(
 }
 
 /// Caps large track lists at 500 items starting from the selected row.
-fn cap_uris(uris: Vec<String>, index: u32) -> (Vec<String>, u32) {
+fn cap_uris(uris: &[String], index: u32) -> (Vec<String>, u32) {
     const MAX: usize = 500;
     if uris.len() <= MAX {
-        return (uris, index);
+        return (uris.to_vec(), index);
     }
-    let start = (index as usize).min(uris.len() - 1);
+    let start = (index as usize).min(uris.len().saturating_sub(1));
     let end = (start + MAX).min(uris.len());
     (uris[start..end].to_vec(), 0)
 }
@@ -6789,6 +6915,99 @@ fn cover_error(error: &crate::api::client::ApiError) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shift_wheel_moves_the_shelf_without_scrolling_the_page() {
+        let mut app = headless_app();
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let mut shelf_left = 0.0;
+        let mut initial_left = 0.0;
+        let mut page_offset = 0.0;
+        for frame in 0..6 {
+            let mut input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(600.0, 400.0),
+                )),
+                time: Some(frame as f64 / 60.0),
+                ..Default::default()
+            };
+            input
+                .events
+                .push(egui::Event::PointerMoved(egui::pos2(100.0, 70.0)));
+            if frame == 2 {
+                input.events.push(egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Line,
+                    delta: egui::vec2(0.0, -3.0),
+                    phase: egui::TouchPhase::Move,
+                    modifiers: egui::Modifiers::SHIFT,
+                });
+            }
+            let mut output = ctx.run_ui(input, |ui| {
+                app.lock_scroll_axis(ui.ctx());
+                let page = egui::ScrollArea::vertical().show(ui, |ui| {
+                    crate::ui::widgets::shelf(
+                        ui,
+                        &app.palette,
+                        "wheel-test-shelf",
+                        "Shelf",
+                        |ui| {
+                            shelf_left = ui.allocate_space(egui::vec2(1600.0, 100.0)).1.left();
+                        },
+                    );
+                    ui.allocate_space(egui::vec2(100.0, 1200.0));
+                });
+                page_offset = page.state.offset.y;
+            });
+            output.textures_delta.clear();
+            if frame == 0 {
+                initial_left = shelf_left;
+            }
+        }
+        assert!(shelf_left < initial_left, "Shift+wheel must move the shelf");
+        assert_eq!(page_offset, 0.0, "the enclosing page must stay put");
+    }
+
+    #[test]
+    fn wheel_notches_can_change_direction_without_waiting_for_a_gesture_gap() {
+        let mut app = headless_app();
+        let ctx = egui::Context::default();
+        for (frame, (modifiers, delta, horizontal)) in [
+            (egui::Modifiers::NONE, egui::vec2(0.0, -3.0), false),
+            (egui::Modifiers::SHIFT, egui::vec2(0.0, -3.0), true),
+            (egui::Modifiers::NONE, egui::vec2(0.0, -3.0), false),
+            (egui::Modifiers::NONE, egui::vec2(-3.0, 0.0), true),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    time: Some(frame as f64 / 60.0),
+                    events: vec![egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Line,
+                        delta,
+                        phase: egui::TouchPhase::Move,
+                        modifiers,
+                    }],
+                    ..Default::default()
+                },
+                |ui| {
+                    app.lock_scroll_axis(ui.ctx());
+                    let delta = ui.input(|input| input.smooth_scroll_delta);
+                    if horizontal {
+                        assert!(delta.x < 0.0, "horizontal notch {frame}: {delta:?}");
+                        assert_eq!(delta.y, 0.0);
+                    } else {
+                        assert!(delta.y < 0.0, "vertical notch {frame}: {delta:?}");
+                        assert_eq!(delta.x, 0.0);
+                    }
+                },
+            );
+            output.textures_delta.clear();
+        }
+    }
 
     /// A song started outside a playlist must turn off the playlist's
     /// sidebar light at once, even while Spotify still reports the old
@@ -6918,6 +7137,37 @@ mod tests {
         app.settings.winamp_on_top = false;
         app.attach(&ctx);
         assert_eq!(app.winamp_level_reassert, 0);
+    }
+
+    #[test]
+    fn returning_to_the_mini_player_restores_its_position_and_shade() {
+        let mut app = headless_app();
+        app.settings.winamp_window = true;
+        app.settings.winamp_shaded = true;
+        app.winamp.last_pos = Some([300.0, 200.0]);
+        app.last_window_size = Some([1024.0, 768.0]);
+        app.last_window_pos = Some([100.0, 100.0]);
+
+        let main_ctx = egui::Context::default();
+        app.apply(Action::ToggleWinampWindow, &main_ctx);
+        app.attach(&main_ctx);
+        app.apply(Action::ToggleWinampWindow, &main_ctx);
+
+        let mini_ctx = egui::Context::default();
+        let mut output = mini_ctx.run_ui(Default::default(), |_ui| app.attach(&mini_ctx));
+        output.textures_delta.clear();
+        let commands = &output.viewport_output[&egui::ViewportId::ROOT].commands;
+        assert!(app.settings.winamp_window);
+        assert!(app.settings.winamp_shaded);
+        assert!(commands.contains(&egui::ViewportCommand::Fullscreen(false)));
+        assert!(commands.contains(&egui::ViewportCommand::Maximized(false)));
+        assert!(
+            commands.contains(&egui::ViewportCommand::OuterPosition(egui::pos2(
+                300.0, 200.0
+            )))
+        );
+        assert_eq!(app.session_window_size, Some([1024.0, 768.0]));
+        assert_eq!(app.session_window_pos, Some([100.0, 100.0]));
     }
 
     /// The song the last session ended on is shown, paused, at the position
@@ -8489,6 +8739,115 @@ mod tests {
         );
         app.local_ready = true;
         app
+    }
+
+    #[test]
+    fn two_toggle_play_actions_in_one_batch_return_to_playing() {
+        let mut app = headless_app();
+        let ctx = egui::Context::default();
+        app.local.track = Some(crate::player::LocalTrack {
+            uri: "spotify:track:a".into(),
+            title: "A".into(),
+            ..Default::default()
+        });
+        app.local.playback = Playback::Playing;
+        app.refresh_frame_now();
+        assert!(app.now_playing().expect("playing").playing);
+        app.actions.push(Action::TogglePlay);
+        app.actions.push(Action::TogglePlay);
+        app.apply_actions(&ctx);
+        assert!(
+            app.now_playing().expect("playing").playing,
+            "the second toggle must see the first pause, not the drawing snapshot"
+        );
+    }
+
+    #[test]
+    fn a_frame_snapshot_does_not_freeze_local_after_remote_handoff() {
+        let mut app = headless_app();
+        app.local.track = Some(crate::player::LocalTrack {
+            uri: "spotify:track:local".into(),
+            title: "Local".into(),
+            ..Default::default()
+        });
+        app.local.playback = Playback::Playing;
+        app.refresh_frame_now();
+        assert_eq!(app.now_playing().expect("local").uri, "spotify:track:local");
+        app.local.track = None;
+        app.local.playback = Playback::Stopped;
+        app.remote = Some(RemoteSnapshot {
+            state: PlaybackState {
+                is_playing: true,
+                item: Some(PlayableItem::Track(Track {
+                    id: Some("remote".into()),
+                    uri: "spotify:track:remote".into(),
+                    name: "Remote".into(),
+                    ..Track::default()
+                })),
+                ..Default::default()
+            },
+            received_at: Instant::now(),
+        });
+        assert_eq!(
+            app.now_playing().expect("stale snapshot").uri,
+            "spotify:track:local"
+        );
+        app.refresh_frame_now();
+        assert_eq!(
+            app.now_playing().expect("handoff").uri,
+            "spotify:track:remote"
+        );
+    }
+
+    #[test]
+    fn local_idle_repaint_is_twenty_seconds_not_four() {
+        let mut app = headless_app();
+        assert_eq!(app.connected_repaint_interval(), REMOTE_POLL_ACTIVE);
+        app.local.track = Some(crate::player::LocalTrack {
+            uri: "spotify:track:a".into(),
+            ..Default::default()
+        });
+        app.local.playback = Playback::Paused;
+        assert_eq!(
+            app.connected_repaint_interval(),
+            REMOTE_POLL_IDLE,
+            "paused local UI wait is 20s (already the API interval); 4s was only a tighter wake-up"
+        );
+    }
+
+    #[test]
+    fn reset_data_drops_table_row_caches() {
+        let mut app = headless_app();
+        crate::ui::collection::cached_table_items(&mut app, Page::LikedSongs, 0, 0, 0, || {
+            vec![(
+                PlayableItem::Track(Track {
+                    name: "Hold".into(),
+                    uri: "spotify:track:hold".into(),
+                    ..Track::default()
+                }),
+                None,
+                None,
+            )]
+        });
+        assert!(!app.table_rows.is_empty());
+        app.reset_data();
+        assert!(app.table_rows.is_empty());
+        crate::ui::collection::cached_table_items(&mut app, Page::LikedSongs, 0, 0, 0, || {
+            vec![(
+                PlayableItem::Track(Track {
+                    name: "Fresh".into(),
+                    uri: "spotify:track:fresh".into(),
+                    ..Track::default()
+                }),
+                None,
+                None,
+            )]
+        });
+        let name = app.table_rows[&Page::LikedSongs].items[0].0.name();
+        assert_eq!(
+            name, "Fresh",
+            "reused revision 0 must not keep the old rows"
+        );
     }
 
     #[test]

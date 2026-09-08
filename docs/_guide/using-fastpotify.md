@@ -4,6 +4,12 @@ description: Library ordering and local play history.
 nav_order: 3
 ---
 
+## Scrolling shelves
+
+Point at a horizontal shelf, such as Made for you or Recently played on
+Home, and hold `Shift` while turning the mouse wheel. The shelf moves while
+the surrounding page stays put. Release `Shift` to scroll the page normally.
+
 ## Keyboard and screen readers
 
 The main window provides screen-reader names for playback controls, library
