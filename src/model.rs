@@ -639,6 +639,14 @@ pub struct DragTrack {
     pub from: Option<(String, u32)>,
 }
 
+/// Where the playing songs come from, as the queue's header names it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlayingFrom {
+    pub name: String,
+    /// The page that opens on click. A song radio has none.
+    pub page: Option<Page>,
+}
+
 /// Sidebar entry held during a drag.
 #[derive(Clone, Debug)]
 pub struct DragEntry {

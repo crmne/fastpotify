@@ -46,7 +46,8 @@ everyday use, and connection details.
   song, album, artist, playlist, or podcast shared from another app opens
   in it, whether it is running or not. `open.spotify.com` addresses go
   through the browser, which hands them to the same handler.
-- **Queue** as a side panel or a page; add anything to it from a row menu.
+- **Queue** as a side panel or a page; it names what is playing from, and
+  anything can be added to it from a row menu.
 - **Resumes the last session.** On startup, the last song is paused where it
   stopped. Play resumes it, and the other playback controls work before it
   starts.

@@ -1733,6 +1733,113 @@ mod tests {
         app.backend.shutdown();
     }
 
+    /// The queue names where the playing song comes from, on one row
+    /// with its label: the playlist, or the song a radio is seeded by.
+    /// With nothing reported, the row is not drawn.
+    #[test]
+    fn the_queue_names_where_the_song_plays_from() {
+        let root = std::env::temp_dir().join(format!(
+            "fastpotify-playing-from-test-{}",
+            std::process::id()
+        ));
+        let dirs = AppDirs {
+            config: root.join("config"),
+            state: root.join("state"),
+            cache: root.join("cache"),
+        };
+        let ctx = egui::Context::default();
+        let waker = crate::backend::Waker::default();
+        waker.attach(&ctx);
+        let mut app = App::new(
+            &waker,
+            dirs,
+            Settings::default(),
+            AppOptions {
+                media_controls: false,
+                tray: false,
+            },
+        );
+        app.attach(&ctx);
+        populate(&mut app);
+        app.show_queue_panel = true;
+
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1280.0, 800.0),
+            )),
+            ..Default::default()
+        };
+        let drawn = |app: &mut App| {
+            let mut placed = Vec::new();
+            // A panel applies its requested width after the first frame.
+            for _ in 0..2 {
+                placed.clear();
+                let mut output = ctx.run_ui(input.clone(), |ui| app.frame_ui(ui));
+                output.textures_delta.clear();
+                fn walk(shape: &egui::epaint::Shape, placed: &mut Vec<(String, egui::Rect)>) {
+                    match shape {
+                        egui::epaint::Shape::Text(text) => {
+                            placed.push((text.galley.job.text.clone(), text.visual_bounding_rect()))
+                        }
+                        egui::epaint::Shape::Vec(shapes) => {
+                            shapes.iter().for_each(|shape| walk(shape, placed))
+                        }
+                        _ => {}
+                    }
+                }
+                for clipped in &output.shapes {
+                    walk(&clipped.shape, &mut placed);
+                }
+            }
+            placed
+        };
+        let find = |placed: &[(String, egui::Rect)], label: &str| {
+            placed
+                .iter()
+                .find(|(text, _)| text == label)
+                .map(|(_, rect)| *rect)
+                .unwrap_or_else(|| panic!("{label} was never drawn: {placed:?}"))
+        };
+
+        // The name sits to the right of its label on one row. The sidebar
+        // draws the same playlist name elsewhere, so look beside the label.
+        let beside = |placed: &[(String, egui::Rect)], text: &str| {
+            let label = find(placed, "Playing from");
+            placed
+                .iter()
+                .find(|(drawn, rect)| {
+                    drawn == text
+                        && (rect.center().y - label.center().y).abs() < 10.0
+                        && rect.left() >= label.right()
+                })
+                .unwrap_or_else(|| panic!("{text} was not drawn beside its label: {placed:?}"));
+        };
+
+        // The demo plays the second playlist.
+        beside(&drawn(&mut app), "Late night focus");
+
+        // A song radio is named after its song.
+        if let Some(remote) = app.remote.as_mut() {
+            remote.state.context = Some(Context {
+                uri: "spotify:station:track:trk0".into(),
+                kind: "station".into(),
+            });
+        }
+        beside(&drawn(&mut app), "Rosewood Radio");
+
+        // Nothing reported, nothing named.
+        if let Some(remote) = app.remote.as_mut() {
+            remote.state.context = None;
+        }
+        let placed = drawn(&mut app);
+        assert!(
+            !placed.iter().any(|(text, _)| text == "Playing from"),
+            "the row hides without a context"
+        );
+        app.backend.shutdown();
+    }
+
     /// Every page, panel, and dialog lays out without panicking.
     #[test]
     fn every_surface_renders_headless() {

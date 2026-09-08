@@ -1637,6 +1637,107 @@ impl App {
         }
     }
 
+    /// Where the playing songs come from, for the queue's header: the
+    /// playlist, album, artist, or podcast with its page, Liked Songs, or
+    /// a song radio as plain text because a station has no page. A context
+    /// whose name has not loaded is still named by kind so it can open.
+    pub fn playing_from(&self) -> Option<PlayingFrom> {
+        let context = self.playing_context_uri()?;
+        if context.ends_with(":collection") {
+            return Some(PlayingFrom {
+                name: "Liked Songs".into(),
+                page: Some(Page::LikedSongs),
+            });
+        }
+        if context.starts_with("spotify:station:") {
+            return Some(PlayingFrom {
+                name: self
+                    .station_name(&context)
+                    .unwrap_or_else(|| "Radio".into()),
+                page: None,
+            });
+        }
+        let kind = util::uri_kind(&context)?;
+        let id = util::uri_id(&context)?.to_string();
+        let (name, page) = match kind {
+            "playlist" => {
+                let name = self
+                    .library
+                    .playlists
+                    .get()
+                    .and_then(|list| list.iter().find(|playlist| playlist.id == id))
+                    .map(|playlist| playlist.name.clone())
+                    .or_else(|| {
+                        self.playlist_pages
+                            .get(&id)
+                            .and_then(|page| page.playlist.get())
+                            .map(|playlist| playlist.name.clone())
+                    });
+                (
+                    name.unwrap_or_else(|| "Playlist".into()),
+                    Page::Playlist(id),
+                )
+            }
+            "album" => {
+                let name = self
+                    .album_pages
+                    .get(&id)
+                    .and_then(|page| page.album.get())
+                    .map(|album| album.name.clone())
+                    .or_else(|| {
+                        self.now_playing()
+                            .filter(|now| now.album_id.as_deref() == Some(id.as_str()))
+                            .map(|now| now.album_name)
+                    });
+                (name.unwrap_or_else(|| "Album".into()), Page::Album(id))
+            }
+            "artist" => {
+                let name = self
+                    .artist_pages
+                    .get(&id)
+                    .and_then(|page| page.artist.get())
+                    .map(|artist| artist.name.clone())
+                    .or_else(|| {
+                        self.now_playing().and_then(|now| {
+                            now.artists
+                                .into_iter()
+                                .find(|artist| artist.id.as_deref() == Some(id.as_str()))
+                                .map(|artist| artist.name)
+                        })
+                    });
+                (name.unwrap_or_else(|| "Artist".into()), Page::Artist(id))
+            }
+            "show" => {
+                let name = self
+                    .show_pages
+                    .get(&id)
+                    .and_then(|page| page.show.get())
+                    .map(|show| show.name.clone())
+                    .or_else(|| {
+                        self.library
+                            .shows
+                            .items
+                            .iter()
+                            .find(|saved| saved.show.id == id)
+                            .map(|saved| saved.show.name.clone())
+                    });
+                (name.unwrap_or_else(|| "Podcast".into()), Page::Show(id))
+            }
+            _ => return None,
+        };
+        Some(PlayingFrom {
+            name,
+            page: Some(page),
+        })
+    }
+
+    /// "<Song> Radio" for a song station whose song is cached.
+    fn station_name(&self, context: &str) -> Option<String> {
+        let id = context.strip_prefix("spotify:station:track:")?;
+        let track = self.track_cache.get(id)?;
+        Some(format!("{} Radio", track.name))
+    }
+
     /// Encodes a context as a value accepted by `Page::decode`.
     fn context_page(context_uri: &str) -> String {
         if context_uri.ends_with(":collection") {
@@ -3067,10 +3168,9 @@ impl App {
     /// Name for a playlist created from the queue.
     pub fn queue_playlist_name(&self) -> String {
         if let Some(context) = self.playing_context_uri()
-            && let Some(id) = context.strip_prefix("spotify:station:track:")
-            && let Some(track) = self.track_cache.get(id)
+            && let Some(name) = self.station_name(&context)
         {
-            return format!("{} Radio", track.name);
+            return name;
         }
         let today = jiff::Zoned::now().strftime("%Y-%m-%d").to_string();
         format!("Queue {today}")
@@ -8120,6 +8220,78 @@ mod tests {
         assert_eq!(app.queue_playlist_name(), "Wish You Were Here Radio");
         app.assumed_context = None;
         assert!(app.queue_playlist_name().starts_with("Queue "));
+    }
+
+    /// The queue names where the playing song comes from and opens it.
+    /// A radio has no page; a context whose name has not loaded is still
+    /// named by kind so it can open.
+    #[test]
+    fn playing_from_names_the_context_and_its_page() {
+        let mut app = headless_app();
+        assert_eq!(app.playing_from(), None, "no context, no line");
+        let assume = |app: &mut App, uri: &str| {
+            app.assumed_context = Some(AssumedContext {
+                uri: uri.into(),
+                shuffle: None,
+                at: Instant::now(),
+            });
+        };
+        let named = |app: &App| {
+            let from = app.playing_from().expect("a context is playing");
+            (from.name, from.page)
+        };
+
+        app.library.playlists = Loadable::Loaded(vec![crate::api::models::Playlist {
+            id: "pl9".into(),
+            uri: "spotify:playlist:pl9".into(),
+            name: "Long Way Home".into(),
+            ..Default::default()
+        }]);
+        assume(&mut app, "spotify:playlist:pl9");
+        assert_eq!(
+            named(&app),
+            ("Long Way Home".into(), Some(Page::Playlist("pl9".into())))
+        );
+        assume(&mut app, "spotify:playlist:unloaded");
+        assert_eq!(
+            named(&app),
+            ("Playlist".into(), Some(Page::Playlist("unloaded".into())))
+        );
+
+        app.album_pages.insert(
+            "alb1".into(),
+            AlbumPage {
+                album: Loadable::Loaded(crate::api::models::Album {
+                    id: "alb1".into(),
+                    uri: "spotify:album:alb1".into(),
+                    name: "Black Sands".into(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        );
+        assume(&mut app, "spotify:album:alb1");
+        assert_eq!(
+            named(&app),
+            ("Black Sands".into(), Some(Page::Album("alb1".into())))
+        );
+
+        assume(&mut app, "spotify:user:me:collection");
+        assert_eq!(named(&app), ("Liked Songs".into(), Some(Page::LikedSongs)));
+
+        app.track_cache.insert(
+            "xyz".into(),
+            crate::api::models::Track {
+                id: Some("xyz".into()),
+                uri: "spotify:track:xyz".into(),
+                name: "Wish You Were Here".into(),
+                ..Default::default()
+            },
+        );
+        assume(&mut app, "spotify:station:track:xyz");
+        assert_eq!(named(&app), ("Wish You Were Here Radio".into(), None));
+        assume(&mut app, "spotify:station:track:uncached");
+        assert_eq!(named(&app), ("Radio".into(), None));
     }
 
     /// Song radio opens the queue panel.
