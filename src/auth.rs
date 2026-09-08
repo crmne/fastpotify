@@ -38,14 +38,7 @@ pub const WEB_REDIRECT_PORT: u16 = 8989;
 pub const REDIRECT_PATH: &str = "/login";
 
 /// Playback: what librespot needs to stream and join Spotify Connect.
-pub const PLAYBACK_SCOPES: &[&str] = &[
-    "app-remote-control",
-    "streaming",
-    "user-modify-playback-state",
-    "user-read-currently-playing",
-    "user-read-playback-state",
-    "user-read-private",
-];
+pub const PLAYBACK_SCOPES: &[&str] = &["streaming"];
 
 /// Web API: what visible features use, plus `user-read-private` for the
 /// plan (Free or Premium), which decides whether local playback is offered
@@ -133,8 +126,13 @@ pub fn begin(grant: Grant) -> Flow {
     let verifier = random_token(48);
     let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
     let state = random_token(18);
+    let show_dialog = if grant.client_id == PLAYBACK_CLIENT_ID {
+        "&show_dialog=true"
+    } else {
+        ""
+    };
     let url = format!(
-        "{AUTHORIZE_URL}?client_id={}&response_type=code&redirect_uri={}&code_challenge_method=S256&code_challenge={challenge}&state={state}&scope={}",
+        "{AUTHORIZE_URL}?client_id={}&response_type=code&redirect_uri={}&code_challenge_method=S256&code_challenge={challenge}&state={state}&scope={}{show_dialog}",
         grant.client_id,
         urlencoding::encode(&grant.redirect_uri()),
         urlencoding::encode(&grant.scopes.join(" "))
@@ -484,6 +482,7 @@ mod tests {
                 .contains(&format!("client_id={DEFAULT_WEB_CLIENT_ID}"))
         );
         assert!(flow.url.contains("8989"));
+        assert!(!flow.url.contains("show_dialog=true"));
         let playback = begin(Grant::playback());
         assert!(
             playback
@@ -491,6 +490,17 @@ mod tests {
                 .contains(&format!("client_id={PLAYBACK_CLIENT_ID}"))
         );
         assert!(playback.url.contains("8898"));
+        assert!(playback.url.contains("show_dialog=true"));
+    }
+
+    #[test]
+    fn playback_scopes_conform_to_spotify_streaming_contract() {
+        assert_eq!(PLAYBACK_SCOPES, &["streaming"]);
+        let playback = Grant::playback();
+        assert_eq!(playback.scopes, vec!["streaming".to_string()]);
+        let personal = Grant::personal_web_api("test-id").unwrap();
+        let flow = begin(personal);
+        assert!(!flow.url.contains("show_dialog=true"));
     }
 
     #[test]

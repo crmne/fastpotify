@@ -882,7 +882,13 @@ impl Worker {
                     user,
                 } => self.on_web_verified(source, *token, *user),
                 Command::PlaybackAuthorized { access_token } => {
-                    self.connect_engine(Credentials::with_access_token(access_token))
+                    let username = self.api.account().map(|a| a.as_str().to_string());
+                    let credentials = Credentials {
+                        username,
+                        auth_type: librespot_protocol::authentication::AuthenticationType::AUTHENTICATION_SPOTIFY_TOKEN,
+                        auth_data: access_token.into_bytes(),
+                    };
+                    self.connect_engine(credentials)
                 }
                 Command::EngineConnected { engine, error } => {
                     self.on_engine_connected(*engine, error)
@@ -1068,6 +1074,15 @@ impl Worker {
                 self.emit(Event::WebApp {
                     client_id: Some(token.client_id),
                 });
+                if !self.signed_in {
+                    self.signed_in = true;
+                    self.emit(Event::Auth(AuthStatus::Connected {
+                        username: user.name().to_string(),
+                    }));
+                    self.emit(Event::Api(Box::new(ApiResponse::Me(Ok(user.clone())))));
+                    let premium = user.product.as_deref().map(|product| product == "premium");
+                    self.on_account_checked(premium);
+                }
             }
         }
         self.finish_authorization(source);
