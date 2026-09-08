@@ -219,6 +219,10 @@ impl Album {
             _ => "Album",
         }
     }
+
+    pub(crate) fn is_single_release(&self) -> bool {
+        self.album_group.as_deref().or(self.album_type.as_deref()) == Some("single")
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]

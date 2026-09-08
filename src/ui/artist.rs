@@ -189,8 +189,11 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, id: &str) {
                         .collect();
                     widgets::grid(ui, |ui| {
                         for album in &albums {
-                            let subtitle =
-                                format!("{} • {}", album.year().unwrap_or(""), album.kind_label());
+                            let subtitle = format!(
+                                "{} • {}",
+                                album.year().unwrap_or(""),
+                                app.album_kind_label(album)
+                            );
                             let card = widgets::card(
                                 ui,
                                 app,

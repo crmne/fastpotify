@@ -1175,7 +1175,7 @@ fn album_hero(
         Hero {
             image: pick_image(&album.images, 300),
             liked: false,
-            kind: album.kind_label(),
+            kind: app.album_kind_label(album),
             title: &album.name,
             description: None,
             byline,

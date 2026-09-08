@@ -731,7 +731,7 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
                     name: album.name.clone(),
                     subtitle: format!(
                         "{} • {}",
-                        album.kind_label(),
+                        app.album_kind_label(album),
                         crate::api::models::join_names(
                             album.artists.iter().map(|a| a.name.as_str())
                         )

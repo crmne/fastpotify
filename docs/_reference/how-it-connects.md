@@ -134,6 +134,10 @@ uses the Web API for subsequent control requests.
 Playback runs on a separate runtime. Librespot maintains the Spotify Connect
 session, exposes this computer as a device, receives transfers, and reports
 playback state. If the session drops, it reconnects with the stored credential.
+The same session checks releases that the Web API calls `single`, so confirmed
+EPs can carry their precise label. Fastpotify deduplicates these checks while
+the app session is active. If the engine reconnects, an interrupted check may
+be tried again; if metadata is unavailable, its label stays `Single`.
 
 The engine discovers access points through `apresolve.spotify.com` and
 connects over TCP in the resolver's preference order: port 4070 first,
