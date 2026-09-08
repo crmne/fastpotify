@@ -356,11 +356,11 @@ fn edit_playlist(app: &mut App, ui: &mut egui::Ui) {
                     );
                 }
                 ui.vertical(|ui| {
-                    if cover.request.is_some() || cover.uploading {
+                    if cover.request.is_some() || cover.uploading.is_some() {
                         theme::spinner(ui, 18.0, palette.accent);
                         theme::text(
                             ui,
-                            if cover.uploading {
+                            if cover.uploading.is_some() {
                                 "Uploading cover…"
                             } else {
                                 "Choosing cover…"
@@ -413,7 +413,7 @@ fn edit_playlist(app: &mut App, ui: &mut egui::Ui) {
         });
     ui.add_space(20.0);
     let id = id.clone();
-    let busy = busy || cover.uploading || cover.request.is_some();
+    let busy = busy || cover.uploading.is_some() || cover.request.is_some();
     let name_value = name.trim().to_string();
     let description_value = description.trim().to_string();
     let public_value = *public;

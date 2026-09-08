@@ -22,8 +22,15 @@ pub struct Cover {
 pub struct Draft {
     pub selection: Option<Cover>,
     pub request: Option<u64>,
-    pub uploading: bool,
+    pub uploading: Option<u64>,
     pub error: Option<String>,
+}
+
+/// Artwork held only until Spotify returns URLs different from those before upload.
+#[derive(Clone, Debug)]
+pub struct PendingCover {
+    pub cover: Cover,
+    pub previous_urls: Vec<String>,
 }
 
 pub fn read(path: &Path) -> Result<Cover, String> {

@@ -118,6 +118,8 @@ pub enum ApiRequest {
     },
     UploadPlaylistCover {
         id: String,
+        request: u64,
+        previous_urls: Vec<String>,
         cover: crate::playlist_cover::Cover,
     },
     UpdatePlaylist {
@@ -316,6 +318,8 @@ pub enum ApiResponse {
     PlaylistCreated(ApiResult<Playlist>),
     PlaylistCoverUploaded {
         id: String,
+        request: u64,
+        previous_urls: Vec<String>,
         cover: crate::playlist_cover::Cover,
         result: ApiResult<()>,
     },
@@ -2014,7 +2018,14 @@ async fn handle(api: &ApiGateway, request: ApiRequest) -> (ApiResponse, Option<A
             public,
             description,
         } => ApiResponse::PlaylistCreated(routed!(create_playlist(&name, public, &description))),
-        ApiRequest::UploadPlaylistCover { id, cover } => ApiResponse::PlaylistCoverUploaded {
+        ApiRequest::UploadPlaylistCover {
+            id,
+            request,
+            previous_urls,
+            cover,
+        } => ApiResponse::PlaylistCoverUploaded {
+            request,
+            previous_urls,
             result: routed!(upload_playlist_cover(&id, &cover.encoded)),
             id,
             cover,
@@ -2338,6 +2349,8 @@ mod cover_routing_tests {
             .unwrap();
         let request = ApiRequest::UploadPlaylistCover {
             id: "test".into(),
+            request: 1,
+            previous_urls: vec![],
             cover: crate::playlist_cover::Cover {
                 jpeg: Vec::new().into(),
                 encoded: "".into(),

@@ -78,9 +78,10 @@ Spotify's 256 KB Base64 request limit. **Upload cover** sends that preview to
 Spotify; **Save** separately saves the name, description, and visibility.
 
 Uploads use the same shared or personal app routing as playlist edits. Requests
-are not retried through another app. The uploaded image stays visible for the
-session while Spotify propagates its artwork. The selected source file is not
-copied to the cache or settings.
+are not retried through another app. The uploaded image stays visible while
+Spotify propagates its artwork. Once Spotify returns changed artwork URLs, they
+replace the temporary preview so later cover changes from other clients can
+appear. The selected source file is not copied to the cache or settings.
 
 Image uploads require renewed Web API consent. If Fastpotify asks you to sign
 in again after updating, approve the image upload permission. Reconnect your
