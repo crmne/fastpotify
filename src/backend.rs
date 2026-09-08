@@ -423,6 +423,10 @@ pub enum ApiResponse {
 }
 
 pub enum Command {
+    Radio {
+        id: String,
+        generation: u64,
+    },
     /// Start (or restart) the Web API sign-in in the browser.
     SignIn,
     CancelSignIn,
@@ -510,6 +514,11 @@ pub struct LyricsRequest {
 }
 
 pub enum Event {
+    Radio {
+        id: String,
+        generation: u64,
+        result: Result<Box<crate::radio::Station>, String>,
+    },
     Auth(AuthStatus),
     Playback(LocalPlayback),
     /// Receivers seen on the local network that Spotify has not listed.
@@ -912,6 +921,7 @@ impl Worker {
                 Command::CheckForUpdates { manual } => self.check_for_updates(manual),
                 Command::Lyrics(request) => self.fetch_lyrics(*request),
                 Command::Rootlist => self.fetch_rootlist(),
+                Command::Radio { id, generation } => self.fetch_radio(id, generation),
                 Command::VerifyResume => self.verify_resume(),
                 Command::LoadPlaylistCache { id, generation } => {
                     self.load_playlist_cache(id, generation)
@@ -1544,6 +1554,34 @@ impl Worker {
                 .await
                 .map_err(|error| format!("{error:#}"));
             let _ = events.send(Event::Rootlist { result });
+            waker.wake();
+        });
+    }
+
+    fn fetch_radio(&self, id: String, generation: u64) {
+        let Some(engine) = self.engine.clone() else {
+            // Report this before a later EngineConnected command emits Ready,
+            // so the restored page is already failed when the UI retries it.
+            self.emit(Event::Radio {
+                id,
+                generation,
+                result: Err("Set up playback on this computer to browse song radio, then retry. Browsing will not start playback.".into()),
+            });
+            return;
+        };
+        let events = self.events.clone();
+        let waker = self.waker.clone();
+        tokio::spawn(async move {
+            let result =
+                match tokio::time::timeout(Duration::from_secs(45), engine.song_radio(&id)).await {
+                    Ok(result) => result.map_err(|error| format!("{error:#}")),
+                    Err(_) => Err("Spotify took too long to load this radio. Try again.".into()),
+                };
+            let _ = events.send(Event::Radio {
+                id,
+                generation,
+                result: result.map(Box::new),
+            });
             waker.wake();
         });
     }
@@ -2206,6 +2244,67 @@ async fn write_cached_playlist(
     let temporary = path.with_extension("json.tmp");
     tokio::fs::write(&temporary, text).await?;
     crate::util::replace_file(&temporary, path)
+}
+
+#[cfg(test)]
+mod radio_tests {
+    use super::*;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn missing_radio_session_is_reported_before_playback_ready() {
+        let root = std::env::temp_dir().join(format!(
+            "fastpotify-radio-order-test-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let dirs = AppDirs {
+            config: root.join("config"),
+            state: root.join("state"),
+            cache: root.join("cache"),
+        };
+        let http = reqwest::Client::new();
+        let art = ArtLoader::new(
+            http.clone(),
+            tokio::runtime::Handle::current(),
+            dirs.art_cache_dir(),
+        );
+        let (events, receiver) = std::sync::mpsc::channel();
+        let (commands, _receiver) = mpsc::unbounded_channel();
+        let worker = Worker::new(
+            dirs.clone(),
+            crate::app::engine_config(
+                &dirs,
+                &crate::settings::Settings::default(),
+                Arc::default(),
+                Arc::default(),
+            ),
+            None,
+            http,
+            art,
+            Arc::default(),
+            events,
+            commands,
+            Waker::default(),
+        );
+
+        worker.fetch_radio("seed".into(), 7);
+        // A connection can finish before the spawned radio task gets polled.
+        worker.emit(Event::Playback(LocalPlayback::Ready {
+            device_id: "local".into(),
+        }));
+        tokio::task::yield_now().await;
+
+        assert!(matches!(
+            receiver.try_recv().unwrap(),
+            Event::Radio { id, generation: 7, result: Err(_) } if id == "seed"
+        ));
+        assert!(matches!(
+            receiver.try_recv().unwrap(),
+            Event::Playback(LocalPlayback::Ready { .. })
+        ));
+        assert!(receiver.try_recv().is_err());
+        let _ = std::fs::remove_dir_all(root);
+    }
 }
 
 #[cfg(test)]

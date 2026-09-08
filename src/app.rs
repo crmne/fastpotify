@@ -1,5 +1,7 @@
 //! The application: state, event handling, and the actions views ask for.
 
+mod radio;
+
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -257,6 +259,7 @@ pub struct App {
     pub playlist_pages: HashMap<String, PlaylistPage>,
     load_generation: u64,
     pub album_pages: HashMap<String, AlbumPage>,
+    pub radio_pages: HashMap<String, crate::radio::RadioPage>,
     pub artist_pages: HashMap<String, ArtistPage>,
     pub show_pages: HashMap<String, ShowPage>,
     pub track_cache: HashMap<String, Track>,
@@ -563,6 +566,7 @@ impl App {
             playlist_pages: HashMap::new(),
             load_generation: 0,
             album_pages: HashMap::new(),
+            radio_pages: HashMap::new(),
             artist_pages: HashMap::new(),
             show_pages: HashMap::new(),
             track_cache: HashMap::new(),
@@ -1308,6 +1312,13 @@ impl App {
                     }
                     Err(error) => log::warn!("rootlist unavailable: {error}"),
                 },
+                Event::Radio {
+                    id,
+                    generation,
+                    result,
+                } => {
+                    self.receive_radio(id, generation, result.map(|station| *station));
+                }
                 Event::Lyrics { uri, result } => {
                     if self.lyrics_uri.as_deref() == Some(uri.as_str()) {
                         self.lyrics = match result {
@@ -1408,6 +1419,16 @@ impl App {
             LocalPlayback::Ready { device_id } => {
                 self.local_device_id = Some(device_id.clone());
                 self.local_ready = true;
+                // A restored radio page may have requested its station before
+                // the local session finished connecting.
+                if let Page::Radio(id) = self.page()
+                    && self
+                        .radio_pages
+                        .get(id)
+                        .is_some_and(|page| matches!(page.station, Loadable::Failed(_)))
+                {
+                    self.reload(self.page().clone());
+                }
                 if let Some(request) = self.queued_play.take() {
                     self.play_request(request, false);
                 }
@@ -1433,6 +1454,7 @@ impl App {
         self.home = HomeData::default();
         self.playlist_pages.clear();
         self.album_pages.clear();
+        self.radio_pages.clear();
         self.artist_pages.clear();
         self.show_pages.clear();
         self.saved.clear();
@@ -2540,6 +2562,7 @@ impl App {
                 }
                 self.request_contains(vec![format!("spotify:album:{id}")]);
             }
+            Page::Radio(id) => self.load_radio(&id),
             Page::Artist(id) => {
                 let page = self.artist_pages.entry(id.clone()).or_default();
                 if page.artist.needs_load() {
@@ -2853,6 +2876,16 @@ impl App {
             }
             Page::Album(id) => {
                 self.album_pages.remove(id);
+            }
+            Page::Radio(id) => {
+                self.radio_pages.remove(id);
+                if self
+                    .selection
+                    .as_ref()
+                    .is_some_and(|(owner, _, _)| owner == &page)
+                {
+                    self.selection = None;
+                }
             }
             Page::Artist(id) => {
                 self.artist_pages.remove(id);
@@ -5346,6 +5379,7 @@ impl App {
                 }));
                 self.optimistic_playing = Some((true, Instant::now()));
                 // Show the station queue immediately.
+                self.queue_tab = QueueTab::Queue;
                 self.assumed_context = Some(AssumedContext {
                     uri: station,
                     shuffle: None,
@@ -8120,6 +8154,35 @@ mod tests {
         assert_eq!(app.queue_playlist_name(), "Wish You Were Here Radio");
         app.assumed_context = None;
         assert!(app.queue_playlist_name().starts_with("Queue "));
+    }
+
+    #[test]
+    fn song_radio_navigation_does_not_start_playback() {
+        let mut app = headless_app();
+        app.backend.set_offline(true);
+        app.open(Page::LikedSongs);
+        let radio = Page::from_uri("spotify:station:track:3JA9Jsuxr4xgHXEawAdCp4")
+            .expect("a station must have a browsable page");
+        app.open(radio.clone());
+        assert_eq!(app.page(), &radio);
+        assert!(app.optimistic_playing.is_none());
+        assert!(app.assumed_context.is_none());
+        assert!(app.queued_play.is_none());
+        assert!(app.can_go_back());
+    }
+
+    #[test]
+    fn song_radio_start_selects_queue_instead_of_recents() {
+        let mut app = headless_app();
+        app.backend.set_offline(true);
+        app.show_queue_panel = true;
+        app.queue_tab = QueueTab::Recents;
+        app.apply(
+            Action::PlayTrackRadio("spotify:track:xyz".into()),
+            &egui::Context::default(),
+        );
+        assert!(app.show_queue_panel);
+        assert_eq!(app.queue_tab, QueueTab::Queue);
     }
 
     /// Song radio opens the queue panel.

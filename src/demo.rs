@@ -280,6 +280,16 @@ pub fn populate(app: &mut App) {
     app.library.playlists = Loadable::Loaded(playlists.clone());
 
     let tracks: Vec<Track> = (0..40).map(track).collect();
+    app.radio_pages.insert(
+        "t0".into(),
+        crate::radio::RadioPage {
+            station: Loadable::Loaded(crate::radio::Station {
+                seed: tracks[0].clone(),
+                tracks: tracks.clone(),
+            }),
+            generation: 1,
+        },
+    );
     for (index, track) in tracks.iter().enumerate() {
         app.saved.insert(track.uri.clone(), index % 3 == 0);
     }
@@ -1770,6 +1780,7 @@ mod tests {
             Page::Playlist("pl1".into()),
             Page::Playlist("missing".into()),
             Page::Album("alb0".into()),
+            Page::Radio("t0".into()),
             Page::Artist("art0".into()),
             Page::Show("sh0".into()),
             Page::Queue,
