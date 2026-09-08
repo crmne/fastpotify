@@ -889,8 +889,8 @@ struct AlbumTypeLookup {
 }
 
 impl AlbumTypeLookup {
-    fn enqueue(&mut self, signed_in: bool, uris: Vec<String>) {
-        if !signed_in {
+    fn enqueue(&mut self, signed_in: bool, premium: Option<bool>, uris: Vec<String>) {
+        if !signed_in || premium == Some(false) {
             return;
         }
         self.pending
@@ -930,11 +930,15 @@ impl AlbumTypeLookup {
         }
     }
 
-    fn reset_session(&mut self) {
-        self.session_generation = self.session_generation.wrapping_add(1);
+    fn clear_engine_work(&mut self) {
         self.retire_engine();
         self.pending.clear();
         self.seen.clear();
+    }
+
+    fn reset_session(&mut self) {
+        self.session_generation = self.session_generation.wrapping_add(1);
+        self.clear_engine_work();
     }
 }
 
@@ -1983,7 +1987,7 @@ impl Worker {
     fn on_account_checked(&mut self, premium: Option<bool>) {
         self.premium = premium;
         if premium == Some(false) {
-            self.album_type_lookup.retire_engine();
+            self.album_type_lookup.clear_engine_work();
             if let Some(engine) = self.engine.take() {
                 engine.shutdown();
             }
@@ -2123,7 +2127,8 @@ impl Worker {
     }
 
     fn fetch_album_types(&mut self, uris: Vec<String>) {
-        self.album_type_lookup.enqueue(self.signed_in, uris);
+        self.album_type_lookup
+            .enqueue(self.signed_in, self.premium, uris);
         self.start_album_type_lookup();
     }
 
@@ -2831,10 +2836,14 @@ mod album_type_lookup_tests {
     #[test]
     fn signed_out_requests_are_dropped_and_valid_pending_work_is_deduplicated() {
         let mut lookup = AlbumTypeLookup::default();
-        lookup.enqueue(false, vec!["signed-out".into()]);
+        lookup.enqueue(false, None, vec!["signed-out".into()]);
         assert!(lookup.pending.is_empty());
 
-        lookup.enqueue(true, vec!["first".into(), "first".into(), "second".into()]);
+        lookup.enqueue(
+            true,
+            None,
+            vec!["first".into(), "first".into(), "second".into()],
+        );
         assert_eq!(lookup.pending.len(), 2);
 
         let first = lookup.next().expect("first request when an engine appears");
@@ -2847,15 +2856,15 @@ mod album_type_lookup_tests {
     #[test]
     fn results_from_a_signed_out_session_are_rejected_after_a_new_session_starts() {
         let mut lookup = AlbumTypeLookup::default();
-        lookup.enqueue(true, vec!["old".into()]);
+        lookup.enqueue(true, None, vec!["old".into()]);
         let old = lookup.next().expect("old session request");
 
         lookup.reset_session();
         assert!(!lookup.finish(&old));
-        lookup.enqueue(false, vec!["after-logout".into()]);
+        lookup.enqueue(false, None, vec!["after-logout".into()]);
         assert!(lookup.pending.is_empty());
 
-        lookup.enqueue(true, vec!["new".into()]);
+        lookup.enqueue(true, None, vec!["new".into()]);
         let new = lookup.next().expect("new session request");
         assert_ne!(old.session_generation, new.session_generation);
         assert!(!lookup.finish(&old));
@@ -2865,13 +2874,13 @@ mod album_type_lookup_tests {
     #[test]
     fn reconnect_requeues_active_work_for_the_new_engine() {
         let mut lookup = AlbumTypeLookup::default();
-        lookup.enqueue(true, vec!["active".into(), "waiting".into()]);
+        lookup.enqueue(true, None, vec!["active".into(), "waiting".into()]);
         let retired = lookup.next().expect("retired engine request");
 
         lookup.requeue_active_for_new_engine();
         assert_eq!(lookup.pending.front().map(String::as_str), Some("active"));
 
-        lookup.enqueue(true, vec!["active".into()]);
+        lookup.enqueue(true, None, vec!["active".into()]);
         assert_eq!(lookup.pending.len(), 2, "external duplicates stay ignored");
 
         let replacement = lookup.next().expect("new engine request");
@@ -2889,13 +2898,49 @@ mod album_type_lookup_tests {
         let mut lookup = AlbumTypeLookup::default();
 
         for uri in ["error", "timeout"] {
-            lookup.enqueue(true, vec![uri.into()]);
+            lookup.enqueue(true, None, vec![uri.into()]);
             let request = lookup.next().expect("request before failure");
             assert!(lookup.finish(&request));
 
-            lookup.enqueue(true, vec![uri.into()]);
+            lookup.enqueue(true, None, vec![uri.into()]);
             assert!(lookup.pending.is_empty(), "failed request must not retry");
         }
+    }
+
+    #[test]
+    fn non_premium_status_clears_and_invalidates_all_engine_work() {
+        let mut lookup = AlbumTypeLookup::default();
+        lookup.enqueue(true, None, vec!["active".into(), "pending".into()]);
+        let active = lookup.next().expect("request before account check");
+        let session_generation = lookup.session_generation;
+
+        lookup.clear_engine_work();
+
+        assert_eq!(lookup.session_generation, session_generation);
+        assert_ne!(lookup.engine_generation, active.engine_generation);
+        assert!(lookup.active.is_none());
+        assert!(lookup.pending.is_empty());
+        assert!(lookup.seen.is_empty());
+        assert!(!lookup.finish(&active));
+
+        lookup.enqueue(true, Some(false), vec!["after-check".into()]);
+        assert!(lookup.pending.is_empty());
+        assert!(lookup.seen.is_empty());
+    }
+
+    #[test]
+    fn unknown_and_premium_accounts_accept_album_type_work() {
+        let mut lookup = AlbumTypeLookup::default();
+
+        lookup.enqueue(true, None, vec!["unknown".into()]);
+        let unknown = lookup.next().expect("unknown account request");
+        assert_eq!(unknown.uri, "unknown");
+        assert!(lookup.finish(&unknown));
+
+        lookup.enqueue(true, Some(true), vec!["premium".into()]);
+        let premium = lookup.next().expect("premium account request");
+        assert_eq!(premium.uri, "premium");
+        assert!(lookup.finish(&premium));
     }
 }
 
