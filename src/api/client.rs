@@ -262,6 +262,8 @@ impl Drop for ActivityGuard<'_> {
 }
 
 pub struct ApiClient {
+    #[cfg(test)]
+    base_url: Option<String>,
     http: reqwest::Client,
     tokens: Mutex<Option<TokenProvider>>,
     limiter: Semaphore,
@@ -281,6 +283,8 @@ impl ApiClient {
         source: ApiSource,
     ) -> Self {
         Self {
+            #[cfg(test)]
+            base_url: None,
             http,
             tokens: Mutex::new(None),
             limiter: Semaphore::new(MAX_IN_FLIGHT),
@@ -328,10 +332,25 @@ impl ApiClient {
         query: &[(&str, String)],
         body: Option<&Value>,
     ) -> Result<String> {
+        self.send_body(method, path, query, body, None).await
+    }
+
+    async fn send_body(
+        &self,
+        method: Method,
+        path: &str,
+        query: &[(&str, String)],
+        body: Option<&Value>,
+        jpeg: Option<&str>,
+    ) -> Result<String> {
         let url = if path.starts_with("http") {
             path.to_string()
         } else {
-            format!("{BASE_URL}{path}")
+            #[cfg(test)]
+            let base = self.base_url.as_deref().unwrap_or(BASE_URL);
+            #[cfg(not(test))]
+            let base = BASE_URL;
+            format!("{base}{path}")
         };
         let provider = self.provider()?;
         let started = Instant::now();
@@ -356,7 +375,11 @@ impl ApiClient {
                 .request(method.clone(), &url)
                 .bearer_auth(&token)
                 .query(query);
-            if let Some(body) = body {
+            if let Some(jpeg) = jpeg {
+                request = request
+                    .header(reqwest::header::CONTENT_TYPE, "image/jpeg")
+                    .body(jpeg.to_owned());
+            } else if let Some(body) = body {
                 request = request.json(body);
             } else if matches!(method, Method::PUT | Method::POST | Method::DELETE) {
                 request = request.header(reqwest::header::CONTENT_LENGTH, "0");
@@ -700,6 +723,24 @@ impl ApiClient {
         serde_json::from_value(value).map_err(|error| ApiError::Decode(error.to_string()))
     }
 
+    pub async fn upload_playlist_cover(&self, id: &str, encoded: &str) -> Result<()> {
+        if encoded.is_empty() || encoded.len() > crate::playlist_cover::MAX_PAYLOAD {
+            return Err(ApiError::Status {
+                status: 413,
+                message: "Choose a smaller image.".into(),
+            });
+        }
+        self.send_body(
+            Method::PUT,
+            &format!("/playlists/{id}/images"),
+            &[],
+            None,
+            Some(encoded),
+        )
+        .await?;
+        Ok(())
+    }
+
     pub async fn update_playlist(
         &self,
         id: &str,
@@ -1023,6 +1064,92 @@ impl ApiClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn cover_upload_sends_raw_base64_jpeg_and_reports_spotify_errors() {
+        use std::io::{Read, Write};
+        for status in [202, 403, 413] {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = std::thread::spawn(move || {
+                let (mut socket, _) = listener.accept().unwrap();
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut received = Vec::new();
+                let mut buffer = [0; 1024];
+                loop {
+                    let count = socket.read(&mut buffer).unwrap();
+                    assert!(count > 0);
+                    received.extend_from_slice(&buffer[..count]);
+                    if let Some(end) = received.windows(4).position(|part| part == b"\r\n\r\n") {
+                        let headers = String::from_utf8_lossy(&received[..end]).to_lowercase();
+                        let length: usize = headers
+                            .lines()
+                            .find_map(|line| line.strip_prefix("content-length: "))
+                            .unwrap()
+                            .parse()
+                            .unwrap();
+                        if received.len() >= end + 4 + length {
+                            break;
+                        }
+                    }
+                }
+                write!(
+                    socket,
+                    "HTTP/1.1 {status} Test\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                )
+                .unwrap();
+                received
+            });
+            let http = reqwest::Client::new();
+            let mut client = ApiClient::new(
+                http.clone(),
+                Arc::new(NetActivity::default()),
+                20,
+                50,
+                ApiSource::Shared,
+            );
+            client.base_url = Some(format!("http://{address}"));
+            client.set_token_provider(Some(TokenProvider::Web(WebTokens::new(
+                http,
+                crate::auth::StoredToken {
+                    access_token: "test-only".into(),
+                    expires_at: u64::MAX,
+                    ..Default::default()
+                },
+                std::env::temp_dir().join("unused-cover-token"),
+                ApiSource::Shared,
+            ))));
+            let result = client
+                .upload_playlist_cover("test-playlist", "/9j/test")
+                .await;
+            if status == 202 {
+                assert!(result.is_ok());
+            } else {
+                assert_eq!(result.unwrap_err().status(), Some(status));
+            }
+            let received = String::from_utf8(server.join().unwrap()).unwrap();
+            assert!(received.starts_with("PUT /playlists/test-playlist/images HTTP/1.1"));
+            assert!(received.to_lowercase().contains("content-type: image/jpeg"));
+            assert_eq!(received.split("\r\n\r\n").nth(1), Some("/9j/test"));
+        }
+    }
+
+    #[tokio::test]
+    async fn oversized_cover_is_rejected_before_authentication_or_network() {
+        let client = ApiClient::new(
+            reqwest::Client::new(),
+            Arc::new(NetActivity::default()),
+            20,
+            50,
+            ApiSource::Shared,
+        );
+        let result = client
+            .upload_playlist_cover("test", &"x".repeat(crate::playlist_cover::MAX_PAYLOAD + 1))
+            .await;
+        assert_eq!(result.unwrap_err().status(), Some(413));
+    }
 
     #[test]
     fn play_request_body_shapes() {
