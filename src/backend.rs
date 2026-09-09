@@ -31,6 +31,8 @@ pub type ApiResult<T> = Result<T, ApiError>;
 
 const PREMIUM_NEEDED: &str = "Local playback needs Spotify Premium.";
 const ALBUM_TYPE_TIMEOUT: Duration = Duration::from_secs(30);
+// Keep at most one full Web API album page outstanding for a playback engine.
+const MAX_PENDING_ALBUM_TYPES: usize = 50;
 pub const PLAYLIST_PAGE_SIZE: u32 = 50;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -893,8 +895,14 @@ impl AlbumTypeLookup {
         if !signed_in || premium == Some(false) {
             return;
         }
-        self.pending
-            .extend(uris.into_iter().filter(|uri| self.seen.insert(uri.clone())));
+        for uri in uris {
+            if self.pending.len() + usize::from(self.active.is_some()) >= MAX_PENDING_ALBUM_TYPES {
+                break;
+            }
+            if self.seen.insert(uri.clone()) {
+                self.pending.push_back(uri);
+            }
+        }
     }
 
     fn next(&mut self) -> Option<AlbumTypeRequest> {
@@ -3136,6 +3144,7 @@ mod authorization_tests {
         let shared = worker.credentials.lease(CredentialSlot::Shared);
         let playback = worker.credentials.lease(CredentialSlot::Playback);
         let attempt = worker.authorization_attempt;
+        let album_type_session = worker.album_type_lookup.session_generation;
         let token = crate::auth::StoredToken {
             client_id: crate::auth::DEFAULT_WEB_CLIENT_ID.into(),
             access_token: "dummy-access".into(),
@@ -3187,6 +3196,7 @@ mod authorization_tests {
             .unwrap();
         commands
             .send(Command::EngineConnected {
+                session_generation: album_type_session,
                 engine: Box::new(None),
                 error: Some("late engine error".into()),
                 lease: playback,
@@ -3303,6 +3313,29 @@ mod authorization_tests {
                 .try_iter()
                 .any(|event| matches!(event, Event::Auth(AuthStatus::Connected { .. })))
         );
+    }
+
+    #[test]
+    fn premium_without_local_playback_keeps_album_type_work_bounded() {
+        let (runtime, mut worker, _) = worker("album-types-without-playback");
+        let _entered = runtime.enter();
+        verify(&mut worker, ApiSource::Shared, "alice");
+        assert_eq!(worker.premium, Some(true));
+        assert!(worker.playback_grant.is_none());
+        assert!(worker.engine.is_none());
+
+        worker.fetch_album_types(
+            (0..MAX_PENDING_ALBUM_TYPES + 10)
+                .map(|index| format!("spotify:album:{index}"))
+                .collect(),
+        );
+
+        assert!(worker.album_type_lookup.active.is_none());
+        assert_eq!(
+            worker.album_type_lookup.pending.len(),
+            MAX_PENDING_ALBUM_TYPES
+        );
+        assert_eq!(worker.album_type_lookup.seen.len(), MAX_PENDING_ALBUM_TYPES);
     }
 
     #[test]
