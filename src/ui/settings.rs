@@ -46,12 +46,19 @@ fn filtered_row(
     description: &str,
     control: impl FnOnce(&mut egui::Ui),
 ) {
+    let needle = needle.trim().to_lowercase();
     if needle.is_empty()
-        || section.to_lowercase().contains(needle)
-        || row_matches(needle, title, description)
+        || section.to_lowercase().contains(&needle)
+        || row_matches(&needle, title, description)
     {
         widgets::setting_row(ui, palette, title, description, control);
     }
+}
+
+/// Forget the search text, so a flow that lands on a specific row (like
+/// the Personal App setup) always finds that row visible and focusable.
+pub(crate) fn clear_search(ctx: &egui::Context) {
+    ctx.data_mut(|data| data.remove::<String>(egui::Id::new(SETTINGS_FILTER_ID)));
 }
 
 fn section(

@@ -11,7 +11,6 @@ Home, and hold `Shift` while turning the mouse wheel. The shelf moves while
 the surrounding page stays put. Release `Shift` to scroll the page normally.
 
 ## Dragging beyond the visible list
-
 On `main`, for the release after 0.7.1, hold a dragged song near the top or
 bottom of an editable playlist's visible area to scroll. Scrolling gets faster
 closer to the edge and stops when you move away or release the mouse. This
@@ -32,6 +31,12 @@ of the playlist scrolls to positions beyond the visible rows.
 
 The Library sidebar also scrolls near its edges when you drag a song toward a
 playlist or reorder its entries. Only the list under the pointer scrolls.
+
+## Finding a setting
+
+The Settings page has its own search field under the title. Type to narrow
+the page to matching rows; sections without matches disappear. Clear the
+field to see everything again.
 
 ## Keyboard and screen readers
 
