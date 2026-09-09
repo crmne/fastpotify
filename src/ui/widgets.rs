@@ -2136,6 +2136,141 @@ pub fn search_field(
     response
 }
 
+/// What was chosen from the sort dropdown menu.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SortPick {
+    Clear,
+    Set(crate::model::TableSort),
+}
+
+/// A dropdown menu for choosing how to sort a track list.
+pub fn sort_menu(
+    ui: &mut Ui,
+    palette: &Palette,
+    sort: Option<crate::model::TableSort>,
+    show_added_by: bool,
+) -> Option<SortPick> {
+    use crate::model::SortColumn;
+    let label = match sort {
+        None => "Custom order",
+        Some(s) => match s.column {
+            SortColumn::Title => "Title",
+            SortColumn::Artist => "Artist",
+            SortColumn::Album => "Album",
+            SortColumn::Added => "Date added",
+            SortColumn::Duration => "Duration",
+            SortColumn::AddedBy => "Added by",
+            SortColumn::Index => {
+                if s.ascending {
+                    "Original order"
+                } else {
+                    "Original order, reversed"
+                }
+            }
+        },
+    };
+    let font = theme::medium(13.0);
+    let is_active = sort.is_some();
+    let text_color = if is_active {
+        palette.text
+    } else {
+        palette.secondary
+    };
+    let galley = ui.painter().layout_no_wrap(
+        crate::bidi::display_text(label).into_owned(),
+        font,
+        text_color,
+    );
+    let size = vec2(galley.size().x + 44.0, 34.0);
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    if ui.is_rect_visible(rect) {
+        let hovered = response.hovered();
+        let fill = if hovered {
+            palette.surface_hover
+        } else {
+            palette.surface
+        };
+        ui.painter().rect_filled(rect, rect.height() / 2.0, fill);
+        if is_active {
+            ui.painter().rect_stroke(
+                rect,
+                rect.height() / 2.0,
+                Stroke::new(1.0, palette.outline),
+                egui::StrokeKind::Inside,
+            );
+        }
+        let text_pos = pos2(rect.left() + 12.0, rect.center().y - galley.size().y / 2.0);
+        let color = if hovered || is_active {
+            palette.text
+        } else {
+            palette.secondary
+        };
+        ui.painter().galley(text_pos, galley, color);
+
+        let icon = match sort {
+            Some(s) if s.ascending => Icon::ChevronUp,
+            _ => Icon::ChevronDown,
+        };
+        let icon_rect = Rect::from_center_size(
+            pos2(rect.right() - 12.0 - 7.0, rect.center().y),
+            Vec2::splat(14.0),
+        );
+        icon.image(color, 14.0).paint_at(ui, icon_rect);
+    }
+    let response = response
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text("Sort");
+
+    let mut picked = None;
+    egui::Popup::menu(&response)
+        .frame(menu_frame(palette))
+        .show(|ui| {
+            ui.set_min_width(170.0);
+            ui.add_space(2.0);
+
+            let custom_active = sort.is_none();
+            if menu_item(
+                ui,
+                palette,
+                custom_active.then_some(Icon::Check),
+                "Custom order",
+            ) {
+                picked = Some(SortPick::Clear);
+            }
+            menu_separator(ui, palette);
+
+            let mut option = |col: SortColumn, name: &str| {
+                let active = sort.is_some_and(|s| s.column == col);
+                let icon = if active { Some(Icon::Check) } else { None };
+                if menu_item(ui, palette, icon, name) {
+                    let next = match sort {
+                        Some(s) if s.column == col => crate::model::TableSort {
+                            column: col,
+                            ascending: !s.ascending,
+                        },
+                        _ => crate::model::TableSort {
+                            column: col,
+                            ascending: true,
+                        },
+                    };
+                    picked = Some(SortPick::Set(next));
+                }
+            };
+
+            option(SortColumn::Title, "Title");
+            option(SortColumn::Artist, "Artist");
+            option(SortColumn::Album, "Album");
+            option(SortColumn::Added, "Date added");
+            option(SortColumn::Duration, "Duration");
+            if show_added_by {
+                option(SortColumn::AddedBy, "Added by");
+            }
+            ui.add_space(2.0);
+        });
+
+    picked
+}
+
 /// A toggle drawn as a switch.
 pub fn switch(ui: &mut Ui, palette: &Palette, label: &str, on: &mut bool) -> egui::Response {
     let size = vec2(40.0, 22.0);
@@ -2486,5 +2621,33 @@ mod tests {
         );
         assert!(!painted.is_empty());
         assert_eq!(painted[0], 0);
+    }
+
+    #[test]
+    fn sort_menu_renders_with_both_custom_and_active_order() {
+        use crate::model::{SortColumn, TableSort};
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let palette = Palette::dark();
+        let size = vec2(300.0, 100.0);
+        let clip = Rect::from_min_size(pos2(0.0, 0.0), size);
+        run_on(&ctx, size, clip, Vec::new(), |ui| {
+            let pick = sort_menu(ui, &palette, None, true);
+            assert_eq!(pick, None);
+
+            let sort = Some(TableSort {
+                column: SortColumn::Artist,
+                ascending: true,
+            });
+            let pick = sort_menu(ui, &palette, sort, false);
+            assert_eq!(pick, None);
+
+            let sort_reversed_index = Some(TableSort {
+                column: SortColumn::Index,
+                ascending: false,
+            });
+            let pick = sort_menu(ui, &palette, sort_reversed_index, true);
+            assert_eq!(pick, None);
+        });
     }
 }
