@@ -32,6 +32,11 @@ finish-args:
   - --talk-name=org.kde.StatusNotifierWatcher
   - --own-name=org.mpris.MediaPlayer2.fastpotify
   - --own-name=rocks.fastpotify.Instance
+  # Sign-in tokens, playback credentials, the session, history and the run's
+  # log live under the state directory. Flatpak binds config, data and cache
+  # into the app's per-user directory but not state, so persist it or a quit
+  # signs the listener out and drops the approved devices.
+  - --persist=.local/state
 build-options:
   append-path: /usr/lib/sdk/rust-stable/bin
   env:
