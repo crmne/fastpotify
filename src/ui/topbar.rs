@@ -334,35 +334,57 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 // A newer release. Most people never visit a releases page,
                 // so the app says so, quietly, until they do.
                 if let Some(update) = app.update.clone() {
-                    let label = format!("Update to {}", update.version);
-                    let galley =
-                        ui.painter()
-                            .layout_no_wrap(label, theme::medium(12.5), palette.accent);
-                    let size = galley.size() + vec2(28.0, 12.0);
-                    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+                    let install_label = format!("Update to {}", update.version);
+                    let install_galley =
+                        ui.painter().layout_no_wrap(install_label, theme::medium(12.5), palette.accent);
+                    let install_size = install_galley.size() + vec2(28.0, 12.0);
+                    let (install_rect, install_response) =
+                        ui.allocate_exact_size(install_size, Sense::click());
                     ui.painter().rect_filled(
-                        rect,
+                        install_rect,
                         CornerRadius::same(14),
                         palette.accent.gamma_multiply(0.16),
                     );
                     let icon_rect = egui::Rect::from_center_size(
-                        pos2(rect.left() + 14.0, rect.center().y),
+                        pos2(install_rect.left() + 14.0, install_rect.center().y),
                         Vec2::splat(13.0),
                     );
-                    Icon::Info
+                    Icon::ExternalLink
                         .image(palette.accent, 13.0)
                         .paint_at(ui, icon_rect);
                     ui.painter().galley(
-                        pos2(rect.left() + 24.0, rect.center().y - galley.size().y / 2.0),
-                        galley,
+                        pos2(install_rect.left() + 24.0, install_rect.center().y - install_galley.size().y / 2.0),
+                        install_galley,
                         palette.accent,
                     );
-                    if response
+                    if install_response
                         .on_hover_cursor(egui::CursorIcon::PointingHand)
-                        .on_hover_text(format!(
-                            "Version {} is available. Open the download page.",
-                            update.version
-                        ))
+                        .on_hover_text(format!("Download and install v{}.", update.version))
+                        .clicked()
+                    {
+                        app.actions.push(Action::UpdateNow);
+                    }
+                    // Release notes: small link to the right of the install pill.
+                    ui.add_space(6.0);
+                    let notes_label = "release notes";
+                    let notes_galley =
+                        ui.painter().layout_no_wrap(notes_label.to_string(), theme::regular(11.0), palette.secondary);
+                    let notes_size = notes_galley.size() + vec2(12.0, 8.0);
+                    let (notes_rect, notes_response) =
+                        ui.allocate_exact_size(notes_size, Sense::click());
+                    ui.painter().rect_filled(
+                        notes_rect,
+                        CornerRadius::same(8),
+                        palette.surface.gamma_multiply(0.5),
+                    );
+                    ui.painter().galley(
+                        pos2(notes_rect.left() + 6.0, notes_rect.center().y - notes_galley.size().y / 2.0),
+                        notes_galley,
+                        palette.secondary,
+                    );
+                    if notes_response
+                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                        .on_hover_text(format!("Release notes for v{}.", update.version))
                         .clicked()
                     {
                         app.actions.push(Action::OpenUrl(update.url));

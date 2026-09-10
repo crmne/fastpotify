@@ -478,6 +478,10 @@ pub enum Command {
     CheckForUpdates {
         manual: bool,
     },
+    /// Download the newer release for the current platform and replace this
+    /// binary, then re-launch. Only meaningful on Linux, where the app ships
+    /// as a plain executable; other platforms keep opening the release page.
+    UpdateNow,
     /// The words of a track, from LRCLIB.
     Lyrics(Box<LyricsRequest>),
     /// The account's playlist tree, folders and all, from the session.
@@ -529,6 +533,10 @@ pub enum Event {
     UpdateChecked {
         manual: bool,
         result: Result<Option<crate::updates::Release>, String>,
+    },
+    /// The update download and self-replacement finished, or failed.
+    UpdateNow {
+        result: Result<std::path::PathBuf, String>,
     },
     /// Track lyrics, or `None` when unavailable.
     Lyrics {
@@ -910,6 +918,7 @@ impl Worker {
                 Command::DiscoverReceivers => self.discover_receivers(),
                 Command::ActivateReceiver(receiver) => self.activate_receiver(*receiver),
                 Command::CheckForUpdates { manual } => self.check_for_updates(manual),
+                Command::UpdateNow => self.update_now(),
                 Command::Lyrics(request) => self.fetch_lyrics(*request),
                 Command::Rootlist => self.fetch_rootlist(),
                 Command::VerifyResume => self.verify_resume(),
@@ -1490,6 +1499,22 @@ impl Worker {
                 .await
                 .map_err(|error| format!("{error:#}"));
             let _ = events.send(Event::UpdateChecked { manual, result });
+            waker.wake();
+        });
+    }
+
+    fn update_now(&self) {
+        let http = self.http.clone();
+        let events = self.events.clone();
+        let waker = self.waker.clone();
+        let dirs = self.dirs.clone();
+        tokio::spawn(async move {
+            let result = async {
+                let release = crate::updates::newer_release(&http).await?
+                    .ok_or_else(|| anyhow::anyhow!("no newer release available"))?;
+                crate::updates::apply_update(&http, &dirs, &release).await
+            }.await;
+            let _ = events.send(Event::UpdateNow { result: result.map_err(|e| e.to_string()) });
             waker.wake();
         });
     }

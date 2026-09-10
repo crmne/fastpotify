@@ -98,6 +98,10 @@ impl AppDirs {
         self.cache.join("audio")
     }
 
+    pub fn cache_dir(&self) -> PathBuf {
+        self.cache.clone()
+    }
+
     pub fn art_cache_dir(&self) -> PathBuf {
         self.cache.join("art")
     }

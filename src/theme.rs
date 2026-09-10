@@ -420,6 +420,7 @@ pub enum Icon {
     Watch,
     X,
     Zap,
+    Download,
 }
 
 const ICONS: &[(Icon, &str, &[u8])] = icons! {
@@ -777,7 +778,8 @@ pub fn soft_button(
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
-/// An animated busy indicator paced independently of the graphics driver.
+/// An animated busy indicator paced independently of the graphics driver. Returns
+/// the response so callers can attach tooltips etc.
 pub fn spinner(ui: &mut egui::Ui, size: f32, color: Color32) -> Response {
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
     if ui.is_rect_visible(rect) {

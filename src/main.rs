@@ -61,6 +61,11 @@ struct Cli {
     #[cfg(feature = "demo")]
     #[arg(long, value_name = "WIDTHxHEIGHT", value_parser = parse_demo_size)]
     demo_size: Option<[f32; 2]>,
+
+    /// Path to the freshly installed binary from an update, on Linux.
+    #[cfg(target_os = "linux")]
+    #[arg(long)]
+    update_restart: Option<std::path::PathBuf>,
 }
 
 /// Remote control of the running instance, for Raycast scripts, launchers,
@@ -284,11 +289,20 @@ fn main() -> eframe::Result<()> {
         std::process::exit(fastpotify::milkdrop::child::run(args));
     }
 
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
     // A control launch is a client, not a second app: talk to the running
     // instance and exit before touching the log file it is writing to.
     if let Some(control) = cli.control {
         std::process::exit(run_control(control));
+    }
+    // An update restart launches the freshly installed binary. It is handled
+    // before anything that starts a second instance or touches the log.
+    // On Linux the new process skips the single-instance guard so it can
+    // take over from the process that spawned it.
+    let update_restart = cli.update_restart.take();
+    #[cfg(target_os = "linux")]
+    if let Some(path) = update_restart {
+        std::process::exit(launch_updated_binary(path));
     }
     // A link is read before anything starts: one that is not a Spotify
     // link ends the launch here rather than reaching the running instance.
@@ -327,6 +341,35 @@ fn main() -> eframe::Result<()> {
     let mut settings = settings::Settings::load(&dirs.settings_file());
     if let Some(name) = cli.device_name {
         settings.device_name = name;
+    }
+
+    // On Linux, if the user wants auto-update on launch, check for updates
+    // before the app fully initializes. If an update is found, download,
+    // verify, replace the binary, and exec the new one.
+    #[cfg(target_os = "linux")]
+    if settings.update_mode == settings::UpdateMode::OnLaunch && settings.check_for_updates {
+        use reqwest::Client;
+        let http = Client::builder()
+            .user_agent(concat!("fastpotify/", env!("CARGO_PKG_VERSION")))
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .expect("unable to build the HTTP client");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("unable to start the update runtime");
+        if let Some(release) = runtime.block_on(async {
+            fastpotify::updates::newer_release(&http).await.ok().flatten()
+        }) {
+            let dirs_clone = dirs.clone();
+            if let Ok(path) = runtime.block_on(async {
+                fastpotify::updates::apply_update(&http, &dirs_clone, &release).await
+            }) {
+                use std::os::unix::process::CommandExt;
+                let error = std::process::Command::new(&path).exec();
+                eprintln!("failed to exec updated binary: {error}");
+            }
+        }
     }
 
     // The application (audio engine, Web API, MPRIS, tray) outlives any
@@ -911,6 +954,17 @@ fn app_icon() -> egui::IconData {
         rgba: util::app_icon_rgba(SIZE),
         width: SIZE as u32,
         height: SIZE as u32,
+    }
+}
+
+/// Replaces the running process image with the newly installed one on Linux.
+/// The calling process must be the one whose binary was overwritten.
+#[cfg(target_os = "linux")]
+fn launch_updated_binary(path: std::path::PathBuf) -> i32 {
+    let mut cmd = std::process::Command::new(path);
+    match cmd.spawn() {
+        Ok(mut child) => { let _ = child.wait(); 0 }
+        Err(error) => { eprintln!("Fastpotify update failed to relaunch: {error}"); 3 }
     }
 }
 

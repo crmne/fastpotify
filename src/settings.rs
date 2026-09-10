@@ -34,6 +34,19 @@ impl VisMode {
     }
 }
 
+/// What to do when a newer release is found.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UpdateMode {
+    /// Check for updates silently; only notify the user.
+    Manual,
+    /// Download and install updates automatically on launch.
+    #[default]
+    OnLaunch,
+    /// Check and notify, but let the user choose when to install.
+    OnClick,
+}
+
 impl ThemeChoice {
     pub const ALL: [ThemeChoice; 3] = [Self::Dark, Self::Light, Self::System];
 
@@ -94,6 +107,9 @@ pub struct Settings {
     pub playback_authorized: bool,
     /// Closing the window hides to the tray and keeps the music playing.
     pub keep_playing_in_background: bool,
+    /// What to do when a newer release is found.
+    #[serde(default)]
+    pub update_mode: UpdateMode,
     /// Ask GitHub once a day whether a newer release exists.
     pub check_for_updates: bool,
     /// Context URIs pinned to the top of the sidebar, in pin order.
@@ -182,6 +198,7 @@ impl Default for Settings {
             personal_app_nudge_at: None,
             playback_authorized: false,
             keep_playing_in_background: true,
+            update_mode: UpdateMode::default(),
             check_for_updates: true,
             pinned_contexts: Vec::new(),
             sidebar_order: Vec::new(),

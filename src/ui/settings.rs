@@ -4,8 +4,8 @@ use egui::{Align, CornerRadius, Frame, Layout, Margin, Stroke, Vec2};
 
 use crate::api::models::pick_image;
 use crate::app::App;
-use crate::model::{Action, Dialog};
-use crate::settings::ThemeChoice;
+use crate::model::{Action};
+use crate::settings::{ThemeChoice, UpdateMode};
 use crate::theme::{self, Icon, Palette};
 
 use super::widgets;
@@ -955,30 +955,69 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             });
         });
         ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 8.0;
-            let check_label = if app.update_checking {
-                "Checking…"
-            } else {
-                "Check for updates"
-            };
-            if theme::soft_button(ui, &palette, Some(Icon::Refresh), check_label, false).clicked()
-                && !app.update_checking
+        if app.update_checking {
+            ui.horizontal(|ui| {
+                ui.add_space(8.0);
+                theme::text(
+                    ui,
+                    "Checking…",
+                    theme::regular(12.0),
+                    palette.text,
+                );
+                theme::spinner(ui, 18.0, palette.accent);
+            });
+        } else if let Some(update) = app.update.clone() {
+            if theme::soft_button(
+                ui,
+                &palette,
+                Some(Icon::ExternalLink),
+                &format!("Update to {0}", update.version),
+                false,
+            )
+            .clicked()
             {
-                app.actions.push(Action::CheckForUpdates);
+                app.actions.push(Action::UpdateNow);
             }
-            if theme::soft_button(ui, &palette, Some(Icon::Info), "Keyboard shortcuts", false)
-                .clicked()
-            {
-                app.actions.push(Action::ShowDialog(Dialog::Shortcuts));
-            }
-            if theme::soft_button(ui, &palette, Some(Icon::ExternalLink), "Source code", false)
-                .clicked()
-            {
-                ui.ctx()
-                    .open_url(egui::OpenUrl::new_tab(env!("CARGO_PKG_REPOSITORY")));
-            }
-        });
+        } else if theme::soft_button(
+            ui,
+            &palette,
+            Some(Icon::Refresh),
+            "Check for updates",
+            false,
+        )
+        .clicked()
+        {
+            app.actions.push(Action::CheckForUpdates);
+        }
+        // Update mode dropdown
+        ui.add_space(8.0);
+        widgets::setting_row(
+            ui,
+            &palette,
+            "When an update is found",
+            "What to do when a newer release is available.",
+            |ui| {
+                let modes = [
+                    (UpdateMode::Manual, "Manual", "Only notify me"),
+                    (UpdateMode::OnClick, "On click", "Download when I click"),
+                    (UpdateMode::OnLaunch, "On launch", "Auto-update on startup"),
+                ];
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    for (mode, label, tooltip) in modes {
+                        let selected = app.settings.update_mode == mode;
+                        if theme::soft_button(ui, &palette, None, label, selected)
+                            .on_hover_text(tooltip)
+                            .clicked()
+                            && !selected
+                        {
+                            app.settings.update_mode = mode;
+                            changed = true;
+                        }
+                    }
+                });
+            },
+        );
     });
 
     ui.data_mut(|data| data.insert_temp(dirty_id, playback_dirty));

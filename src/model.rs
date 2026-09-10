@@ -819,6 +819,10 @@ pub enum Action {
     ToggleDevicesPopup,
     /// Ask GitHub for the latest release and report the result to the user.
     CheckForUpdates,
+    /// Download the newer release for the current platform, replace this binary,
+    /// and re-launch. Only meaningful on Linux; other platforms keep opening the
+    /// release page.
+    UpdateNow,
     SettingsChanged,
     RestartEngine,
     EnablePlayback,

@@ -1364,6 +1364,18 @@ impl App {
                         }
                     }
                 }
+                Event::UpdateNow { result } => {
+                    self.update_checking = false;
+                    match result {
+                        Ok(path) => {
+                            self.toast(format!("Fastpotify updated to {}. Restarting…", path.display()));
+                            self.restart_with_binary(path);
+                        }
+                        Err(error) => {
+                            self.toast_error(format!("Couldn't apply the update: {error}"));
+                        }
+                    }
+                }
             }
         }
     }
@@ -5764,6 +5776,20 @@ impl App {
                 }
             }
             Action::CheckForUpdates => self.check_for_updates(true),
+            Action::UpdateNow => {
+                #[cfg(target_os = "linux")]
+                {
+                    self.backend.send(Command::UpdateNow);
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    // On non-Linux platforms, open the release page so the user
+                    // can download the latest version manually.
+                    if let Some(update) = &self.update {
+                        self.actions.push(Action::OpenUrl(update.url.clone()));
+                    }
+                }
+            }
             Action::SettingsChanged => {
                 self.settings_dirty = true;
                 ctx.set_theme(match self.settings.theme {
@@ -6474,6 +6500,26 @@ impl App {
             }
             .save(&self.dirs.session_file());
         }
+    }
+
+    /// Replace this process with the newly installed binary.
+    #[cfg(target_os = "linux")]
+    fn restart_with_binary(&self, path: std::path::PathBuf) {
+        use std::os::unix::process::CommandExt;
+        let path = std::path::PathBuf::from(path);
+        let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+        let mut cmd = std::process::Command::new(&path);
+        cmd.args(&args);
+        log::info!("exec'ing updated binary at {path:?}");
+        // exec() replaces this process image with the new binary — same PID,
+        // same D-Bus connection, no single-instance conflict.
+        let error = cmd.exec();
+        log::error!("failed to exec updated binary: {error}");
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn restart_with_binary(&self, _path: std::path::PathBuf) {
+        // Non-Linux: nothing to do (could open the release page here).
     }
 
     /// Final teardown at real quit.
@@ -8410,6 +8456,7 @@ mod tests {
         app.update = Some(crate::updates::Release {
             version: "1.2.3".into(),
             url: "https://github.com/crmne/fastpotify/releases/tag/v1.2.3".into(),
+            download_url: String::new(),
         });
         app.update_checking = true;
         app.handle_backend_events(vec![Event::UpdateChecked {
@@ -8461,6 +8508,7 @@ mod tests {
             result: Ok(Some(crate::updates::Release {
                 version: "1.2.3".into(),
                 url: "https://github.com/crmne/fastpotify/releases/tag/v1.2.3".into(),
+                download_url: String::new(),
             })),
         }]);
 
