@@ -3417,16 +3417,13 @@ impl App {
         if self.search.results.get().is_none() {
             self.search.results = Loadable::Loading;
         }
-        if self.settings.search_uses_personal_app {
-            self.backend.send(Command::SearchEditorialPlaylists {
-                query: query.clone(),
-                serial: self.search.serial,
-            });
-        }
+        self.backend.send(Command::SearchEditorialPlaylists {
+            query: query.clone(),
+            serial: self.search.serial,
+        });
         self.backend.api(ApiRequest::Search {
             query,
             serial: self.search.serial,
-            use_personal: self.settings.search_uses_personal_app,
         });
     }
 

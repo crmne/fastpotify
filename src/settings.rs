@@ -128,12 +128,6 @@ pub struct Settings {
     /// Local playback has been authorized at least once on this machine, so
     /// the app can resume it silently instead of prompting.
     pub playback_authorized: bool,
-    /// Route search through the personal app when one is ready, instead of
-    /// the shared app's complete, playlist-inclusive search. Spotify-owned
-    /// playlists are fetched separately through the shared app and merged in
-    /// once they arrive. Off by default: search keeps its original, complete
-    /// results and does not add a second request per search.
-    pub search_uses_personal_app: bool,
     /// Closing the window hides to the tray and keeps the music playing.
     pub keep_playing_in_background: bool,
     /// Ask GitHub once a day whether a newer release exists.
@@ -231,7 +225,6 @@ impl Default for Settings {
             personal_app_nudge_at: None,
             personal_app_intro_seen: false,
             playback_authorized: false,
-            search_uses_personal_app: false,
             keep_playing_in_background: true,
             check_for_updates: true,
             pinned_contexts: Vec::new(),
@@ -340,12 +333,6 @@ mod tests {
     fn older_settings_keep_the_sidebar_visible() {
         let settings: Settings = serde_json::from_str("{}").unwrap();
         assert!(settings.sidebar_visible);
-    }
-
-    #[test]
-    fn older_settings_keep_editorial_playlists_in_search_off() {
-        let settings: Settings = serde_json::from_str("{}").unwrap();
-        assert!(!settings.search_uses_personal_app);
     }
 
     #[test]

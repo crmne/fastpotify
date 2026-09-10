@@ -185,11 +185,6 @@ pub enum ApiRequest {
     Search {
         query: String,
         serial: u64,
-        /// Route through the personal app when one is ready, instead of the
-        /// shared app's complete, playlist-inclusive search. Set from the
-        /// listener's own setting; unrelated to whether a personal app is
-        /// configured at all.
-        use_personal: bool,
     },
     Artist {
         id: String,
@@ -2288,17 +2283,12 @@ fn operation_for(api: &ApiGateway, request: &ApiRequest) -> Operation {
         ApiRequest::MyPlaylists { .. } => Operation::PlaylistLibrary,
         ApiRequest::CreatePlaylist { .. } => Operation::PlaylistCreation,
         ApiRequest::Discover { .. } => Operation::PlaylistSearch,
-        // Off by default: search stays on the shared app's complete,
-        // playlist-inclusive results, same as without a personal app at all.
-        // See the comment on the Search handler below for why the personal
-        // app's playlist results are safe to use when this is turned on.
-        ApiRequest::Search { use_personal, .. } => {
-            if *use_personal {
-                Operation::Catalog
-            } else {
-                Operation::PlaylistSearch
-            }
-        }
+        // Ordinary catalog search may use the personal app; see the comment
+        // on the Search handler below for why playlist results are safe too.
+        // Falls back to the shared app on its own when no personal app is
+        // ready, same as `Playback`, `UserData`, and every other Catalog
+        // request already does.
+        ApiRequest::Search { .. } => Operation::Catalog,
         ApiRequest::Playlist { id, .. } => Operation::PlaylistMetadata(api.playlist_access(id)),
         ApiRequest::PlaylistItems { id, .. }
         | ApiRequest::PlaylistSample { id, .. }
@@ -2597,16 +2587,12 @@ async fn handle(api: &ApiGateway, request: ApiRequest) -> (ApiResponse, Option<A
             result: routed!(contains(&uris)),
             uris,
         },
-        ApiRequest::Search {
-            query,
-            serial,
-            use_personal: _,
-        } => ApiResponse::Search {
-            // With `use_personal` on, `selected` above is the personal app.
-            // A personal Development Mode app cannot see Spotify-owned
-            // playlists, but Spotify's search endpoint simply omits them
-            // from playlist results rather than rejecting the request, so
-            // this one combined call works whichever app `selected` is.
+        ApiRequest::Search { query, serial } => ApiResponse::Search {
+            // `selected` above is the personal app when one is ready, the
+            // shared app otherwise. A personal Development Mode app cannot
+            // see Spotify-owned playlists, but Spotify's search endpoint
+            // simply omits them from playlist results rather than rejecting
+            // the request, so this one combined call works either way.
             result: routed!(search(
                 &query,
                 &["track", "artist", "album", "playlist", "show", "episode"]
@@ -2767,23 +2753,14 @@ mod editorial_playlist_tests {
     use std::sync::Arc;
 
     #[test]
-    fn search_stays_on_the_shared_app_with_the_setting_off() {
+    fn search_uses_the_catalog_route() {
+        // Operation::Catalog already falls back to the shared app on its own
+        // when no personal app is ready, same as every other catalog lookup;
+        // search needs no routing decision of its own.
         let gateway = ApiGateway::new(reqwest::Client::new(), Arc::new(NetActivity::default()));
         let request = ApiRequest::Search {
             query: "pulp".into(),
             serial: 1,
-            use_personal: false,
-        };
-        assert_eq!(operation_for(&gateway, &request), Operation::PlaylistSearch);
-    }
-
-    #[test]
-    fn search_uses_the_catalog_route_with_the_setting_on() {
-        let gateway = ApiGateway::new(reqwest::Client::new(), Arc::new(NetActivity::default()));
-        let request = ApiRequest::Search {
-            query: "pulp".into(),
-            serial: 1,
-            use_personal: true,
         };
         assert_eq!(operation_for(&gateway, &request), Operation::Catalog);
     }

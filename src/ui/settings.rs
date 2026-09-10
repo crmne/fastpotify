@@ -165,24 +165,6 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     }
                 },
             );
-            widgets::setting_row(
-                ui,
-                &palette,
-                "Faster search",
-                "Uses your personal app's quota. Spotify's own playlists, like Today's Top Hits, are fetched separately and added once found.",
-                |ui| {
-                    if widgets::switch(
-                        ui,
-                        &palette,
-                        "Faster search",
-                        &mut app.settings.search_uses_personal_app,
-                    )
-                    .changed()
-                    {
-                        changed = true;
-                    }
-                },
-            );
         } else if wanted.is_some() {
             widgets::setting_row(
                 ui,
