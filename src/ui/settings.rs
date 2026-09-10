@@ -368,6 +368,24 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 }
             },
         );
+        widgets::setting_row(
+            ui,
+            &palette,
+            "Download updates automatically",
+            "Downloads in the background. You choose when to restart.",
+            |ui| {
+                if widgets::switch(
+                    ui,
+                    &palette,
+                    "Download updates automatically",
+                    &mut app.settings.download_updates_automatically,
+                )
+                .changed()
+                {
+                    changed = true;
+                }
+            },
+        );
         if cfg!(target_os = "linux") {
             widgets::setting_row(
                 ui,

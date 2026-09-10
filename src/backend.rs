@@ -510,6 +510,16 @@ pub enum Command {
     /// outcome; the daily check only announces a new release.
     CheckForUpdates {
         manual: bool,
+        source: crate::updates::Source,
+    },
+    InspectUpdate,
+    DownloadUpdate {
+        release: crate::updates::Release,
+        source: crate::updates::Source,
+    },
+    InstallUpdate {
+        prepared: Box<crate::updates::install::Prepared>,
+        arguments: Vec<String>,
     },
     /// The words of a track, from LRCLIB.
     Lyrics(Box<LyricsRequest>),
@@ -547,6 +557,13 @@ pub struct LyricsRequest {
 }
 
 pub enum Event {
+    UpdateSupport(Result<crate::updates::install::Installation, String>),
+    UpdateProgress {
+        received: u64,
+        total: u64,
+    },
+    UpdateDownloaded(Result<Box<crate::updates::install::Prepared>, String>),
+    UpdateInstalling(Result<(), String>),
     Auth(AuthStatus),
     Playback(LocalPlayback),
     /// Receivers seen on the local network that Spotify has not listed.
@@ -738,7 +755,17 @@ impl Backend {
     }
 
     pub fn send(&self, command: Command) {
-        if self.offline && !matches!(command, Command::Accent { .. } | Command::Shutdown) {
+        if self.offline
+            && !matches!(
+                command,
+                Command::Accent { .. }
+                    | Command::Shutdown
+                    | Command::CheckForUpdates { .. }
+                    | Command::InspectUpdate
+                    | Command::DownloadUpdate { .. }
+                    | Command::InstallUpdate { .. }
+            )
+        {
             return;
         }
         let _ = self.commands.send(command);
@@ -1085,7 +1112,47 @@ impl Worker {
                 Command::Reconnect => self.reconnect_engine(),
                 Command::DiscoverReceivers => self.discover_receivers(),
                 Command::ActivateReceiver(receiver) => self.activate_receiver(*receiver),
-                Command::CheckForUpdates { manual } => self.check_for_updates(manual),
+                Command::CheckForUpdates { manual, source } => {
+                    self.check_for_updates(manual, source)
+                }
+                Command::InspectUpdate => {
+                    let events = self.events.clone();
+                    let waker = self.waker.clone();
+                    tokio::task::spawn_blocking(move || {
+                        let _ = events.send(Event::UpdateSupport(
+                            crate::updates::install::detect().map_err(|error| format!("{error:#}")),
+                        ));
+                        waker.wake();
+                    });
+                }
+                Command::DownloadUpdate { release, source } => {
+                    let events = self.events.clone();
+                    let waker = self.waker.clone();
+                    tokio::task::spawn_blocking(move || {
+                        let result =
+                            crate::updates::download(&release, &source, |received, total| {
+                                let _ = events.send(Event::UpdateProgress { received, total });
+                                waker.wake();
+                            })
+                            .map(Box::new)
+                            .map_err(|error| format!("{error:#}"));
+                        let _ = events.send(Event::UpdateDownloaded(result));
+                        waker.wake();
+                    });
+                }
+                Command::InstallUpdate {
+                    prepared,
+                    arguments,
+                } => {
+                    let events = self.events.clone();
+                    let waker = self.waker.clone();
+                    tokio::task::spawn_blocking(move || {
+                        let result = crate::updates::install::handoff(&prepared, arguments)
+                            .map_err(|error| format!("{error:#}"));
+                        let _ = events.send(Event::UpdateInstalling(result));
+                        waker.wake();
+                    });
+                }
                 Command::Lyrics(request) => self.fetch_lyrics(*request),
                 Command::Rootlist => self.fetch_rootlist(),
                 Command::VerifyResume => self.verify_resume(),
@@ -1912,12 +1979,12 @@ impl Worker {
         });
     }
 
-    fn check_for_updates(&self, manual: bool) {
+    fn check_for_updates(&self, manual: bool, source: crate::updates::Source) {
         let http = self.http.clone();
         let events = self.events.clone();
         let waker = self.waker.clone();
         tokio::spawn(async move {
-            let result = crate::updates::newer_release(&http)
+            let result = crate::updates::newer_release_from(&http, &source)
                 .await
                 .map_err(|error| format!("{error:#}"));
             let _ = events.send(Event::UpdateChecked { manual, result });

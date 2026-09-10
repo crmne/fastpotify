@@ -5,6 +5,25 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
+pub mod install;
+#[cfg(target_os = "macos")]
+mod macos;
+mod transfer;
+pub use transfer::{Source, download};
+
+#[derive(Default)]
+pub enum DownloadState {
+    #[default]
+    Idle,
+    Downloading {
+        received: u64,
+        total: u64,
+    },
+    Ready(Box<install::Prepared>),
+    Installing,
+    Failed(String),
+}
+
 const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/crmne/fastpotify/releases/latest";
 
 /// Update-check interval.
@@ -26,8 +45,15 @@ struct LatestRelease {
 
 /// The newest release, when it is newer than this build.
 pub async fn newer_release(http: &reqwest::Client) -> Result<Option<Release>> {
+    newer_release_from(http, &Source::default()).await
+}
+
+pub async fn newer_release_from(
+    http: &reqwest::Client,
+    source: &Source,
+) -> Result<Option<Release>> {
     let latest: LatestRelease = http
-        .get(LATEST_RELEASE_URL)
+        .get(source.latest())
         .header("Accept", "application/vnd.github+json")
         .send()
         .await?
@@ -53,10 +79,8 @@ fn parse(version: &str) -> Option<([u64; 3], bool)> {
         None => (version, false),
     };
     let mut parts = numbers.split('.').map(|part| part.parse::<u64>().ok());
-    Some((
-        [parts.next()??, parts.next()??, parts.next()??],
-        pre_release,
-    ))
+    let numbers = [parts.next()??, parts.next()??, parts.next()??];
+    parts.next().is_none().then_some((numbers, pre_release))
 }
 
 /// Whether `candidate` is a newer stable version than `current`.

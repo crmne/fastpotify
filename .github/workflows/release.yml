@@ -91,6 +91,7 @@ jobs:
             cp "target/${{ matrix.target }}/release/fastpotify" "dist/$name/"
           fi
           cp README.md LICENSE "dist/$name/"
+          cp packaging/fastpotify-portable.txt "dist/$name/"
           if [ "${{ runner.os }}" = "Linux" ]; then
             # Desktop integration for package builds and hand-installs.
             cp -r packaging "dist/$name/"

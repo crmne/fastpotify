@@ -841,6 +841,9 @@ pub enum Action {
     ToggleDevicesPopup,
     /// Ask GitHub for the latest release and report the result to the user.
     CheckForUpdates,
+    ShowUpdate,
+    DownloadUpdate,
+    InstallUpdate,
     SettingsChanged,
     SetLibrarySort {
         shelf: crate::settings::LibraryShelf,

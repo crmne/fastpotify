@@ -317,6 +317,27 @@ Playback settings apply when you press **Apply and restart playback**.
 You can also check for a new release from Settings. On macOS, the same command
 is in the application menu.
 
+On Windows and Linux, update-enabled portable downloads can download a release
+in the app, verify its published SHA-256 checksum, and restart to install it.
+Windows installer builds use their installer for the replacement. Settings can
+enable automatic background downloads; restarting always requires a click.
+The update popup opens only when you click the green update pill. Update checks
+and automatic downloads leave it closed, and closing it keeps downloads running.
+A failed startup restores the previous installation. An interrupted or damaged
+download leaves the running app alone. Updates keep your settings and sign-in
+files. On macOS, a writable Fastpotify.app downloaded from the release page can
+update its whole app bundle from the universal DMG. Move the app out of the disk
+image before updating. The updater verifies the app signature and version;
+Developer ID builds also require the same signing team and macOS approval.
+Keep the app in Applications; macOS can require folder access when it is run
+from Documents.
+
+Package-managed installations continue to update through their package manager,
+including Homebrew, Flatpak, apt, dnf, pacman, Nix, and Cargo. Unrecognized
+installations use the download page. Portable archives identify themselves with
+`fastpotify-portable.txt`; older archives need one manual upgrade to an
+update-enabled build.
+
 Caches (audio, artwork) live under the cache directory and can be deleted at
 any time without signing you out.
 
