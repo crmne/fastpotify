@@ -21,7 +21,7 @@ use super::models::*;
 const BASE_URL: &str = "https://api.spotify.com/v1";
 const MAX_IN_FLIGHT: usize = 6;
 const RATE_LIMIT_RETRIES: u32 = 3;
-const MAX_RETRY_AFTER: Duration = Duration::from_secs(30);
+pub(crate) const MAX_RETRY_AFTER: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Debug, Error)]
 pub enum ApiError {

@@ -30,12 +30,6 @@ pub type ApiResult<T> = Result<T, ApiError>;
 
 const PREMIUM_NEEDED: &str = "Local playback needs Spotify Premium.";
 pub const PLAYLIST_PAGE_SIZE: u32 = 50;
-/// How long to wait for the shared app's Spotify-owned playlists before
-/// leaving a search's personal-only results as they are.
-/// This lookup never blocks the search results already on screen, so it can
-/// afford to wait out ordinary shared-app congestion rather than a UI-facing
-/// request's usual couple of seconds.
-const EDITORIAL_PLAYLISTS_TIMEOUT: Duration = Duration::from_secs(8);
 
 /// Whether Spotify itself, rather than a listener or another curator, owns
 /// this playlist — the ones a personal Development Mode app cannot see.
@@ -2114,8 +2108,9 @@ impl Worker {
     /// Looks up Spotify-owned playlists for a search already on screen. A
     /// personal Development Mode app cannot see them, so this asks the
     /// shared app separately and merges in whatever it finds. Bounded by
-    /// `EDITORIAL_PLAYLISTS_TIMEOUT`: past that, or on any error, the
-    /// personal-only results already shown are left as they are.
+    /// the same `MAX_RETRY_AFTER` the shared app's own rate-limit cooldown
+    /// already waits out; past that, or on any error, the personal-only
+    /// results already shown are left as they are.
     ///
     /// A search box commits once per debounced pause, not once per
     /// keystroke, but a listener correcting a typo can still commit several
@@ -2138,7 +2133,7 @@ impl Worker {
                 return;
             };
             let fetch = client.search(&query, &["playlist"]);
-            let outcome = tokio::time::timeout(EDITORIAL_PLAYLISTS_TIMEOUT, fetch).await;
+            let outcome = tokio::time::timeout(crate::api::client::MAX_RETRY_AFTER, fetch).await;
             let page = match outcome {
                 Ok(Ok(page)) => page,
                 Ok(Err(error)) => {
@@ -2147,7 +2142,8 @@ impl Worker {
                 }
                 Err(_) => {
                     log::debug!(
-                        "editorial playlists for {query:?}: shared search exceeded {EDITORIAL_PLAYLISTS_TIMEOUT:?}"
+                        "editorial playlists for {query:?}: shared search exceeded {:?}",
+                        crate::api::client::MAX_RETRY_AFTER
                     );
                     return;
                 }
