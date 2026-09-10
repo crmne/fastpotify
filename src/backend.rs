@@ -30,6 +30,18 @@ pub type ApiResult<T> = Result<T, ApiError>;
 
 const PREMIUM_NEEDED: &str = "Local playback needs Spotify Premium.";
 pub const PLAYLIST_PAGE_SIZE: u32 = 50;
+/// How long to wait for the shared app's Spotify-owned playlists before
+/// leaving a search's personal-only results as they are.
+/// This lookup never blocks the search results already on screen, so it can
+/// afford to wait out ordinary shared-app congestion rather than a UI-facing
+/// request's usual couple of seconds.
+const EDITORIAL_PLAYLISTS_TIMEOUT: Duration = Duration::from_secs(8);
+
+/// Whether Spotify itself, rather than a listener or another curator, owns
+/// this playlist — the ones a personal Development Mode app cannot see.
+fn is_spotify_owned(playlist: &Playlist) -> bool {
+    playlist.owner.id.as_deref() == Some("spotify") || playlist.owner_name() == "Spotify"
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum AuthStatus {
@@ -179,6 +191,11 @@ pub enum ApiRequest {
     Search {
         query: String,
         serial: u64,
+        /// Route through the personal app when one is ready, instead of the
+        /// shared app's complete, playlist-inclusive search. Set from the
+        /// listener's own setting; unrelated to whether a personal app is
+        /// configured at all.
+        use_personal: bool,
     },
     Artist {
         id: String,
@@ -534,6 +551,9 @@ pub enum Command {
     },
     /// Resolve user ids to display names through the streaming session.
     UserNames(Vec<String>),
+    /// Fetch Spotify-owned playlists for a search separately, through the
+    /// shared app, to merge into results a personal app already returned.
+    SearchEditorialPlaylists { query: String, serial: u64 },
     LoadLikedSongsCache {
         generation: u64,
     },
@@ -576,6 +596,13 @@ pub enum Event {
     /// playlists take songs from this account.
     Rootlist {
         result: Result<crate::player::Rootlist, String>,
+    },
+    /// Spotify-owned playlists found for a search already on screen, to
+    /// merge in ahead of whatever the personal app already returned.
+    EditorialPlaylists {
+        query: String,
+        serial: u64,
+        playlists: Vec<Playlist>,
     },
     /// The result of reading a playlist cache for this load generation.
     PlaylistCache {
@@ -860,6 +887,10 @@ struct Worker {
     authorizing_source: Option<ApiSource>,
     pending_authorization: Option<ApiSource>,
     reconnects: Vec<Instant>,
+    /// The in-flight editorial-playlists lookup, if any. A newer search
+    /// aborts it rather than letting a stale keystroke's request finish and
+    /// add its own load to the shared app's already-congested quota.
+    editorial_fetch: Option<tokio::task::AbortHandle>,
     /// What the engine was playing when it went down, to load again once
     /// the next one is up.
     resume: Option<LoadSpec>,
@@ -910,6 +941,7 @@ impl Worker {
             reconnects: Vec::new(),
             resume: None,
             resume_verify: None,
+            editorial_fetch: None,
         }
     }
 
@@ -1103,6 +1135,9 @@ impl Worker {
                         .await
                 }
                 Command::UserNames(ids) => self.fetch_user_names(ids),
+                Command::SearchEditorialPlaylists { query, serial } => {
+                    self.fetch_editorial_playlists(query, serial);
+                }
                 Command::LoadLikedSongsCache { generation } => {
                     if let Some(account) = self.api.account() {
                         let account_id = account.as_str().to_string();
@@ -2073,6 +2108,72 @@ impl Worker {
         }
     }
 
+    /// Looks up Spotify-owned playlists for a search already on screen. A
+    /// personal Development Mode app cannot see them, so this asks the
+    /// shared app separately and merges in whatever it finds. Bounded by
+    /// `EDITORIAL_PLAYLISTS_TIMEOUT`: past that, or on any error, the
+    /// personal-only results already shown are left as they are.
+    ///
+    /// A search box commits once per debounced pause, not once per
+    /// keystroke, but a listener correcting a typo can still commit several
+    /// times in a row. Only the latest commit's lookup is worth the shared
+    /// app's already-congested quota, so a new one aborts whatever the
+    /// previous commit started.
+    fn fetch_editorial_playlists(&mut self, query: String, serial: u64) {
+        if let Some(handle) = self.editorial_fetch.take() {
+            handle.abort();
+        }
+        if !self.api.personal_ready() {
+            return;
+        }
+        let api = Arc::clone(&self.api);
+        let events = self.events.clone();
+        let waker = self.waker.clone();
+        let handle = tokio::spawn(async move {
+            let Ok(client) = api.client_for(Operation::PlaylistSearch).await else {
+                log::debug!("editorial playlists for {query:?}: no shared client available");
+                return;
+            };
+            let fetch = client.search(&query, &["playlist"]);
+            let outcome = tokio::time::timeout(EDITORIAL_PLAYLISTS_TIMEOUT, fetch).await;
+            let page = match outcome {
+                Ok(Ok(page)) => page,
+                Ok(Err(error)) => {
+                    log::debug!("editorial playlists for {query:?}: shared search failed: {error}");
+                    return;
+                }
+                Err(_) => {
+                    log::debug!(
+                        "editorial playlists for {query:?}: shared search exceeded {EDITORIAL_PLAYLISTS_TIMEOUT:?}"
+                    );
+                    return;
+                }
+            };
+            let playlists: Vec<Playlist> = page
+                .playlists
+                .map(|page| page.items)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(is_spotify_owned)
+                .collect();
+            if playlists.is_empty() {
+                log::debug!("editorial playlists for {query:?}: none found");
+                return;
+            }
+            log::debug!(
+                "editorial playlists for {query:?}: found {}",
+                playlists.len()
+            );
+            let _ = events.send(Event::EditorialPlaylists {
+                query,
+                serial,
+                playlists,
+            });
+            waker.wake();
+        });
+        self.editorial_fetch = Some(handle.abort_handle());
+    }
+
     /// Ask Spotify who is behind each user id. Only the streaming session
     /// can ask; without one the interface shows the bare ids.
     fn fetch_user_names(&self, ids: Vec<String>) {
@@ -2187,7 +2288,18 @@ fn operation_for(api: &ApiGateway, request: &ApiRequest) -> Operation {
         }
         ApiRequest::MyPlaylists { .. } => Operation::PlaylistLibrary,
         ApiRequest::CreatePlaylist { .. } => Operation::PlaylistCreation,
-        ApiRequest::Discover { .. } | ApiRequest::Search { .. } => Operation::PlaylistSearch,
+        ApiRequest::Discover { .. } => Operation::PlaylistSearch,
+        // Off by default: search stays on the shared app's complete,
+        // playlist-inclusive results, same as without a personal app at all.
+        // See the comment on the Search handler below for why the personal
+        // app's playlist results are safe to use when this is turned on.
+        ApiRequest::Search { use_personal, .. } => {
+            if *use_personal {
+                Operation::Catalog
+            } else {
+                Operation::PlaylistSearch
+            }
+        }
         ApiRequest::Playlist { id, .. } => Operation::PlaylistMetadata(api.playlist_access(id)),
         ApiRequest::PlaylistItems { id, .. }
         | ApiRequest::PlaylistSample { id, .. }
@@ -2486,7 +2598,16 @@ async fn handle(api: &ApiGateway, request: ApiRequest) -> (ApiResponse, Option<A
             result: routed!(contains(&uris)),
             uris,
         },
-        ApiRequest::Search { query, serial } => ApiResponse::Search {
+        ApiRequest::Search {
+            query,
+            serial,
+            use_personal: _,
+        } => ApiResponse::Search {
+            // With `use_personal` on, `selected` above is the personal app.
+            // A personal Development Mode app cannot see Spotify-owned
+            // playlists, but Spotify's search endpoint simply omits them
+            // from playlist results rather than rejecting the request, so
+            // this one combined call works whichever app `selected` is.
             result: routed!(search(
                 &query,
                 &["track", "artist", "album", "playlist", "show", "episode"]
@@ -2638,6 +2759,70 @@ async fn write_cached_playlist(
     let temporary = path.with_extension("json.tmp");
     tokio::fs::write(&temporary, text).await?;
     crate::util::replace_file(&temporary, path)
+}
+
+#[cfg(test)]
+mod editorial_playlist_tests {
+    use super::{ApiGateway, ApiRequest, NetActivity, Operation, is_spotify_owned, operation_for};
+    use crate::api::models::{Owner, Playlist};
+    use std::sync::Arc;
+
+    #[test]
+    fn search_stays_on_the_shared_app_with_the_setting_off() {
+        let gateway = ApiGateway::new(reqwest::Client::new(), Arc::new(NetActivity::default()));
+        let request = ApiRequest::Search {
+            query: "pulp".into(),
+            serial: 1,
+            use_personal: false,
+        };
+        assert_eq!(operation_for(&gateway, &request), Operation::PlaylistSearch);
+    }
+
+    #[test]
+    fn search_uses_the_catalog_route_with_the_setting_on() {
+        let gateway = ApiGateway::new(reqwest::Client::new(), Arc::new(NetActivity::default()));
+        let request = ApiRequest::Search {
+            query: "pulp".into(),
+            serial: 1,
+            use_personal: true,
+        };
+        assert_eq!(operation_for(&gateway, &request), Operation::Catalog);
+    }
+
+    fn playlist(owner_id: Option<&str>, display_name: Option<&str>) -> Playlist {
+        Playlist {
+            owner: Owner {
+                id: owner_id.map(str::to_string),
+                display_name: display_name.map(str::to_string),
+                uri: None,
+            },
+            ..Playlist::default()
+        }
+    }
+
+    #[test]
+    fn a_playlist_owned_by_the_spotify_account_is_editorial() {
+        assert!(is_spotify_owned(&playlist(
+            Some("spotify"),
+            Some("Spotify")
+        )));
+    }
+
+    #[test]
+    fn a_listener_owned_playlist_with_a_display_name_is_not_editorial() {
+        assert!(!is_spotify_owned(&playlist(
+            Some("some-listener"),
+            Some("Some Listener")
+        )));
+    }
+
+    #[test]
+    fn a_playlist_missing_a_display_name_falls_back_to_editorial() {
+        // Matches the same heuristic already used to find Spotify's playlists
+        // on Home: a missing display name means Spotify itself, since every
+        // other owner Spotify returns one for.
+        assert!(is_spotify_owned(&playlist(Some("some-curator"), None)));
+    }
 }
 
 #[cfg(test)]

@@ -1303,6 +1303,11 @@ impl App {
                 }
                 Event::Local(state) => self.handle_local(*state),
                 Event::Api(response) => self.handle_api(*response),
+                Event::EditorialPlaylists {
+                    query,
+                    serial,
+                    playlists,
+                } => self.merge_editorial_playlists(query, serial, playlists),
                 Event::Accent { url, color } => {
                     self.accent_pending.remove(&url);
                     let tint = self.palette.tint_from_art(color);
@@ -3371,6 +3376,30 @@ impl App {
         false
     }
 
+    /// Adds Spotify-owned playlists found separately for a search still on
+    /// screen, ahead of whatever the personal app already returned. Ignored
+    /// once the search has moved on, same as a stale `ApiResponse::Search`.
+    fn merge_editorial_playlists(&mut self, query: String, serial: u64, playlists: Vec<Playlist>) {
+        if serial != self.search.serial || query != self.search.committed {
+            return;
+        }
+        let Some(results) = self.search.results.get_mut() else {
+            return;
+        };
+        let page = results
+            .playlists
+            .get_or_insert_with(crate::api::models::Page::default);
+        let existing: std::collections::HashSet<&str> =
+            page.items.iter().map(|playlist| playlist.id.as_str()).collect();
+        let mut merged: Vec<Playlist> = playlists
+            .into_iter()
+            .filter(|playlist| !existing.contains(playlist.id.as_str()))
+            .collect();
+        page.total += merged.len() as u32;
+        merged.append(&mut page.items);
+        page.items = merged;
+    }
+
     fn run_search(&mut self, query: String) {
         if query.is_empty() {
             self.search.results = Loadable::NotLoaded;
@@ -3385,9 +3414,16 @@ impl App {
         if self.search.results.get().is_none() {
             self.search.results = Loadable::Loading;
         }
+        if self.settings.search_uses_personal_app {
+            self.backend.send(Command::SearchEditorialPlaylists {
+                query: query.clone(),
+                serial: self.search.serial,
+            });
+        }
         self.backend.api(ApiRequest::Search {
             query,
             serial: self.search.serial,
+            use_personal: self.settings.search_uses_personal_app,
         });
     }
 
@@ -7397,6 +7433,7 @@ fn evict_lru_map<V>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::models::SearchResults;
 
     #[test]
     fn shift_wheel_moves_the_shelf_without_scrolling_the_page() {
@@ -12131,5 +12168,83 @@ mod tests {
             app.library.liked.revision, before,
             "the shorter list must invalidate the table's cached row order"
         );
+    }
+
+    fn playlist(id: &str, name: &str) -> Playlist {
+        Playlist {
+            id: id.into(),
+            name: name.into(),
+            ..Playlist::default()
+        }
+    }
+
+    /// The personal app's search lands first; editorial playlists found
+    /// afterwards through the shared app go in ahead of it.
+    #[test]
+    fn editorial_playlists_are_added_ahead_of_the_personal_apps_results() {
+        let mut app = headless_app();
+        app.search.serial = 1;
+        app.search.committed = "pulp".into();
+        app.search.results = Loadable::Loaded(SearchResults {
+            playlists: Some(crate::api::models::Page {
+                items: vec![playlist("p1", "Pulp – Different Class")],
+                total: 1,
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+
+        app.merge_editorial_playlists(
+            "pulp".into(),
+            1,
+            vec![playlist("official", "This Is Pulp")],
+        );
+
+        let results = app.search.results.get().unwrap();
+        let page = results.playlists.as_ref().unwrap();
+        assert_eq!(
+            page.items.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(),
+            ["official", "p1"],
+            "the editorial result leads, the personal-app result stays"
+        );
+        assert_eq!(page.total, 2);
+    }
+
+    /// A result already found by the personal app is not duplicated.
+    #[test]
+    fn a_playlist_already_shown_is_not_added_again() {
+        let mut app = headless_app();
+        app.search.serial = 1;
+        app.search.committed = "pulp".into();
+        app.search.results = Loadable::Loaded(SearchResults {
+            playlists: Some(crate::api::models::Page {
+                items: vec![playlist("official", "This Is Pulp")],
+                total: 1,
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+
+        app.merge_editorial_playlists("pulp".into(), 1, vec![playlist("official", "This Is Pulp")]);
+
+        let results = app.search.results.get().unwrap();
+        let page = results.playlists.as_ref().unwrap();
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.total, 1);
+    }
+
+    /// A slow editorial-playlist lookup that lands after the search moved on
+    /// must not repopulate results for a query the listener already left.
+    #[test]
+    fn a_late_arrival_for_an_abandoned_search_is_dropped() {
+        let mut app = headless_app();
+        app.search.serial = 2;
+        app.search.committed = "oasis".into();
+        app.search.results = Loadable::Loaded(SearchResults::default());
+
+        app.merge_editorial_playlists("pulp".into(), 1, vec![playlist("official", "This Is Pulp")]);
+
+        let results = app.search.results.get().unwrap();
+        assert!(results.playlists.is_none());
     }
 }
