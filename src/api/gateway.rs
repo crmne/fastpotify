@@ -90,6 +90,7 @@ pub enum Operation {
     PlaylistLibrary,
     PlaylistCreation,
     PlaylistSearch,
+    CatalogSearch,
     Catalog,
     PlaylistMetadata(PlaylistAccess),
     PlaylistItems(PlaylistAccess),
@@ -111,8 +112,10 @@ fn plan(operation: Operation, personal_ready: bool) -> ApiSource {
         PlaylistMetadata(_) | PlaylistItems(_) | PlaylistMutation(_) if personal_ready => {
             ApiSource::Personal
         }
-        Playback | UserData | PlaylistCreation | Catalog if personal_ready => ApiSource::Personal,
-        Playback | UserData | PlaylistCreation | Catalog | PlaylistMetadata(_)
+        Playback | UserData | PlaylistCreation | Catalog | CatalogSearch if personal_ready => {
+            ApiSource::Personal
+        }
+        Playback | UserData | PlaylistCreation | Catalog | CatalogSearch | PlaylistMetadata(_)
         | PlaylistItems(_) | PlaylistMutation(_) => ApiSource::Shared,
     }
 }
@@ -405,6 +408,7 @@ mod tests {
             Operation::UserData,
             Operation::PlaylistCreation,
             Operation::Catalog,
+            Operation::CatalogSearch,
             Operation::PlaylistMetadata(PlaylistAccess::Owned),
             Operation::PlaylistMetadata(PlaylistAccess::Collaborative),
             Operation::PlaylistItems(PlaylistAccess::Owned),
@@ -433,6 +437,7 @@ mod tests {
             Operation::PlaylistCreation,
             Operation::PlaylistSearch,
             Operation::Catalog,
+            Operation::CatalogSearch,
             Operation::PlaylistMetadata(PlaylistAccess::Unknown),
             Operation::PlaylistItems(PlaylistAccess::Unknown),
         ] {

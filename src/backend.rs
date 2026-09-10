@@ -180,6 +180,10 @@ pub enum ApiRequest {
         query: String,
         serial: u64,
     },
+    SearchPlaylists {
+        query: String,
+        serial: u64,
+    },
     Artist {
         id: String,
     },
@@ -373,6 +377,11 @@ pub enum ApiResponse {
         query: String,
         serial: u64,
         result: ApiResult<SearchResults>,
+    },
+    SearchPlaylists {
+        query: String,
+        serial: u64,
+        result: ApiResult<Page<Playlist>>,
     },
     Artist {
         id: String,
@@ -960,7 +969,17 @@ impl Worker {
                         "Local playback isn't set up on this computer yet".into(),
                     )),
                 },
-                Command::Api(request) => self.dispatch(request),
+                Command::Api(request) => {
+                    if let ApiRequest::Search { query, serial } = &request
+                        && self.api.personal_ready()
+                    {
+                        self.dispatch(ApiRequest::SearchPlaylists {
+                            query: query.clone(),
+                            serial: *serial,
+                        });
+                    }
+                    self.dispatch(request)
+                }
                 Command::ApiFinished {
                     generation,
                     response,
@@ -2187,7 +2206,11 @@ fn operation_for(api: &ApiGateway, request: &ApiRequest) -> Operation {
         }
         ApiRequest::MyPlaylists { .. } => Operation::PlaylistLibrary,
         ApiRequest::CreatePlaylist { .. } => Operation::PlaylistCreation,
-        ApiRequest::Discover { .. } | ApiRequest::Search { .. } => Operation::PlaylistSearch,
+        ApiRequest::Discover { .. } | ApiRequest::SearchPlaylists { .. } => {
+            Operation::PlaylistSearch
+        }
+        ApiRequest::Search { .. } if api.personal_ready() => Operation::CatalogSearch,
+        ApiRequest::Search { .. } => Operation::PlaylistSearch,
         ApiRequest::Playlist { id, .. } => Operation::PlaylistMetadata(api.playlist_access(id)),
         ApiRequest::PlaylistItems { id, .. }
         | ApiRequest::PlaylistSample { id, .. }
@@ -2238,6 +2261,9 @@ fn observe_playlists(api: &ApiGateway, response: &ApiResponse) {
                 api.observe_playlists(&playlists.items);
             }
         }
+        ApiResponse::SearchPlaylists {
+            result: Ok(page), ..
+        } => api.observe_playlists(&page.items),
         ApiResponse::PlaylistUpdated {
             id,
             result: Err(error),
@@ -2489,8 +2515,18 @@ async fn handle(api: &ApiGateway, request: ApiRequest) -> (ApiResponse, Option<A
         ApiRequest::Search { query, serial } => ApiResponse::Search {
             result: routed!(search(
                 &query,
-                &["track", "artist", "album", "playlist", "show", "episode"]
+                if api.personal_ready() {
+                    &["track", "artist", "album", "show", "episode"][..]
+                } else {
+                    &["track", "artist", "album", "playlist", "show", "episode"][..]
+                }
             )),
+            query,
+            serial,
+        },
+        ApiRequest::SearchPlaylists { query, serial } => ApiResponse::SearchPlaylists {
+            result: routed!(search(&query, &["playlist"]))
+                .map(|results| results.playlists.unwrap_or_default()),
             query,
             serial,
         },

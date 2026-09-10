@@ -34,9 +34,14 @@ Spotify keeps a personal app in Development Mode, and since February 2026 that
 mode omits Spotify-owned playlists and reads playlist items only for playlists
 you own or collaborate on. Artist top tracks, related artists,
 recommendations, and some catalog fields are unavailable too. Fastpotify uses
-the shared app for the complete playlist library, playlist-bearing search,
-external playlist metadata and items, and those unavailable operations. Your
-app handles supported requests. The shared app handles the rest.
+the shared app for the complete playlist library, the playlist results in a
+search, external playlist metadata and items, and those unavailable operations.
+Your app handles supported requests, including the songs, artists, albums,
+podcasts, and episodes a search returns, which it looks up while the shared app
+looks up the playlists. Each half of a search appears as soon as it arrives, so
+songs are not held up when the shared app is busy. Your app returns ten results
+for each type where the shared app returns twenty, a Development Mode limit.
+The shared app handles the rest.
 
 ## Make a Spotify app
 

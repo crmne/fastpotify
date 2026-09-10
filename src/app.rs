@@ -1481,6 +1481,7 @@ impl App {
         self.devices_fetched_at = None;
         self.search.results = Loadable::NotLoaded;
         self.search.committed.clear();
+        self.search.playlists = None;
         self.table_rows.clear();
         self.page_used.clear();
         self.track_used.clear();
@@ -3375,6 +3376,7 @@ impl App {
         if query.is_empty() {
             self.search.results = Loadable::NotLoaded;
             self.search.committed.clear();
+            self.search.playlists = None;
             return;
         }
         if query == self.search.committed && !self.search.results.needs_load() {
@@ -3389,6 +3391,19 @@ impl App {
             query,
             serial: self.search.serial,
         });
+    }
+
+    fn show_search_playlists(&mut self) {
+        let Some((serial, page)) = self.search.playlists.as_ref() else {
+            return;
+        };
+        if *serial != self.search.results_serial {
+            return;
+        }
+        let page = page.clone();
+        if let Some(results) = self.search.results.get_mut() {
+            results.playlists = Some(page);
+        }
     }
 
     /// Resolves user IDs that do not have a cached display name.
@@ -4277,6 +4292,19 @@ impl App {
                     }
                 }
             }
+            ApiResponse::SearchPlaylists {
+                query,
+                serial,
+                result,
+            } => {
+                if serial != self.search.serial || query != self.search.committed {
+                    return;
+                }
+                if let Ok(page) = result {
+                    self.search.playlists = Some((serial, page));
+                    self.show_search_playlists();
+                }
+            }
             ApiResponse::Search {
                 query,
                 serial,
@@ -4297,6 +4325,8 @@ impl App {
                     self.settings_dirty = true;
                 }
                 self.search.results.refresh(result);
+                self.search.results_serial = serial;
+                self.show_search_playlists();
             }
             ApiResponse::Artist { id, result } => {
                 if let Ok(artist) = &result {
@@ -9004,6 +9034,83 @@ mod tests {
         app.pick_row(&album, "v", 2, RowPick::Only, 10);
         assert_eq!(picked(&app, &album), vec![2]);
         assert!(picked(&app, &liked).is_empty());
+    }
+
+    fn search_page(id: &str) -> crate::api::models::Page<Playlist> {
+        crate::api::models::Page {
+            items: vec![Playlist {
+                id: id.into(),
+                ..Playlist::default()
+            }],
+            ..Default::default()
+        }
+    }
+
+    fn catalogue_answer() -> crate::api::models::SearchResults {
+        crate::api::models::SearchResults {
+            tracks: Some(crate::api::models::Page {
+                items: vec![Track::default()],
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn searching(app: &mut App, query: &str) -> u64 {
+        app.search.query = query.into();
+        app.search.committed = query.into();
+        app.search.serial += 1;
+        app.search.serial
+    }
+
+    #[test]
+    fn each_half_of_a_search_shows_as_it_arrives() {
+        for playlists_first in [false, true] {
+            let mut app = test_app("search-halves");
+            let serial = searching(&mut app, "radiohead");
+            let catalogue = ApiResponse::Search {
+                query: "radiohead".into(),
+                serial,
+                result: Ok(catalogue_answer()),
+            };
+            let playlists = ApiResponse::SearchPlaylists {
+                query: "radiohead".into(),
+                serial,
+                result: Ok(search_page("p")),
+            };
+            if playlists_first {
+                app.handle_api(playlists);
+                app.handle_api(catalogue);
+            } else {
+                app.handle_api(catalogue);
+                let shown = app.search.results.get().expect("results");
+                assert_eq!(shown.tracks.as_ref().unwrap().items.len(), 1);
+                assert!(shown.playlists.is_none());
+                app.handle_api(playlists);
+            }
+            let shown = app.search.results.get().expect("results");
+            assert_eq!(shown.tracks.as_ref().unwrap().items.len(), 1);
+            assert_eq!(shown.playlists.as_ref().unwrap().items[0].id, "p");
+        }
+    }
+
+    #[test]
+    fn playlists_from_an_older_search_never_join_a_newer_one() {
+        let mut app = test_app("search-stale-playlists");
+        let stale = searching(&mut app, "radiohead");
+        app.handle_api(ApiResponse::SearchPlaylists {
+            query: "radiohead".into(),
+            serial: stale,
+            result: Ok(search_page("stale")),
+        });
+        let serial = searching(&mut app, "portishead");
+        app.handle_api(ApiResponse::Search {
+            query: "portishead".into(),
+            serial,
+            result: Ok(catalogue_answer()),
+        });
+        let shown = app.search.results.get().expect("results");
+        assert!(shown.playlists.is_none());
     }
 
     fn test_app(name: &str) -> App {

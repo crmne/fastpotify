@@ -485,6 +485,8 @@ pub struct SearchState {
     pub committed: String,
     pub serial: u64,
     pub results: Loadable<SearchResults>,
+    pub results_serial: u64,
+    pub playlists: Option<(u64, crate::api::models::Page<Playlist>)>,
     pub filter: SearchFilter,
     pub typed_at: Option<Instant>,
     pub focus_requested: bool,
