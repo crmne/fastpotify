@@ -217,6 +217,9 @@ still uses the shared app for requests that personal apps do not support.
 On `main`, after 0.7.1, Premium listeners using shared access see a one-time
 prompt explaining the personal app option, with a button that opens setup.
 Dismissal is remembered across restarts.
+Playlists the shared app would serve are read over the local playback session
+instead when it is signed in. If Spotify stays busy and no personal app is
+configured, Fastpotify points you to that setting at most once a day.
 
 ## Account safety
 

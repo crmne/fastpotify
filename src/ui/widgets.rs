@@ -592,7 +592,7 @@ pub fn context_menu_items(
                     .clone()
                     .map(|d| util::strip_html(&d))
                     .unwrap_or_default(),
-                public: playlist.public.unwrap_or(false),
+                public: playlist.public,
             }));
         }
         if menu_item(ui, &palette, Some(Icon::Trash), "Delete") {

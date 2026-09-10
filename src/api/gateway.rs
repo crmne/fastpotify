@@ -97,6 +97,17 @@ pub enum Operation {
     UnsupportedDevelopmentMode,
 }
 
+/// The streaming session reads every playlist the shared app would have
+/// been asked for: other people's, which no personal app may read, and the
+/// account's own when it has no personal app. A personal app keeps its own
+/// playlists, which it reads quickly and with every field.
+fn session_serves(operation: Operation, personal_ready: bool) -> bool {
+    matches!(
+        operation,
+        Operation::PlaylistMetadata(_) | Operation::PlaylistItems(_)
+    ) && plan(operation, personal_ready) == ApiSource::Shared
+}
+
 /// A playlist with unknown access dispatches to the shared app, which can
 /// serve anything; later requests move once a response reveals the owner.
 fn plan(operation: Operation, personal_ready: bool) -> ApiSource {
@@ -282,6 +293,11 @@ impl ApiGateway {
         Ok(session.client())
     }
 
+    /// Whether the streaming session, when up, should answer an operation.
+    pub fn session_serves(&self, operation: Operation) -> bool {
+        session_serves(operation, self.personal_ready())
+    }
+
     pub fn playlist_access(&self, id: &str) -> PlaylistAccess {
         self.playlist_access
             .lock()
@@ -395,6 +411,33 @@ mod tests {
             source,
             std::sync::Arc::new(|_| {}),
         ))
+    }
+
+    #[test]
+    fn the_session_reads_what_the_shared_app_would_have() {
+        for (operation, personal) in [
+            (Operation::PlaylistItems(PlaylistAccess::External), true),
+            (Operation::PlaylistMetadata(PlaylistAccess::Unknown), false),
+            (Operation::PlaylistMetadata(PlaylistAccess::Owned), false),
+            (
+                Operation::PlaylistItems(PlaylistAccess::Collaborative),
+                false,
+            ),
+        ] {
+            assert!(session_serves(operation, personal), "{operation:?}");
+        }
+        for (operation, personal) in [
+            (Operation::PlaylistItems(PlaylistAccess::Owned), true),
+            (
+                Operation::PlaylistItems(PlaylistAccess::Collaborative),
+                true,
+            ),
+            (Operation::PlaylistMutation(PlaylistAccess::External), true),
+            (Operation::Catalog, false),
+            (Operation::PlaylistLibrary, false),
+        ] {
+            assert!(!session_serves(operation, personal), "{operation:?}");
+        }
     }
 
     #[test]

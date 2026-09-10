@@ -8,7 +8,7 @@ use egui::Color32;
 
 use crate::api::PlayRequest;
 use crate::api::models::{
-    ArtistRef, Device, PlayableItem, PlaybackState, Playlist, PlaylistItem, Queue, Track,
+    ArtistRef, Device, Image, PlayableItem, PlaybackState, Playlist, PlaylistItem, Queue, Track,
     TrackCount, User, UserRef, pick_image,
 };
 use crate::backend::{
@@ -789,6 +789,41 @@ impl App {
 
     pub fn user_id(&self) -> Option<&str> {
         self.user.as_ref().map(|user| user.id.as_str())
+    }
+
+    /// The library list's entry for a playlist, when it holds one.
+    fn library_entry(&self, id: &str) -> Option<&Playlist> {
+        self.library
+            .playlists
+            .get()?
+            .iter()
+            .find(|playlist| playlist.id == id)
+    }
+
+    /// Whether the library list says a playlist is public.
+    pub fn library_public(&self, id: &str) -> Option<bool> {
+        self.library_entry(id)?.public
+    }
+
+    /// The cover the library list shows for a playlist, when it holds one.
+    fn library_images(&self, id: &str) -> Vec<Image> {
+        self.library_entry(id)
+            .map(|playlist| playlist.images.clone())
+            .unwrap_or_default()
+    }
+
+    /// The owner's display name where the Web API gave it: the signed-in
+    /// account's own, or the library list's for a playlist it holds.
+    pub fn known_owner_name(&self, id: &str, owner: Option<&str>) -> Option<String> {
+        if let Some(user) = self
+            .user
+            .as_ref()
+            .filter(|user| Some(user.id.as_str()) == owner)
+            && let Some(name) = user.display_name.clone()
+        {
+            return Some(name);
+        }
+        self.library_entry(id)?.owner.display_name.clone()
     }
 
     pub fn is_saved(&self, uri: &str) -> Option<bool> {
@@ -3787,6 +3822,27 @@ impl App {
                         for playlist in playlists {
                             self.saved.insert(playlist.uri.clone(), true);
                         }
+                        // A header read over the streaming session carries
+                        // no public flag, and may lack the owner's name and
+                        // the cover; pages that arrived before the list
+                        // take them now.
+                        for listed in playlists {
+                            if let Some(playlist) = self
+                                .playlist_pages
+                                .get_mut(&listed.id)
+                                .and_then(|page| page.playlist.get_mut())
+                            {
+                                if playlist.public.is_none() {
+                                    playlist.public = listed.public;
+                                }
+                                if playlist.owner.display_name.is_none() {
+                                    playlist.owner.display_name = listed.owner.display_name.clone();
+                                }
+                                if playlist.images.is_empty() {
+                                    playlist.images = listed.images.clone();
+                                }
+                            }
+                        }
                     }
                 }
                 Err(error) => {
@@ -3800,7 +3856,7 @@ impl App {
             ApiResponse::Playlist {
                 id,
                 generation,
-                result,
+                mut result,
             } => {
                 if self
                     .playlist_pages
@@ -3835,10 +3891,26 @@ impl App {
                     }
                     return;
                 }
-                if let Ok(playlist) = &result
-                    && let Some(image) = pick_image(&playlist.images, 300)
-                {
-                    self.tint_for(Some(image));
+                if let Ok(playlist) = &mut result {
+                    // The streaming session does not say whether a playlist
+                    // is public; the library list, from the Web API, does.
+                    if playlist.public.is_none() {
+                        playlist.public = self.library_public(&id);
+                    }
+                    // Nor does it always name the owner; the account's own
+                    // name and the library list, both from the Web API, do.
+                    if playlist.owner.display_name.is_none() {
+                        playlist.owner.display_name =
+                            self.known_owner_name(&id, playlist.owner.id.as_deref());
+                    }
+                    // Nor does it carry the mosaic of a playlist without a
+                    // cover of its own; the library list does.
+                    if playlist.images.is_empty() {
+                        playlist.images = self.library_images(&id);
+                    }
+                    if let Some(image) = pick_image(&playlist.images, 300) {
+                        self.tint_for(Some(image));
+                    }
                 }
                 if let Some(page) = self.playlist_pages.get_mut(&id) {
                     let old_snapshot = page
@@ -6099,7 +6171,7 @@ impl App {
                     id,
                     name: Some(name),
                     description: Some(description),
-                    public: Some(public),
+                    public,
                 });
             }
             Action::DeletePlaylist(id) => {
@@ -7566,6 +7638,300 @@ mod tests {
             app.playing_context_uri().as_deref(),
             Some("spotify:playlist:phone")
         );
+    }
+
+    /// Saving the edit dialog sends the public flag only when its switch
+    /// was used; a playlist nothing has described keeps whatever it was.
+    #[test]
+    fn saving_playlist_details_leaves_an_unknown_public_flag_alone() {
+        let mut app = headless_app();
+        let ctx = egui::Context::default();
+        let save = |app: &mut App, public| {
+            app.apply(
+                Action::UpdatePlaylist {
+                    id: "pl1".into(),
+                    name: "Renamed".into(),
+                    description: String::new(),
+                    public,
+                },
+                &ctx,
+            );
+            match app.backend.take_playlist_add_requests().as_slice() {
+                [ApiRequest::UpdatePlaylist { public, .. }] => *public,
+                sent => panic!("{sent:?}"),
+            }
+        };
+        assert_eq!(save(&mut app, None), None);
+        assert_eq!(save(&mut app, Some(false)), Some(false));
+    }
+
+    /// A header read over the streaming session carries no public flag,
+    /// and the edit dialog fills its switch from it, so the library list's
+    /// answer stands in.
+    #[test]
+    fn a_header_without_a_public_flag_takes_the_library_lists() {
+        let mut app = headless_app();
+        app.backend.set_offline(true);
+        app.library.playlists = Loadable::Loaded(vec![Playlist {
+            id: "pl1".into(),
+            public: Some(true),
+            ..Playlist::default()
+        }]);
+        app.playlist_pages.insert(
+            "pl1".into(),
+            PlaylistPage {
+                generation: 1,
+                ..Default::default()
+            },
+        );
+        app.handle_api(ApiResponse::Playlist {
+            id: "pl1".into(),
+            generation: 1,
+            result: Ok(Playlist {
+                id: "pl1".into(),
+                name: "Mine".into(),
+                ..Playlist::default()
+            }),
+        });
+        let playlist = app.playlist_pages["pl1"].playlist.get().unwrap();
+        assert_eq!(playlist.public, Some(true));
+        assert_eq!(playlist.name, "Mine", "the rest is Spotify's answer");
+
+        // Spotify's own answer outranks the list, and a playlist the list
+        // does not hold stays unknown rather than guessed.
+        app.handle_api(ApiResponse::Playlist {
+            id: "pl1".into(),
+            generation: 1,
+            result: Ok(Playlist {
+                id: "pl1".into(),
+                public: Some(false),
+                ..Playlist::default()
+            }),
+        });
+        assert_eq!(
+            app.playlist_pages["pl1"].playlist.get().unwrap().public,
+            Some(false)
+        );
+        app.playlist_pages.insert(
+            "pl2".into(),
+            PlaylistPage {
+                generation: 1,
+                ..Default::default()
+            },
+        );
+        app.handle_api(ApiResponse::Playlist {
+            id: "pl2".into(),
+            generation: 1,
+            result: Ok(Playlist {
+                id: "pl2".into(),
+                ..Playlist::default()
+            }),
+        });
+        assert_eq!(
+            app.playlist_pages["pl2"].playlist.get().unwrap().public,
+            None
+        );
+
+        // The list can arrive after the header: the page takes the flag
+        // then, and a flag Spotify already gave stays.
+        app.handle_api(ApiResponse::MyPlaylists {
+            offset: 0,
+            result: Ok(crate::api::models::Page {
+                items: vec![
+                    Playlist {
+                        id: "pl1".into(),
+                        public: Some(true),
+                        ..Playlist::default()
+                    },
+                    Playlist {
+                        id: "pl2".into(),
+                        public: Some(true),
+                        ..Playlist::default()
+                    },
+                ],
+                ..Default::default()
+            }),
+        });
+        assert_eq!(
+            app.playlist_pages["pl2"].playlist.get().unwrap().public,
+            Some(true)
+        );
+        assert_eq!(
+            app.playlist_pages["pl1"].playlist.get().unwrap().public,
+            Some(false)
+        );
+    }
+
+    /// The streaming session does not always name a playlist's owner. The
+    /// account's own name stands in for its own lists, the library list's
+    /// for the rest it holds, in whichever order the answers arrive, and
+    /// a name Spotify gave stays.
+    #[test]
+    fn a_header_without_an_owner_name_takes_a_known_one() {
+        use crate::api::models::{Owner, User};
+        let owned_by = |id: &str, name: Option<&str>| Owner {
+            id: Some(id.into()),
+            display_name: name.map(str::to_string),
+            uri: None,
+        };
+        let mut app = headless_app();
+        app.backend.set_offline(true);
+        app.user = Some(User {
+            id: "me".into(),
+            display_name: Some("Mine".into()),
+            ..User::default()
+        });
+        app.library.playlists = Loadable::Loaded(vec![Playlist {
+            id: "pl2".into(),
+            owner: owned_by("other", Some("Molly C.")),
+            ..Playlist::default()
+        }]);
+        for id in ["pl1", "pl2", "pl3"] {
+            app.playlist_pages.insert(
+                id.into(),
+                PlaylistPage {
+                    generation: 1,
+                    ..Default::default()
+                },
+            );
+        }
+        let header = |id: &str, owner: Owner| ApiResponse::Playlist {
+            id: id.into(),
+            generation: 1,
+            result: Ok(Playlist {
+                id: id.into(),
+                owner,
+                ..Playlist::default()
+            }),
+        };
+        let shown = |app: &App, id: &str| {
+            app.playlist_pages[id]
+                .playlist
+                .get()
+                .unwrap()
+                .owner_name()
+                .to_string()
+        };
+        app.handle_api(header("pl1", owned_by("me", None)));
+        app.handle_api(header("pl2", owned_by("other", None)));
+        app.handle_api(header("pl3", owned_by("nobody", None)));
+        assert_eq!(shown(&app, "pl1"), "Mine", "the account's own name");
+        assert_eq!(shown(&app, "pl2"), "Molly C.", "the library list's");
+        assert_eq!(
+            shown(&app, "pl3"),
+            "nobody",
+            "the id until someone names them"
+        );
+
+        // The list can arrive after the header: the page takes the name
+        // then, and a name Spotify already gave stays.
+        app.handle_api(header("pl2", owned_by("other", Some("Molly"))));
+        app.handle_api(ApiResponse::MyPlaylists {
+            offset: 0,
+            result: Ok(crate::api::models::Page {
+                items: vec![
+                    Playlist {
+                        id: "pl2".into(),
+                        owner: owned_by("other", Some("Molly C.")),
+                        ..Playlist::default()
+                    },
+                    Playlist {
+                        id: "pl3".into(),
+                        owner: owned_by("nobody", Some("Nobody")),
+                        ..Playlist::default()
+                    },
+                ],
+                ..Default::default()
+            }),
+        });
+        assert_eq!(shown(&app, "pl3"), "Nobody");
+        assert_eq!(shown(&app, "pl2"), "Molly");
+    }
+
+    /// The streaming session carries no cover for a playlist without one
+    /// of its own, where the Web API composes a mosaic; the library list
+    /// holds that mosaic, in whichever order the answers arrive.
+    #[test]
+    fn a_header_without_a_cover_takes_the_library_lists() {
+        let cover = |url: &str| {
+            vec![Image {
+                url: url.into(),
+                width: Some(640),
+                height: Some(640),
+            }]
+        };
+        let mut app = headless_app();
+        app.backend.set_offline(true);
+        app.library.playlists = Loadable::Loaded(vec![Playlist {
+            id: "pl1".into(),
+            images: cover("https://mosaic.scdn.co/640/pl1"),
+            ..Playlist::default()
+        }]);
+        for id in ["pl1", "pl2", "pl3"] {
+            app.playlist_pages.insert(
+                id.into(),
+                PlaylistPage {
+                    generation: 1,
+                    ..Default::default()
+                },
+            );
+        }
+        let header = |id: &str, images: Vec<Image>| ApiResponse::Playlist {
+            id: id.into(),
+            generation: 1,
+            result: Ok(Playlist {
+                id: id.into(),
+                images,
+                ..Playlist::default()
+            }),
+        };
+        let shown = |app: &App, id: &str| {
+            app.playlist_pages[id]
+                .playlist
+                .get()
+                .unwrap()
+                .images
+                .iter()
+                .map(|image| image.url.clone())
+                .collect::<Vec<_>>()
+        };
+        app.handle_api(header("pl1", Vec::new()));
+        app.handle_api(header("pl2", cover("https://i.scdn.co/image/own")));
+        app.handle_api(header("pl3", Vec::new()));
+        assert_eq!(
+            shown(&app, "pl1"),
+            ["https://mosaic.scdn.co/640/pl1"],
+            "the library list's mosaic"
+        );
+        assert_eq!(
+            shown(&app, "pl2"),
+            ["https://i.scdn.co/image/own"],
+            "a cover of its own stays"
+        );
+        assert!(shown(&app, "pl3").is_empty(), "nothing to take it from");
+
+        // The list can arrive after the header: the page takes the cover
+        // then, and one the header carried stays.
+        app.handle_api(ApiResponse::MyPlaylists {
+            offset: 0,
+            result: Ok(crate::api::models::Page {
+                items: vec![
+                    Playlist {
+                        id: "pl2".into(),
+                        images: cover("https://mosaic.scdn.co/640/pl2"),
+                        ..Playlist::default()
+                    },
+                    Playlist {
+                        id: "pl3".into(),
+                        images: cover("https://mosaic.scdn.co/640/pl3"),
+                        ..Playlist::default()
+                    },
+                ],
+                ..Default::default()
+            }),
+        });
+        assert_eq!(shown(&app, "pl3"), ["https://mosaic.scdn.co/640/pl3"]);
+        assert_eq!(shown(&app, "pl2"), ["https://i.scdn.co/image/own"]);
     }
 
     #[test]

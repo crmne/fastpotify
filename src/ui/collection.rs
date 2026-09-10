@@ -1313,7 +1313,7 @@ fn playlist_dialog(app: &mut App, playlist: &Playlist) {
         id: playlist.id.clone(),
         name: playlist.name.clone(),
         description: playlist.description.clone().unwrap_or_default(),
-        public: playlist.public.unwrap_or(false),
+        public: playlist.public,
     }));
 }
 

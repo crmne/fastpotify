@@ -369,7 +369,12 @@ fn edit_playlist(app: &mut App, ui: &mut egui::Ui) {
         });
     ui.add_space(10.0);
     ui.horizontal(|ui| {
-        super::widgets::switch(ui, &palette, "Public playlist", public);
+        // Unknown shows as off; only a change of the switch is sent, so
+        // a playlist nothing has described keeps whatever it was.
+        let mut shown = public.unwrap_or(false);
+        if super::widgets::switch(ui, &palette, "Public playlist", &mut shown).changed() {
+            *public = Some(shown);
+        }
         theme::text(ui, "Public playlist", theme::regular(14.0), palette.text);
     });
     ui.add_space(20.0);

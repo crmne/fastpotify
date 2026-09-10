@@ -432,8 +432,14 @@ impl Playlist {
             .map_or(0, |count| count.total)
     }
 
+    /// The owner as shown: the display name, else the id of anyone but
+    /// Spotify, whose lists carry no name over the streaming session.
     pub fn owner_name(&self) -> &str {
-        self.owner.display_name.as_deref().unwrap_or("Spotify")
+        self.owner
+            .display_name
+            .as_deref()
+            .or_else(|| self.owner.id.as_deref().filter(|id| *id != "spotify"))
+            .unwrap_or("Spotify")
     }
 
     pub fn owned_by(&self, user_id: &str) -> bool {
@@ -799,6 +805,24 @@ mod tests {
         assert_eq!(playlist.track_total(), 12);
         assert!(playlist.owned_by("me"));
         assert_eq!(playlist.owner_name(), "Me");
+    }
+
+    /// An owner without a display name shows as the id, except Spotify,
+    /// whose lists carry no name over the streaming session.
+    #[test]
+    fn owner_name_falls_back_to_the_id_but_not_for_spotify() {
+        let named = |id: Option<&str>, name: Option<&str>| Playlist {
+            owner: Owner {
+                id: id.map(str::to_string),
+                display_name: name.map(str::to_string),
+                uri: None,
+            },
+            ..Playlist::default()
+        };
+        assert_eq!(named(Some("1263908142"), None).owner_name(), "1263908142");
+        assert_eq!(named(Some("1263908142"), Some("mgc")).owner_name(), "mgc");
+        assert_eq!(named(Some("spotify"), None).owner_name(), "Spotify");
+        assert_eq!(named(None, None).owner_name(), "Spotify");
     }
 
     #[test]

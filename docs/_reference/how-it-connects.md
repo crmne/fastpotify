@@ -19,7 +19,9 @@ local playback:
 3. **Local playback** uses
    [librespot](https://github.com/librespot-org/librespot). It needs one more
    browser approval and keeps an independent reusable credential. Spotify Premium
-   is required.
+   is required. While it is signed in, its session also reads the playlists
+   the shared app would otherwise be asked for: other people's, and the
+   account's own when there is no personal app.
 
 Local playback authorization stays separate from both Web API grants. Its
 browser approval requests only the streaming permission and always shows the
@@ -89,7 +91,12 @@ and dragging never write that order back to Spotify.
 
 Each Web API session has separate concurrency and rate limits. A `Retry-After`
 response pauses only that session. Fastpotify routes each request once and
-does not retry it through the other app.
+does not retry it through the other app. A playlist read the librespot session
+refuses outright, because the playlist is gone or private, is shown as such. A
+dropped connection, a read that takes longer than 30 seconds, or a page whose
+song details Spotify did not supply in full, hands the read to the Web API
+instead of caching rows without songs. A song Spotify no longer has, or
+withholds for legal reasons, is an empty row, as the Web API shows it.
 
 Spotify can also explicitly refuse the key needed to decrypt a track. When
 that happens, Fastpotify stops local playback and leaves the rest of the queue
