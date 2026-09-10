@@ -553,7 +553,10 @@ pub enum Command {
     UserNames(Vec<String>),
     /// Fetch Spotify-owned playlists for a search separately, through the
     /// shared app, to merge into results a personal app already returned.
-    SearchEditorialPlaylists { query: String, serial: u64 },
+    SearchEditorialPlaylists {
+        query: String,
+        serial: u64,
+    },
     LoadLikedSongsCache {
         generation: u64,
     },

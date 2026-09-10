@@ -3389,8 +3389,11 @@ impl App {
         let page = results
             .playlists
             .get_or_insert_with(crate::api::models::Page::default);
-        let existing: std::collections::HashSet<&str> =
-            page.items.iter().map(|playlist| playlist.id.as_str()).collect();
+        let existing: std::collections::HashSet<&str> = page
+            .items
+            .iter()
+            .map(|playlist| playlist.id.as_str())
+            .collect();
         let mut merged: Vec<Playlist> = playlists
             .into_iter()
             .filter(|playlist| !existing.contains(playlist.id.as_str()))
@@ -12194,11 +12197,7 @@ mod tests {
             ..Default::default()
         });
 
-        app.merge_editorial_playlists(
-            "pulp".into(),
-            1,
-            vec![playlist("official", "This Is Pulp")],
-        );
+        app.merge_editorial_playlists("pulp".into(), 1, vec![playlist("official", "This Is Pulp")]);
 
         let results = app.search.results.get().unwrap();
         let page = results.playlists.as_ref().unwrap();
