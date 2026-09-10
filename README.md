@@ -156,6 +156,17 @@ sudo dnf install alsa-lib-devel pulseaudio-libs-devel libxkbcommon-devel \
   wayland-devel cmake clang libclang-devel
 ```
 
+and on Gentoo:
+
+```bash
+Using eselect repository (recommended):
+  eselect repository add niko-overlays git https://github.com/NikoMalik/niko-overlays.git
+  emaint sync -r niko-overlays
+
+  echo "media-sound/fastpotify ~amd64" >> /etc/portage/package.accept_keywords/fastpotify
+  emerge -av media-sound/fastpotify
+```
+
 On Windows, libprojectM is built with Visual Studio 2022, CMake, LLVM, and
 vcpkg (`vcpkg install glew:x64-windows-static`, with
 `VCPKG_INSTALLATION_ROOT` pointing at the vcpkg folder).
