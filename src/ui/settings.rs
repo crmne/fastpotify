@@ -4,7 +4,7 @@ use egui::{Align, CornerRadius, Frame, Layout, Margin, Stroke, Vec2};
 
 use crate::api::models::pick_image;
 use crate::app::App;
-use crate::model::{Action};
+use crate::model::Action;
 use crate::settings::{ThemeChoice, UpdateMode};
 use crate::theme::{self, Icon, Palette};
 
@@ -958,12 +958,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         if app.update_checking {
             ui.horizontal(|ui| {
                 ui.add_space(8.0);
-                theme::text(
-                    ui,
-                    "Checking…",
-                    theme::regular(12.0),
-                    palette.text,
-                );
+                theme::text(ui, "Checking…", theme::regular(12.0), palette.text);
                 theme::spinner(ui, 18.0, palette.accent);
             });
         } else if let Some(update) = app.update.clone() {

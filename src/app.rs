@@ -1368,7 +1368,10 @@ impl App {
                     self.update_checking = false;
                     match result {
                         Ok(path) => {
-                            self.toast(format!("Fastpotify updated to {}. Restarting…", path.display()));
+                            self.toast(format!(
+                                "Fastpotify updated to {}. Restarting…",
+                                path.display()
+                            ));
                             self.restart_with_binary(path);
                         }
                         Err(error) => {
@@ -6506,7 +6509,6 @@ impl App {
     #[cfg(target_os = "linux")]
     fn restart_with_binary(&self, path: std::path::PathBuf) {
         use std::os::unix::process::CommandExt;
-        let path = std::path::PathBuf::from(path);
         let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
         let mut cmd = std::process::Command::new(&path);
         cmd.args(&args);

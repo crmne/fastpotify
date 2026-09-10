@@ -335,8 +335,11 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 // so the app says so, quietly, until they do.
                 if let Some(update) = app.update.clone() {
                     let install_label = format!("Update to {}", update.version);
-                    let install_galley =
-                        ui.painter().layout_no_wrap(install_label, theme::medium(12.5), palette.accent);
+                    let install_galley = ui.painter().layout_no_wrap(
+                        install_label,
+                        theme::medium(12.5),
+                        palette.accent,
+                    );
                     let install_size = install_galley.size() + vec2(28.0, 12.0);
                     let (install_rect, install_response) =
                         ui.allocate_exact_size(install_size, Sense::click());
@@ -353,7 +356,10 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                         .image(palette.accent, 13.0)
                         .paint_at(ui, icon_rect);
                     ui.painter().galley(
-                        pos2(install_rect.left() + 24.0, install_rect.center().y - install_galley.size().y / 2.0),
+                        pos2(
+                            install_rect.left() + 24.0,
+                            install_rect.center().y - install_galley.size().y / 2.0,
+                        ),
                         install_galley,
                         palette.accent,
                     );
@@ -367,8 +373,11 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     // Release notes: small link to the right of the install pill.
                     ui.add_space(6.0);
                     let notes_label = "release notes";
-                    let notes_galley =
-                        ui.painter().layout_no_wrap(notes_label.to_string(), theme::regular(11.0), palette.secondary);
+                    let notes_galley = ui.painter().layout_no_wrap(
+                        notes_label.to_string(),
+                        theme::regular(11.0),
+                        palette.secondary,
+                    );
                     let notes_size = notes_galley.size() + vec2(12.0, 8.0);
                     let (notes_rect, notes_response) =
                         ui.allocate_exact_size(notes_size, Sense::click());
@@ -378,7 +387,10 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                         palette.surface.gamma_multiply(0.5),
                     );
                     ui.painter().galley(
-                        pos2(notes_rect.left() + 6.0, notes_rect.center().y - notes_galley.size().y / 2.0),
+                        pos2(
+                            notes_rect.left() + 6.0,
+                            notes_rect.center().y - notes_galley.size().y / 2.0,
+                        ),
                         notes_galley,
                         palette.secondary,
                     );

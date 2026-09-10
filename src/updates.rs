@@ -66,8 +66,7 @@ pub async fn newer_release(http: &reqwest::Client) -> Result<Option<Release>> {
         .await
         .context("unexpected release listing")?;
     let version = latest.tag_name.trim_start_matches('v').to_string();
-    let download_url =
-        crate::updates::download_url(&latest.tag_name).unwrap_or_default();
+    let download_url = crate::updates::download_url(&latest.tag_name).unwrap_or_default();
     Ok(
         is_newer(&version, env!("CARGO_PKG_VERSION")).then_some(Release {
             version,
@@ -114,19 +113,38 @@ pub fn is_newer(candidate: &str, current: &str) -> bool {
 /// The caller is responsible for relaunching the new binary after this
 /// returns `Ok(())`; see the app's `launch_updated_binary` for the platform
 ///-appropriate restart.
-pub async fn apply_update(http: &reqwest::Client, dirs: &crate::paths::AppDirs, release: &Release) -> Result<PathBuf> {
+pub async fn apply_update(
+    http: &reqwest::Client,
+    dirs: &crate::paths::AppDirs,
+    release: &Release,
+) -> Result<PathBuf> {
     let tag = format!("v{}", release.version);
     let url = if release.download_url.is_empty() {
         return Err(anyhow::anyhow!("no self-update archive for this platform"));
     } else {
         release.download_url.clone()
     };
-    let checksums_url = format!("https://github.com/crmne/fastpotify/releases/download/{tag}/checksums.txt");
+    let checksums_url =
+        format!("https://github.com/crmne/fastpotify/releases/download/{tag}/checksums.txt");
 
     // Download the archive and the checksums file in parallel.
     let (archive_bytes, checksums_text) = tokio::join!(
-        async { http.get(&url).send().await?.error_for_status()?.bytes().await },
-        async { http.get(&checksums_url).send().await?.error_for_status()?.text().await },
+        async {
+            http.get(&url)
+                .send()
+                .await?
+                .error_for_status()?
+                .bytes()
+                .await
+        },
+        async {
+            http.get(&checksums_url)
+                .send()
+                .await?
+                .error_for_status()?
+                .text()
+                .await
+        },
     );
     let archive = archive_bytes?;
     let checksums = checksums_text?;
@@ -164,7 +182,7 @@ pub async fn apply_update(http: &reqwest::Client, dirs: &crate::paths::AppDirs, 
     let tmp = dirs.cache_dir().join("update");
     std::fs::create_dir_all(&tmp)?;
 
-    let archive_path = tmp.join(&archive_name);
+    let archive_path = tmp.join(archive_name);
     std::fs::write(&archive_path, &archive)?;
 
     let tar_gz = flate2::read::GzDecoder::new(std::io::Cursor::new(archive));
@@ -184,7 +202,7 @@ pub async fn apply_update(http: &reqwest::Client, dirs: &crate::paths::AppDirs, 
     }
     let unpacked = std::fs::read_dir(&tmp)?
         .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().map_or(false, |t| t.is_dir()))
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
         .find(|e| e.file_name().to_string_lossy().starts_with(&prefix))
         .ok_or_else(|| anyhow::anyhow!("no unpacked directory starting with {prefix}"))?;
     let unpacked_dir = unpacked.path();
@@ -199,7 +217,10 @@ pub async fn apply_update(http: &reqwest::Client, dirs: &crate::paths::AppDirs, 
     let binary_name = "fastpotify.exe";
 
     let new_binary = unpacked_dir.join(binary_name);
-    log::debug!("new binary path: {new_binary:?}, is_file: {}", new_binary.is_file());
+    log::debug!(
+        "new binary path: {new_binary:?}, is_file: {}",
+        new_binary.is_file()
+    );
     if !new_binary.is_file() {
         // List the unpacked dir contents
         if let Ok(entries) = std::fs::read_dir(&unpacked_dir) {

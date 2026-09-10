@@ -359,7 +359,10 @@ fn main() -> eframe::Result<()> {
             .build()
             .expect("unable to start the update runtime");
         if let Some(release) = runtime.block_on(async {
-            fastpotify::updates::newer_release(&http).await.ok().flatten()
+            fastpotify::updates::newer_release(&http)
+                .await
+                .ok()
+                .flatten()
         }) {
             let dirs_clone = dirs.clone();
             if let Ok(path) = runtime.block_on(async {
@@ -963,8 +966,14 @@ fn app_icon() -> egui::IconData {
 fn launch_updated_binary(path: std::path::PathBuf) -> i32 {
     let mut cmd = std::process::Command::new(path);
     match cmd.spawn() {
-        Ok(mut child) => { let _ = child.wait(); 0 }
-        Err(error) => { eprintln!("Fastpotify update failed to relaunch: {error}"); 3 }
+        Ok(mut child) => {
+            let _ = child.wait();
+            0
+        }
+        Err(error) => {
+            eprintln!("Fastpotify update failed to relaunch: {error}");
+            3
+        }
     }
 }
 

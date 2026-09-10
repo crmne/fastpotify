@@ -1510,11 +1510,15 @@ impl Worker {
         let dirs = self.dirs.clone();
         tokio::spawn(async move {
             let result = async {
-                let release = crate::updates::newer_release(&http).await?
+                let release = crate::updates::newer_release(&http)
+                    .await?
                     .ok_or_else(|| anyhow::anyhow!("no newer release available"))?;
                 crate::updates::apply_update(&http, &dirs, &release).await
-            }.await;
-            let _ = events.send(Event::UpdateNow { result: result.map_err(|e| e.to_string()) });
+            }
+            .await;
+            let _ = events.send(Event::UpdateNow {
+                result: result.map_err(|e| e.to_string()),
+            });
             waker.wake();
         });
     }
