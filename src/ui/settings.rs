@@ -480,24 +480,40 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
 
     section(ui, &palette, "Appearance", |ui| {
         widgets::setting_row(ui, &palette, "Theme", "", |ui| {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 6.0;
-                for choice in ThemeChoice::ALL {
-                    if theme::soft_button(
-                        ui,
-                        &palette,
-                        None,
-                        choice.label(),
-                        app.settings.theme == choice,
-                    )
-                    .clicked()
-                        && app.settings.theme != choice
-                    {
-                        app.settings.theme = choice;
-                        changed = true;
+            let custom = app
+                .custom_themes
+                .iter()
+                .find(|theme| Some(&theme.filename) == app.settings.custom_theme.as_ref());
+            let selected = custom.map_or_else(
+                || app.settings.theme.label(),
+                |theme| theme.filename.as_str(),
+            );
+            egui::ComboBox::from_id_salt("appearance_theme")
+                .selected_text(selected)
+                .show_ui(ui, |ui| {
+                    for choice in ThemeChoice::ALL {
+                        if ui
+                            .selectable_label(
+                                custom.is_none() && app.settings.theme == choice,
+                                choice.label(),
+                            )
+                            .clicked()
+                        {
+                            app.settings.theme = choice;
+                            app.settings.custom_theme = None;
+                            changed = true;
+                        }
                     }
-                }
-            });
+                    for theme in &app.custom_themes {
+                        changed |= ui
+                            .selectable_value(
+                                &mut app.settings.custom_theme,
+                                Some(theme.filename.clone()),
+                                &theme.filename,
+                            )
+                            .changed();
+                    }
+                });
         });
         widgets::setting_row(
             ui,

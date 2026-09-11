@@ -206,6 +206,7 @@ pub struct App {
     #[cfg(any(test, feature = "demo"))]
     pub demo_windows_controls: bool,
     applied_dark: Option<bool>,
+    pub custom_themes: Vec<theme::CustomTheme>,
 
     pub auth: AuthStatus,
     pub user: Option<User>,
@@ -509,7 +510,9 @@ impl App {
             .filter(|page| !matches!(page, Page::Settings | Page::Queue))
             .unwrap_or(Page::Home);
 
+        let custom_themes = theme::load_custom_themes(&dirs.config.join("themes"));
         let mut app = Self {
+            custom_themes,
             dirs,
             settings,
             settings_dirty: false,
@@ -2332,12 +2335,20 @@ impl App {
 
     fn apply_theme(&mut self, ctx: &egui::Context) {
         let dark = ctx.theme() == egui::Theme::Dark;
-        if self.applied_dark != Some(dark) {
-            self.palette = if dark {
-                Palette::dark()
-            } else {
-                Palette::light()
-            };
+        let palette = self
+            .custom_themes
+            .iter()
+            .find(|theme| Some(&theme.filename) == self.settings.custom_theme.as_ref())
+            .map(|theme| theme.palette)
+            .unwrap_or_else(|| {
+                if dark {
+                    Palette::dark()
+                } else {
+                    Palette::light()
+                }
+            });
+        if self.applied_dark != Some(dark) || self.palette != palette {
+            self.palette = palette;
             theme::apply(ctx, &self.palette);
             self.applied_dark = Some(dark);
             self.accents.clear();
@@ -9024,6 +9035,31 @@ mod tests {
                 tray: false,
             },
         )
+    }
+
+    #[test]
+    fn custom_theme_switches_immediately_and_missing_files_use_the_builtin() {
+        let mut app = test_app("custom-theme");
+        let ctx = egui::Context::default();
+        ctx.set_theme(egui::ThemePreference::Dark);
+        let mut palette = Palette::light();
+        palette.accent = egui::Color32::RED;
+        app.custom_themes.push(theme::CustomTheme {
+            filename: "local.json".into(),
+            palette,
+        });
+        app.settings.custom_theme = Some("local.json".into());
+        app.apply_theme(&ctx);
+        assert_eq!(app.palette, palette);
+        assert_eq!(ctx.global_style().visuals.panel_fill, palette.panel);
+        app.settings.custom_theme = Some("missing.json".into());
+        app.apply_theme(&ctx);
+        assert_eq!(app.palette, Palette::dark());
+        app.settings.custom_theme = Some("local.json".into());
+        app.apply_theme(&ctx);
+        app.settings.custom_theme = None;
+        app.apply_theme(&ctx);
+        assert_eq!(app.palette, Palette::dark());
     }
 
     #[test]

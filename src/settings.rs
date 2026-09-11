@@ -101,6 +101,8 @@ pub struct Settings {
     pub audio_cache: bool,
     pub audio_cache_mb: u64,
     pub theme: ThemeChoice,
+    /// Filename in the local themes directory; absent or unavailable uses `theme`.
+    pub custom_theme: Option<String>,
     /// Tint the interface with the colour of the playing album's art.
     pub accent_from_art: bool,
     /// Last local volume, 0..=65535.
@@ -210,6 +212,7 @@ impl Default for Settings {
             audio_cache: true,
             audio_cache_mb: 1024,
             theme: ThemeChoice::Dark,
+            custom_theme: None,
             accent_from_art: true,
             volume: (u16::MAX as u32 * 70 / 100) as u16,
             sidebar_visible: true,
@@ -328,6 +331,16 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::Settings;
+
+    #[test]
+    fn custom_theme_is_optional_and_round_trips() {
+        let mut settings: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(settings.custom_theme, None);
+        settings.custom_theme = Some("gruvbox.json".into());
+        let json = serde_json::to_string(&settings).unwrap();
+        let restored: Settings = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, settings);
+    }
 
     #[test]
     fn older_settings_keep_the_sidebar_visible() {
