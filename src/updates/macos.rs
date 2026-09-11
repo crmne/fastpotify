@@ -134,6 +134,9 @@ impl Mounted {
             .parent()
             .context("Missing update directory")?
             .join("mounted");
+        if mount.exists() {
+            let _ = fs::remove_dir_all(&mount);
+        }
         fs::create_dir(&mount)?;
         let output = Command::new("/usr/bin/hdiutil")
             .args(["attach", "-readonly", "-nobrowse", "-mountpoint"])
