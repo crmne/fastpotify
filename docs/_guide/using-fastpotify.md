@@ -33,6 +33,13 @@ of the playlist scrolls to positions beyond the visible rows.
 The Library sidebar also scrolls near its edges when you drag a song toward a
 playlist or reorder its entries. Only the list under the pointer scrolls.
 
+## Playing from the sidebar
+
+Double-click a playlist, Liked Songs, album, artist, or podcast row in the
+Library sidebar to start playing it. A single click still opens the row's page.
+Pointing at a row's cover art also shows a play button, but only when the
+sidebar is not in compact mode.
+
 ## Keyboard and screen readers
 
 The main window provides screen-reader names for playback controls, library

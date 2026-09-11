@@ -43,6 +43,21 @@ impl Entry {
     }
 }
 
+/// The context a library row plays, matching the cover play button and the
+/// right-click menu. Liked Songs has no URI of its own and plays the
+/// account's collection instead.
+fn entry_play_uri(app: &App, entry: &Entry) -> Option<String> {
+    if entry.liked {
+        app.user
+            .as_ref()
+            .map(|user| format!("spotify:user:{}:collection", user.id))
+    } else if entry.uri.is_empty() {
+        None
+    } else {
+        Some(entry.uri.clone())
+    }
+}
+
 fn liked_entry(app: &App) -> Entry {
     Entry {
         image: None,
@@ -945,6 +960,9 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
                     0.12,
                 );
                 let rect = rect.translate(vec2(0.0, shift));
+                // Set when the cover play button takes a click, so a double
+                // click on it does not also play from the row.
+                let mut cover_took_click = false;
                 if ui.is_rect_visible(rect) {
                     if active {
                         ui.painter()
@@ -1117,15 +1135,15 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
                                 play.clone().on_hover_cursor(egui::CursorIcon::PointingHand);
                             }
                         }
-                        if play_response.is_some_and(|play| play.clicked()) {
-                            let uri = if entry.liked {
-                                app.user
-                                    .as_ref()
-                                    .map(|user| format!("spotify:user:{}:collection", user.id))
-                            } else {
-                                Some(entry.uri.clone())
-                            };
-                            if let Some(uri) = uri {
+                        if let Some(play) = &play_response
+                            && play.clicked()
+                        {
+                            cover_took_click = true;
+                            // The first click of a double click plays; the
+                            // second must not play again.
+                            if !play.double_clicked()
+                                && let Some(uri) = entry_play_uri(app, entry)
+                            {
                                 app.actions.push(Action::PlayContext {
                                     uri,
                                     offset_uri: None,
@@ -1190,6 +1208,19 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
                     } else {
                         app.actions.push(Action::Open(entry.page.clone()));
                     }
+                }
+                // A double click plays the row's context. Folders only
+                // collapse, and the cover button handled its own click.
+                if response.double_clicked()
+                    && entry.folder.is_none()
+                    && !cover_took_click
+                    && let Some(uri) = entry_play_uri(app, entry)
+                {
+                    app.actions.push(Action::PlayContext {
+                        uri,
+                        offset_uri: None,
+                        offset_index: None,
+                    });
                 }
                 if !entry.uri.is_empty() {
                     let owned_playlist = entry

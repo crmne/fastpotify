@@ -2018,6 +2018,33 @@ mod tests {
         ]
     }
 
+    /// The painted rect of a sidebar label, for pointer tests against the
+    /// sidebar's private rows.
+    fn sidebar_text(painted: &[(String, egui::Rect)], label: &str) -> egui::Rect {
+        painted
+            .iter()
+            .find(|(text, _)| text == label)
+            .map(|(_, rect)| *rect)
+            .unwrap_or_else(|| panic!("missing sidebar text {label:?}"))
+    }
+
+    fn double_click(pos: egui::Pos2) -> [Vec<egui::Event>; 2] {
+        [
+            pointer_click(pos, egui::PointerButton::Primary),
+            pointer_click(pos, egui::PointerButton::Primary),
+        ]
+    }
+
+    fn played_contexts(app: &App) -> Vec<String> {
+        app.actions
+            .iter()
+            .filter_map(|action| match action {
+                Action::PlayContext { uri, .. } => Some(uri.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
     #[test]
     fn search_top_result_opens_the_menu_for_its_item() {
         for kind in ["track", "artist", "album", "playlist", "show"] {
@@ -3138,6 +3165,121 @@ mod tests {
         assert!(dropped, "no sweep position landed on an owned playlist row");
         app.backend.shutdown();
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Double-clicking a playable Library row plays its context, in both the
+    /// normal and compact sidebar modes. The first click still opens the page.
+    #[test]
+    fn double_clicking_a_sidebar_row_plays_its_context() {
+        for compact in [false, true] {
+            let (ctx, mut app) = accessible_app(&format!("sidebar-double-click-{compact}"));
+            app.settings.sidebar_compact = compact;
+            let view = crate::ui::sidebar::show;
+            view_frame(&ctx, &mut app, vec![], view);
+            let painted = view_frame(&ctx, &mut app, vec![], view);
+            let name = sidebar_text(&painted, "Sunday morning").center();
+            app.actions.clear();
+            let [first, second] = double_click(name);
+            view_frame(&ctx, &mut app, first, view);
+            view_frame(&ctx, &mut app, second, view);
+            assert_eq!(played_contexts(&app), ["spotify:playlist:pl2"]);
+            assert!(
+                app.actions.iter().any(
+                    |action| matches!(action, Action::Open(Page::Playlist(id)) if id == "pl2")
+                ),
+                "double click must still open the page"
+            );
+            app.backend.shutdown();
+        }
+    }
+
+    /// A single Library row click keeps navigating and never starts playback.
+    #[test]
+    fn single_clicking_a_sidebar_row_only_navigates() {
+        let (ctx, mut app) = accessible_app("sidebar-single-click");
+        let view = crate::ui::sidebar::show;
+        view_frame(&ctx, &mut app, vec![], view);
+        let painted = view_frame(&ctx, &mut app, vec![], view);
+        let name = sidebar_text(&painted, "Sunday morning").center();
+        app.actions.clear();
+        view_frame(
+            &ctx,
+            &mut app,
+            pointer_click(name, egui::PointerButton::Primary),
+            view,
+        );
+        assert!(played_contexts(&app).is_empty());
+        assert!(
+            app.actions
+                .iter()
+                .any(|action| matches!(action, Action::Open(Page::Playlist(id)) if id == "pl2"))
+        );
+        app.backend.shutdown();
+    }
+
+    #[test]
+    fn double_clicking_a_sidebar_liked_row_plays_the_collection() {
+        let (ctx, mut app) = accessible_app("sidebar-double-click-liked");
+        let view = crate::ui::sidebar::show;
+        view_frame(&ctx, &mut app, vec![], view);
+        let painted = view_frame(&ctx, &mut app, vec![], view);
+        let name = sidebar_text(&painted, "Liked Songs").center();
+        app.actions.clear();
+        let [first, second] = double_click(name);
+        view_frame(&ctx, &mut app, first, view);
+        view_frame(&ctx, &mut app, second, view);
+        assert_eq!(played_contexts(&app), ["spotify:user:demo:collection"]);
+        app.backend.shutdown();
+    }
+
+    #[test]
+    fn double_clicking_a_sidebar_folder_plays_nothing() {
+        use crate::player::RootlistEntry;
+        let (ctx, mut app) = accessible_app("sidebar-double-click-folder");
+        app.rootlist = vec![
+            RootlistEntry::FolderStart {
+                id: "f1".into(),
+                name: "Focus".into(),
+            },
+            RootlistEntry::Playlist("spotify:playlist:pl1".into()),
+            RootlistEntry::Playlist("spotify:playlist:pl2".into()),
+            RootlistEntry::FolderEnd,
+        ];
+        let view = crate::ui::sidebar::show;
+        view_frame(&ctx, &mut app, vec![], view);
+        let painted = view_frame(&ctx, &mut app, vec![], view);
+        let name = sidebar_text(&painted, "Focus").center();
+        app.actions.clear();
+        let [first, second] = double_click(name);
+        view_frame(&ctx, &mut app, first, view);
+        view_frame(&ctx, &mut app, second, view);
+        assert!(played_contexts(&app).is_empty(), "folders must not play");
+        app.backend.shutdown();
+    }
+
+    /// The cover play button sits on top of its row. A double click on it
+    /// sends one play command, not one for each click plus the row's.
+    #[test]
+    fn double_clicking_a_sidebar_cover_plays_once() {
+        let (ctx, mut app) = accessible_app("sidebar-double-click-cover");
+        let view = crate::ui::sidebar::show;
+        view_frame(&ctx, &mut app, vec![], view);
+        let painted = view_frame(&ctx, &mut app, vec![], view);
+        let name = sidebar_text(&painted, "Sunday morning");
+        // The cover is the 44 point square centered 34 points left of the
+        // name and on the row's centre, nine points below the name line.
+        let cover = egui::pos2(name.left() - 34.0, name.center().y + 9.0);
+        app.actions.clear();
+        let [first, second] = double_click(cover);
+        view_frame(&ctx, &mut app, first, view);
+        assert_eq!(played_contexts(&app), ["spotify:playlist:pl2"]);
+        view_frame(&ctx, &mut app, second, view);
+        assert_eq!(
+            played_contexts(&app),
+            ["spotify:playlist:pl2"],
+            "the second click must not play again"
+        );
+        app.backend.shutdown();
     }
 
     /// The cover and title in the bottom-left player are a song source, not
