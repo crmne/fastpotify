@@ -6,7 +6,7 @@ use egui::{CornerRadius, Rect, Sense, Vec2, pos2, vec2};
 
 use crate::api::models::{PlayableItem, Playlist, pick_image};
 use crate::app::App;
-use crate::model::{Action, DISCOVER_TERMS, Loadable, Page, RowContext};
+use crate::model::{Action, Loadable, Page, RowContext};
 use crate::theme::{self, Icon};
 
 use super::widgets::{self, TrackRow};
@@ -16,14 +16,29 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     ui.add_space(6.0);
     theme::text(ui, crate::util::greeting(), theme::bold(30.0), palette.text);
     ui.add_space(12.0);
-    quick_access(app, ui);
-    ui.add_space(16.0);
-
-    made_for_you(app, ui);
-    recently_played(app, ui);
-    top_artists(app, ui);
-    top_tracks(app, ui);
-    recommendations(app, ui);
+    if app.settings.home.quick_access.visible && app.settings.home.quick_access.limit > 0 {
+        quick_access(app, ui);
+        ui.add_space(16.0);
+    }
+    if app.settings.home.made_for_you.visible && app.settings.home.made_for_you.limit > 0 {
+        made_for_you(app, ui);
+    }
+    if app.settings.home.recently_played.visible
+        && app.settings.home.recently_played.limit != Some(0)
+    {
+        recently_played(app, ui);
+    }
+    if app.settings.home.top_artists.visible && app.settings.home.top_artists.limit != Some(0) {
+        top_artists(app, ui);
+    }
+    if app.settings.home.top_songs.visible && app.settings.home.top_songs.limit != Some(0) {
+        top_tracks(app, ui);
+    }
+    if app.settings.home.recommendations.visible
+        && app.settings.home.recommendations.limit != Some(0)
+    {
+        recommendations(app, ui);
+    }
 }
 
 struct Tile {
@@ -35,33 +50,92 @@ struct Tile {
     owned_playlist: Option<Playlist>,
 }
 
+fn playlist_tile(app: &App, playlist: &Playlist) -> Tile {
+    Tile {
+        image: pick_image(&playlist.images, 64).map(str::to_string),
+        name: playlist.name.clone(),
+        page: Page::Playlist(playlist.id.clone()),
+        uri: Some(playlist.uri.clone()),
+        liked: false,
+        owned_playlist: app
+            .user_id()
+            .is_some_and(|id| playlist.owned_by(id))
+            .then(|| playlist.clone()),
+    }
+}
+
 fn quick_access(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
-    let mut tiles: Vec<Tile> = vec![Tile {
-        image: None,
-        name: "Liked Songs".to_string(),
-        page: Page::LikedSongs,
-        uri: app
-            .user
-            .as_ref()
-            .map(|user| format!("spotify:user:{}:collection", user.id)),
-        liked: true,
-        owned_playlist: None,
-    }];
-    if let Some(playlists) = app.library.playlists.get() {
-        for playlist in playlists.iter().take(7) {
-            tiles.push(Tile {
-                image: pick_image(&playlist.images, 64).map(str::to_string),
-                name: playlist.name.clone(),
-                page: Page::Playlist(playlist.id.clone()),
-                uri: Some(playlist.uri.clone()),
-                liked: false,
-                owned_playlist: app
-                    .user_id()
-                    .is_some_and(|id| playlist.owned_by(id))
-                    .then(|| playlist.clone()),
-            });
+    let settings = app.settings.home.quick_access;
+    let mut tiles: Vec<Tile> = Vec::new();
+    if settings.liked_songs {
+        tiles.push(Tile {
+            image: None,
+            name: "Liked Songs".to_string(),
+            page: Page::LikedSongs,
+            uri: app
+                .user
+                .as_ref()
+                .map(|user| format!("spotify:user:{}:collection", user.id)),
+            liked: true,
+            owned_playlist: None,
+        });
+    }
+    for (name, enabled) in [
+        ("Discover Weekly", settings.discover_weekly),
+        ("Release Radar", settings.release_radar),
+    ] {
+        if enabled
+            && let Some(playlist) = app
+                .home
+                .discover
+                .get(name)
+                .and_then(Loadable::get)
+                .and_then(|playlists| {
+                    playlists
+                        .iter()
+                        .find(|playlist| playlist.name.eq_ignore_ascii_case(name))
+                })
+        {
+            tiles.push(playlist_tile(app, playlist));
         }
+    }
+    if settings.pinned_playlists
+        && let Some(playlists) = app.library.playlists.get()
+    {
+        for uri in &app.settings.pinned_contexts {
+            if tiles.len() >= settings.limit as usize {
+                break;
+            }
+            if tiles
+                .iter()
+                .any(|tile| tile.uri.as_deref() == Some(uri.as_str()))
+            {
+                continue;
+            }
+            if let Some(playlist) = playlists.iter().find(|playlist| playlist.uri == *uri) {
+                tiles.push(playlist_tile(app, playlist));
+            }
+        }
+    }
+    if settings.library_playlists
+        && let Some(playlists) = app.library.playlists.get()
+    {
+        for playlist in playlists {
+            if tiles.len() >= settings.limit as usize {
+                break;
+            }
+            if !tiles
+                .iter()
+                .any(|tile| tile.uri.as_deref() == Some(playlist.uri.as_str()))
+            {
+                tiles.push(playlist_tile(app, playlist));
+            }
+        }
+    }
+    tiles.truncate(settings.limit as usize);
+    if tiles.is_empty() {
+        return;
     }
     let available = ui.available_width();
     let columns = ((available / 300.0).floor() as usize).clamp(2, 4);
@@ -177,8 +251,17 @@ fn made_for_you(app: &mut App, ui: &mut egui::Ui) {
     let mut playlists: Vec<Playlist> = Vec::new();
     let mut loading = false;
     let mut failed = false;
-    for term in DISCOVER_TERMS {
-        match app.home.discover.get(*term) {
+    let settings = app.settings.home.made_for_you;
+    for (term, enabled) in [
+        ("Discover Weekly", settings.discover_weekly),
+        ("Release Radar", settings.release_radar),
+        ("Daily Mix", settings.daily_mixes),
+        ("daylist", settings.daylist),
+    ] {
+        if !enabled {
+            continue;
+        }
+        match app.home.discover.get(term) {
             Some(Loadable::Loaded(list)) => {
                 for playlist in list {
                     let duplicate = playlists.iter().any(|existing| {
@@ -195,6 +278,7 @@ fn made_for_you(app: &mut App, ui: &mut egui::Ui) {
             _ => {}
         }
     }
+    playlists.truncate(settings.limit as usize);
     if playlists.is_empty() && !loading && !failed {
         return;
     }
@@ -275,7 +359,7 @@ fn recently_played(app: &mut App, ui: &mut egui::Ui) {
                 .as_ref()
                 .is_some_and(|id| seen.insert(id.clone()))
         })
-        .take(16)
+        .take(app.settings.home.recently_played.limit.unwrap_or(16) as usize)
         .collect();
     if tracks.is_empty() {
         return;
@@ -336,7 +420,10 @@ fn top_artists(app: &mut App, ui: &mut egui::Ui) {
         return;
     }
     widgets::shelf(ui, &palette, "top-artists", "Your top artists", |ui| {
-        for artist in &artists {
+        for artist in artists
+            .iter()
+            .take(app.settings.home.top_artists.limit.unwrap_or(255) as usize)
+        {
             let card = widgets::card(
                 ui,
                 app,
@@ -454,7 +541,7 @@ fn top_tracks(app: &mut App, ui: &mut egui::Ui) {
         ui,
         "Your top songs",
         tracks,
-        10,
+        app.settings.home.top_songs.limit.unwrap_or(10) as usize,
         Some(Page::TopSongs),
         Some("Show more top songs"),
     );
@@ -462,5 +549,13 @@ fn top_tracks(app: &mut App, ui: &mut egui::Ui) {
 
 fn recommendations(app: &mut App, ui: &mut egui::Ui) {
     let tracks = app.home.recommendations.clone();
-    track_list(app, ui, "Recommended for you", tracks, 20, None, None);
+    track_list(
+        app,
+        ui,
+        "Recommended for you",
+        tracks,
+        app.settings.home.recommendations.limit.unwrap_or(20) as usize,
+        None,
+        None,
+    );
 }

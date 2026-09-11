@@ -2315,6 +2315,67 @@ mod tests {
     }
 
     #[test]
+    fn home_json_hides_shelves_and_limits_quick_access() {
+        let (ctx, mut app) = accessible_app("home-json-limits");
+        app.settings.home = serde_json::from_str(
+            r#"{
+            "quick_access": {"limit": 1},
+            "made_for_you": {"visible": false},
+            "recently_played": {"limit": 0},
+            "top_artists": {"visible": false},
+            "top_songs": {"visible": false},
+            "recommendations": {"visible": false}
+        }"#,
+        )
+        .unwrap();
+        let view = crate::ui::home::show;
+        view_frame(&ctx, &mut app, vec![], view);
+        let text = view_frame(&ctx, &mut app, vec![], view);
+        assert!(text.iter().any(|(text, _)| text == "Liked Songs"));
+        for absent in [
+            "Made for you",
+            "Recently played",
+            "Your top artists",
+            "Your top songs",
+            "Recommended for you",
+            &playlist(0).name,
+        ] {
+            assert!(!text.iter().any(|(text, _)| text == absent), "{absent}");
+        }
+        app.backend.shutdown();
+    }
+
+    #[test]
+    fn home_json_pinned_playlists_are_first_and_not_duplicated() {
+        let (ctx, mut app) = accessible_app("home-json-pins");
+        app.settings.home.quick_access.liked_songs = false;
+        app.settings.home.quick_access.pinned_playlists = true;
+        app.settings.home.quick_access.limit = 3;
+        app.settings.pinned_contexts = vec![playlist(1).uri];
+        app.settings.home.made_for_you.visible = false;
+        app.settings.home.recently_played.visible = false;
+        app.settings.home.top_artists.visible = false;
+        app.settings.home.top_songs.visible = false;
+        app.settings.home.recommendations.visible = false;
+        let view = crate::ui::home::show;
+        view_frame(&ctx, &mut app, vec![], view);
+        let text = view_frame(&ctx, &mut app, vec![], view);
+        let names: Vec<_> = text
+            .iter()
+            .filter(|(name, _)| {
+                name == &playlist(0).name || name == &playlist(1).name || name == &playlist(2).name
+            })
+            .map(|(name, _)| name.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            [playlist(1).name, playlist(0).name, playlist(2).name]
+        );
+        assert!(!text.iter().any(|(text, _)| text == "Liked Songs"));
+        app.backend.shutdown();
+    }
+
+    #[test]
     fn home_cards_open_item_menus() {
         for (section, title, uri, labels) in [
             (

@@ -47,6 +47,83 @@ pub enum ThemeChoice {
     System,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct HomeShelfSettings {
+    pub visible: bool,
+    pub limit: Option<u8>,
+}
+
+impl Default for HomeShelfSettings {
+    fn default() -> Self {
+        Self {
+            visible: true,
+            limit: None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct QuickAccessSettings {
+    pub visible: bool,
+    pub limit: u8,
+    pub liked_songs: bool,
+    pub discover_weekly: bool,
+    pub release_radar: bool,
+    pub pinned_playlists: bool,
+    pub library_playlists: bool,
+}
+
+impl Default for QuickAccessSettings {
+    fn default() -> Self {
+        Self {
+            visible: true,
+            limit: 8,
+            liked_songs: true,
+            discover_weekly: false,
+            release_radar: false,
+            pinned_playlists: false,
+            library_playlists: true,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MadeForYouSettings {
+    pub visible: bool,
+    pub limit: u8,
+    pub daily_mixes: bool,
+    pub daylist: bool,
+    pub discover_weekly: bool,
+    pub release_radar: bool,
+}
+
+impl Default for MadeForYouSettings {
+    fn default() -> Self {
+        Self {
+            visible: true,
+            limit: 255,
+            daily_mixes: true,
+            daylist: true,
+            discover_weekly: true,
+            release_radar: true,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct HomeSettings {
+    pub quick_access: QuickAccessSettings,
+    pub made_for_you: MadeForYouSettings,
+    pub recently_played: HomeShelfSettings,
+    pub top_artists: HomeShelfSettings,
+    pub top_songs: HomeShelfSettings,
+    pub recommendations: HomeShelfSettings,
+}
+
 /// Mini-player visualizer mode.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -101,6 +178,7 @@ pub struct Settings {
     pub audio_cache: bool,
     pub audio_cache_mb: u64,
     pub theme: ThemeChoice,
+    pub home: HomeSettings,
     /// Tint the interface with the colour of the playing album's art.
     pub accent_from_art: bool,
     /// Last local volume, 0..=65535.
@@ -210,6 +288,7 @@ impl Default for Settings {
             audio_cache: true,
             audio_cache_mb: 1024,
             theme: ThemeChoice::Dark,
+            home: HomeSettings::default(),
             accent_from_art: true,
             volume: (u16::MAX as u32 * 70 / 100) as u16,
             sidebar_visible: true,
@@ -328,6 +407,42 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::Settings;
+
+    #[test]
+    fn partial_home_settings_preserve_other_preferences() {
+        let settings: Settings = serde_json::from_str(
+            r#"{
+            "volume": 12345,
+            "home": {
+                "quick_access": {"library_playlists": false},
+                "recently_played": {"visible": false},
+                "top_songs": {"limit": 3}
+            }
+        }"#,
+        )
+        .unwrap();
+        assert_eq!(settings.volume, 12345);
+        assert_eq!(settings.home.quick_access.limit, 8);
+        assert!(settings.home.quick_access.liked_songs);
+        assert!(!settings.home.quick_access.library_playlists);
+        assert!(!settings.home.recently_played.visible);
+        assert_eq!(settings.home.recently_played.limit, None);
+        assert_eq!(settings.home.top_songs.limit, Some(3));
+        assert!(settings.home.top_songs.visible);
+        assert_eq!(
+            settings.home.made_for_you,
+            super::MadeForYouSettings::default()
+        );
+        let encoded = serde_json::to_string(&settings).unwrap();
+        assert_eq!(
+            serde_json::from_str::<Settings>(&encoded).unwrap(),
+            settings
+        );
+        assert_eq!(
+            serde_json::from_str::<Settings>("{}").unwrap().home,
+            super::HomeSettings::default()
+        );
+    }
 
     #[test]
     fn older_settings_keep_the_sidebar_visible() {
