@@ -1,11 +1,125 @@
 //! Navigation arrows, search, and the account menu above every page.
 
-use egui::{Align, CornerRadius, Layout, Sense, Vec2, pos2, vec2};
+use std::sync::Arc;
+
+use egui::{Align, CornerRadius, Galley, Layout, Sense, Vec2, pos2, vec2};
 
 use crate::api::models::pick_image;
 use crate::app::App;
 use crate::model::{Action, Page};
 use crate::theme::{self, Icon, Palette};
+
+/// The gap the bar keeps between everything it lays out.
+const ITEM_SPACING: f32 = 8.0;
+/// The account avatar, and the icon in each of the three buttons beside it.
+const AVATAR_SIZE: f32 = 36.0;
+const ICON_BUTTON_ICON: f32 = 19.0;
+/// `theme::icon_button` pads its icon by 12 px.
+const ICON_BUTTON_SIZE: f32 = ICON_BUTTON_ICON + 12.0;
+const SPINNER_SIZE: f32 = 15.0;
+/// A badge is as tall as its text plus this, and as wide as its text plus
+/// the padding its own label needs.
+const BADGE_PADDING_Y: f32 = 12.0;
+const DEVICE_BADGE_PADDING: f32 = 28.0;
+/// The text starts 24 px in; leave 8 px after it to match the space before
+/// the icon.
+const UPDATE_BADGE_PADDING: f32 = 32.0;
+/// The width the search field aims for, the most it ever takes, and the
+/// least it shrinks to before the badges give up their labels instead.
+const SEARCH_IDEAL: f32 = 200.0;
+const SEARCH_MAX: f32 = 440.0;
+const SEARCH_FLOOR: f32 = 130.0;
+/// Everything at the right end whose width never changes: the page padding,
+/// the avatar, the gap the account menu leaves, the three icon buttons, and
+/// the spacing between them. The cursor stops at the left edge of the last
+/// button, so this counts three gaps, not four. The spinner and the badges
+/// are measured on top of it because they come and go.
+const RIGHT_CONTROLS_WIDTH: f32 =
+    super::widgets::PAGE_PADDING + AVATAR_SIZE + 4.0 + 3.0 * ICON_BUTTON_SIZE + 3.0 * ITEM_SPACING;
+
+/// How the top bar divides itself for one window width.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct TopbarFit {
+    /// How wide the search field may be.
+    search: f32,
+    /// Whether the badges have the room to spell themselves out.
+    labels: bool,
+}
+
+/// Divide the bar. The search field keeps the half it has always had, but
+/// never so much that the right end has to reach over it, and the badges
+/// fall back to their icons before the field shrinks past reading size.
+///
+/// `labelled` and `icons` are what the badges ask for with and without their
+/// text, each already including the spacing that precedes it.
+fn topbar_fit(room: f32, controls: f32, labelled: f32, icons: f32) -> TopbarFit {
+    // SEARCH_IDEAL is above SEARCH_FLOOR, so the clamp below is well ordered.
+    let ideal = (room * 0.5).clamp(SEARCH_IDEAL, SEARCH_MAX);
+    let labels = room - controls - labelled >= SEARCH_FLOOR;
+    let badges = if labels { labelled } else { icons };
+    TopbarFit {
+        search: (room - controls - badges).clamp(SEARCH_FLOOR, ideal),
+        labels,
+    }
+}
+
+/// What a badge asks of the bar, including the spacing before it.
+fn badge_width(galley: Option<&Arc<Galley>>, padding: f32, labels: bool) -> f32 {
+    galley.map_or(0.0, |galley| {
+        ITEM_SPACING
+            + if labels {
+                galley.size().x + padding
+            } else {
+                galley.size().y + BADGE_PADDING_Y
+            }
+    })
+}
+
+/// A pill at the right end of the bar: an icon with its label, or the icon
+/// alone once the bar is too narrow to spare the room for words.
+fn badge(
+    ui: &mut egui::Ui,
+    palette: &Palette,
+    icon: Icon,
+    galley: Arc<Galley>,
+    padding: f32,
+    labels: bool,
+) -> egui::Response {
+    let height = galley.size().y + BADGE_PADDING_Y;
+    let size = if labels {
+        vec2(galley.size().x + padding, height)
+    } else {
+        Vec2::splat(height)
+    };
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    // Collapsed to its icon the badge has no text on screen, so its label
+    // reaches a screen reader as the widget's name.
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), galley.text())
+    });
+    ui.painter().rect_filled(
+        rect,
+        CornerRadius::same(14),
+        palette.accent.gamma_multiply(0.16),
+    );
+    let icon_center = if labels {
+        pos2(rect.left() + 14.0, rect.center().y)
+    } else {
+        rect.center()
+    };
+    icon.image(palette.accent, 13.0).paint_at(
+        ui,
+        egui::Rect::from_center_size(icon_center, Vec2::splat(13.0)),
+    );
+    if labels {
+        ui.painter().galley(
+            pos2(rect.left() + 24.0, rect.center().y - galley.size().y / 2.0),
+            galley,
+            palette.accent,
+        );
+    }
+    response.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
 
 fn nav_button(
     ui: &mut egui::Ui,
@@ -71,7 +185,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         Layout::left_to_right(Align::Center),
         |ui| {
             ui.add_space(super::widgets::PAGE_PADDING);
-            ui.spacing_mut().item_spacing.x = 8.0;
+            ui.spacing_mut().item_spacing.x = ITEM_SPACING;
             if !app.settings.sidebar_visible {
                 if nav_button(
                     ui,
@@ -107,8 +221,44 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             }
             ui.add_space(8.0);
 
+            // The badges sit at the right end but grow with their text, so
+            // measure them here, before the search field takes its share.
+            let device_galley = app.now_playing().filter(|now| !now.local).map(|now| {
+                let label = format!(
+                    "Playing on {}",
+                    now.device_name.unwrap_or_else(|| "another device".into())
+                );
+                ui.painter()
+                    .layout_no_wrap(label, theme::medium(12.5), palette.accent)
+            });
+            let update = app.update.clone();
+            let update_galley = update.as_ref().map(|update| {
+                ui.painter().layout_no_wrap(
+                    format!("Update to {}", update.version),
+                    theme::medium(12.5),
+                    palette.accent,
+                )
+            });
+            // Ask once, so the bar reserves room for exactly the spinner it
+            // then draws.
+            let busy = app
+                .backend
+                .activity()
+                .busy(std::time::Duration::from_millis(1000));
+            let badges = |labels: bool| {
+                badge_width(device_galley.as_ref(), DEVICE_BADGE_PADDING, labels)
+                    + badge_width(update_galley.as_ref(), UPDATE_BADGE_PADDING, labels)
+            };
+            let controls = RIGHT_CONTROLS_WIDTH
+                + if busy {
+                    SPINNER_SIZE + ITEM_SPACING
+                } else {
+                    0.0
+                };
+
             let search_room = (ui.available_width() - window_controls.topbar_width).max(0.0);
-            let search_width = (search_room * 0.5).clamp(200.0, 440.0);
+            let fit = topbar_fit(search_room, controls, badges(true), badges(false));
+            let search_width = fit.search;
             let id = egui::Id::new("global-search");
             let before = app.search.query.clone();
             let response = super::widgets::search_field(
@@ -154,7 +304,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                         )
                     })
                     .unwrap_or_default();
-                let (rect, response) = ui.allocate_exact_size(Vec2::splat(36.0), Sense::click());
+                let (rect, response) =
+                    ui.allocate_exact_size(Vec2::splat(AVATAR_SIZE), Sense::click());
                 if ui.is_rect_visible(rect) {
                     let fill = if response.hovered() {
                         palette.surface_hover
@@ -241,7 +392,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 if theme::icon_button(
                     ui,
                     Icon::Settings,
-                    19.0,
+                    ICON_BUTTON_ICON,
                     palette.secondary,
                     palette.text,
                     "Settings",
@@ -253,7 +404,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 if theme::icon_button(
                     ui,
                     Icon::AudioLines,
-                    19.0,
+                    ICON_BUTTON_ICON,
                     if app.settings.milkdrop_open {
                         palette.accent
                     } else {
@@ -272,7 +423,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 if theme::icon_button(
                     ui,
                     Icon::Shrink,
-                    19.0,
+                    ICON_BUTTON_ICON,
                     palette.secondary,
                     palette.text,
                     super::keys::platform_shortcut(
@@ -286,89 +437,50 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 }
                 // A quiet spinner once the app has been talking to Spotify for a
                 // while, long enough that fast requests never flash it.
-                if app
-                    .backend
-                    .activity()
-                    .busy(std::time::Duration::from_millis(1000))
-                {
-                    theme::spinner(ui, 15.0, palette.secondary)
+                if busy {
+                    theme::spinner(ui, SPINNER_SIZE, palette.secondary)
                         .on_hover_text("Waiting for Spotify…");
                 }
                 // Where playback is.
-                if let Some(now) = app.now_playing()
-                    && !now.local
-                {
-                    let label = format!(
-                        "Playing on {}",
-                        now.device_name.unwrap_or_else(|| "another device".into())
-                    );
-                    let galley =
-                        ui.painter()
-                            .layout_no_wrap(label, theme::medium(12.5), palette.accent);
-                    let size = galley.size() + vec2(28.0, 12.0);
-                    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-                    ui.painter().rect_filled(
-                        rect,
-                        CornerRadius::same(14),
-                        palette.accent.gamma_multiply(0.16),
-                    );
-                    let icon_rect = egui::Rect::from_center_size(
-                        pos2(rect.left() + 14.0, rect.center().y),
-                        Vec2::splat(13.0),
-                    );
-                    Icon::Speaker
-                        .image(palette.accent, 13.0)
-                        .paint_at(ui, icon_rect);
-                    ui.painter().galley(
-                        pos2(rect.left() + 24.0, rect.center().y - galley.size().y / 2.0),
+                if let Some(galley) = device_galley {
+                    let device = galley.text().to_owned();
+                    let response = badge(
+                        ui,
+                        &palette,
+                        Icon::Speaker,
                         galley,
-                        palette.accent,
+                        DEVICE_BADGE_PADDING,
+                        fit.labels,
                     );
-                    if response
-                        .on_hover_cursor(egui::CursorIcon::PointingHand)
-                        .clicked()
-                    {
+                    // Without its label the badge still has to say where
+                    // playback went.
+                    let response = if fit.labels {
+                        response
+                    } else {
+                        response.on_hover_text(device)
+                    };
+                    if response.clicked() {
                         app.actions.push(Action::ToggleDevicesPopup);
                     }
                 }
                 // A newer release. Most people never visit a releases page,
                 // so the app says so, quietly, until they do.
-                if let Some(update) = app.update.clone() {
-                    let label = format!("Update to {}", update.version);
-                    let galley =
-                        ui.painter()
-                            .layout_no_wrap(label, theme::medium(12.5), palette.accent);
-                    // The text starts 24 px in; leave 8 px after it to match
-                    // the space before the icon.
-                    let size = galley.size() + vec2(32.0, 12.0);
-                    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-                    ui.painter().rect_filled(
-                        rect,
-                        CornerRadius::same(14),
-                        palette.accent.gamma_multiply(0.16),
-                    );
-                    let icon_rect = egui::Rect::from_center_size(
-                        pos2(rect.left() + 14.0, rect.center().y),
-                        Vec2::splat(13.0),
-                    );
-                    Icon::Info
-                        .image(palette.accent, 13.0)
-                        .paint_at(ui, icon_rect);
-                    ui.painter().galley(
-                        pos2(rect.left() + 24.0, rect.center().y - galley.size().y / 2.0),
+                if let (Some(galley), Some(update)) = (update_galley, update)
+                    && badge(
+                        ui,
+                        &palette,
+                        Icon::Info,
                         galley,
-                        palette.accent,
-                    );
-                    if response
-                        .on_hover_cursor(egui::CursorIcon::PointingHand)
-                        .on_hover_text(format!(
-                            "Version {} is available. Open the download page.",
-                            update.version
-                        ))
-                        .clicked()
-                    {
-                        app.actions.push(Action::OpenUrl(update.url));
-                    }
+                        UPDATE_BADGE_PADDING,
+                        fit.labels,
+                    )
+                    .on_hover_text(format!(
+                        "Version {} is available. Open the download page.",
+                        update.version
+                    ))
+                    .clicked()
+                {
+                    app.actions.push(Action::OpenUrl(update.url));
                 }
             });
         },
@@ -380,5 +492,76 @@ fn capitalize(text: &str) -> String {
     match chars.next() {
         Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
         None => String::new(),
+    }
+}
+
+#[cfg(test)]
+mod topbar_fit_tests {
+    use super::*;
+
+    // What the badges measure on a bar showing "Playing on MacBook de Luis"
+    // and "Update to 0.7.1", each including the spacing before it.
+    const DEVICE: f32 = ITEM_SPACING + 176.0;
+    const UPDATE: f32 = ITEM_SPACING + 152.0;
+    // Collapsed, a badge is a square chip as tall as its text.
+    const CHIP: f32 = ITEM_SPACING + 15.0 + BADGE_PADDING_Y;
+
+    /// The narrowest bar the app can produce: a 760 px window, its sidebar,
+    /// and the navigation buttons all taken out.
+    const NARROWEST_BAR: f32 = 398.0;
+
+    fn right_end(room: f32, labelled: f32, icons: f32) -> f32 {
+        let fit = topbar_fit(room, RIGHT_CONTROLS_WIDTH, labelled, icons);
+        let badges = if fit.labels { labelled } else { icons };
+        RIGHT_CONTROLS_WIDTH + badges - (room - fit.search)
+    }
+
+    #[test]
+    fn a_wide_bar_keeps_the_field_it_always_had() {
+        let fit = topbar_fit(2000.0, RIGHT_CONTROLS_WIDTH, DEVICE + UPDATE, CHIP * 2.0);
+        assert_eq!(fit.search, SEARCH_MAX);
+        assert!(fit.labels);
+        // Half the room, as before, while half still fits.
+        let fit = topbar_fit(700.0, RIGHT_CONTROLS_WIDTH, 0.0, 0.0);
+        assert_eq!(fit.search, 350.0);
+    }
+
+    #[test]
+    fn the_right_end_never_reaches_over_the_search_field() {
+        let mut room = NARROWEST_BAR;
+        while room <= 2400.0 {
+            for (labelled, icons) in [
+                (0.0, 0.0),
+                (DEVICE, CHIP),
+                (UPDATE, CHIP),
+                (DEVICE + UPDATE, CHIP * 2.0),
+            ] {
+                let over = right_end(room, labelled, icons);
+                assert!(
+                    over <= 0.0,
+                    "badges overlap the field by {over} px on a {room} px bar"
+                );
+            }
+            room += 1.0;
+        }
+    }
+
+    #[test]
+    fn a_narrow_bar_trades_the_badge_labels_for_their_icons() {
+        assert!(topbar_fit(1400.0, RIGHT_CONTROLS_WIDTH, DEVICE, CHIP).labels);
+        // The 1080 px window of the report that started this.
+        assert!(topbar_fit(952.0, RIGHT_CONTROLS_WIDTH, DEVICE + UPDATE, CHIP * 2.0).labels);
+        assert!(!topbar_fit(NARROWEST_BAR, RIGHT_CONTROLS_WIDTH, DEVICE, CHIP).labels);
+    }
+
+    #[test]
+    fn the_field_stays_readable_however_tight_the_bar_gets() {
+        let mut room = NARROWEST_BAR;
+        while room <= 2400.0 {
+            let fit = topbar_fit(room, RIGHT_CONTROLS_WIDTH, DEVICE + UPDATE, CHIP * 2.0);
+            assert!(fit.search >= SEARCH_FLOOR, "field is {} px", fit.search);
+            assert!(fit.search <= SEARCH_MAX);
+            room += 1.0;
+        }
     }
 }
