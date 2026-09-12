@@ -48,6 +48,19 @@ fn play_pause_label(playing: bool) -> &'static str {
     if playing { "Pause" } else { "Play" }
 }
 
+fn left_click(sender: &Sender<TrayCommand>, wake: &Wake, on_windows: bool) {
+    // Each release of a Windows double-click arrives separately, possibly
+    // on opposite sides of window creation. Both must ask to show it.
+    let command = if on_windows {
+        TrayCommand::Show
+    } else {
+        TrayCommand::ShowHide
+    };
+    if sender.send(command).is_ok() {
+        wake();
+    }
+}
+
 /// The item, and the menu entry whose label follows playback.
 struct Item {
     _icon: TrayIcon,
@@ -78,8 +91,8 @@ fn build(sender: Sender<TrayCommand>, wake: Wake) -> Result<Item, Box<dyn std::e
         .with_icon(icon)
         .with_tooltip("Fastpotify")
         .with_menu(Box::new(menu));
-    // On Windows and macOS, a plain click shows or hides the window; the
-    // menu stays on right click.
+    // A Windows click raises the window; macOS keeps its visibility toggle.
+    // Both platforms keep the menu on right click.
     #[cfg(any(windows, target_os = "macos"))]
     let builder = builder.with_menu_on_left_click(false);
     #[cfg(target_os = "macos")]
@@ -101,9 +114,8 @@ fn build(sender: Sender<TrayCommand>, wake: Wake) -> Result<Item, Box<dyn std::e
             button_state: tray_icon::MouseButtonState::Up,
             ..
         } = event
-            && sender.send(TrayCommand::ShowHide).is_ok()
         {
-            wake();
+            left_click(&sender, &wake, cfg!(windows));
         }
     }));
 
@@ -467,5 +479,29 @@ mod tests {
         assert_eq!(commands.try_recv(), Ok(TrayCommand::Show));
         assert_eq!(woken.load(std::sync::atomic::Ordering::SeqCst), 2);
         host::REOPEN.with(|slot| *slot.borrow_mut() = None);
+    }
+}
+
+#[cfg(test)]
+mod click_tests {
+    use super::*;
+
+    #[test]
+    fn both_windows_double_click_releases_request_show_and_wake_the_app() {
+        let (sender, commands) = std::sync::mpsc::channel();
+        let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = Arc::clone(&count);
+        let wake: Wake = Arc::new(move || {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        });
+        left_click(&sender, &wake, true);
+        left_click(&sender, &wake, true);
+        assert_eq!(
+            commands.try_iter().collect::<Vec<_>>(),
+            vec![TrayCommand::Show, TrayCommand::Show]
+        );
+        assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 2);
+        left_click(&sender, &wake, false);
+        assert_eq!(commands.try_recv(), Ok(TrayCommand::ShowHide));
     }
 }

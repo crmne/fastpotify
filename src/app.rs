@@ -9580,6 +9580,28 @@ mod tests {
         );
     }
 
+    #[test]
+    fn repeated_show_requests_never_close_or_hide_the_window() {
+        for hidden in [false, true] {
+            let mut app = headless_app();
+            app.window_hidden = hidden;
+            let ctx = egui::Context::default();
+            let mut output = ctx.run_ui(Default::default(), |ui| {
+                app.apply(Action::ShowWindow, ui.ctx());
+                app.apply(Action::ShowWindow, ui.ctx());
+            });
+            output.textures_delta.clear();
+            assert!(!app.hide_intent);
+            assert_eq!(app.wants_show, hidden);
+            let commands = &output.viewport_output[&egui::ViewportId::ROOT].commands;
+            assert!(!commands.contains(&egui::ViewportCommand::Close));
+            if !hidden {
+                assert!(commands.contains(&egui::ViewportCommand::Focus));
+            }
+            app.backend.shutdown();
+        }
+    }
+
     /// The media controls are handed a downloaded file, never a URL: macOS
     /// loads cover art itself and dereferences a failed load without
     /// checking it, so a URL that does not answer aborts the process. The

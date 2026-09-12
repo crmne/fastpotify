@@ -106,6 +106,10 @@ playing device as the player bar, update immediately, and are disabled when
 there is no song or the device refuses controls. The icons follow the system
 appearance and display scaling.
 
+On `main`, after 0.7.1, clicking or double-clicking the Windows tray icon shows
+and raises Fastpotify. Use **Show or hide Fastpotify** in the tray menu to hide
+it again.
+
 Closing to the tray removes the window and its preview. Reopening the main
 window or switching to the Winamp window creates its controls again. Media
 keys and the system's now-playing controls continue working while the window

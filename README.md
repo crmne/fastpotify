@@ -86,6 +86,8 @@ everyday use, and connection details.
   [Winamp Skin Museum](https://skins.webamp.org) on either window to add it.
   On Windows, after 0.7.1, a mini player saved on a disconnected monitor
   starts at a default position on the current desktop.
+  Clicking or double-clicking the Windows tray icon brings the window forward;
+  the tray menu still offers Show or hide.
   On Windows, after 0.7.1, hide its taskbar button from Settings or the mini
   player's options menu while keeping the window and tray controls available.
 
