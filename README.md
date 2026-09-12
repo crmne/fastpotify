@@ -48,6 +48,8 @@ everyday use, and connection details.
   after 0.7.1).
 - **Search** across songs, artists, albums, playlists, podcasts, and episodes,
   with a top result and per-type views. Right-click results and cards for their actions.
+  On `main`, after 0.7.1, a personal app searches the catalogue while shared
+  access finds playlists. Each part appears independently, even if the other fails.
 - **Home** with Made for you, Recently played, your top artists and songs, and
   recommendations. Right-click playlist shortcuts and shelf cards for their actions.
 - **Artist pages** with popular songs, a filterable discography, and related

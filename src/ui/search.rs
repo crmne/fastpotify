@@ -24,18 +24,32 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         app.actions.push(Action::SetSearchFilter(filter));
     }
     ui.add_space(12.0);
+    let pending = app.search.catalogue_pending || app.search.playlists_pending;
+    if pending {
+        widgets::loading_row(ui, &palette);
+    }
+    if let Some(error) = app.search.error.clone() {
+        widgets::error_row(ui, app, &error, None);
+    }
     let results = match &app.search.results {
         Loadable::Loaded(results) => results.clone(),
         Loadable::Loading | Loadable::NotLoaded => {
-            widgets::loading_row(ui, &palette);
+            if !pending {
+                widgets::loading_row(ui, &palette);
+            }
             return;
         }
         Loadable::Failed(error) => {
             let error = error.clone();
-            widgets::error_row(ui, app, &error, None);
+            if app.search.error.is_none() {
+                widgets::error_row(ui, app, &error, None);
+            }
             return;
         }
     };
+    if results.is_empty() && (pending || app.search.error.is_some()) {
+        return;
+    }
     if results.is_empty() {
         widgets::empty_state(
             ui,

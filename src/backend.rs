@@ -184,6 +184,14 @@ pub enum ApiRequest {
         query: String,
         serial: u64,
     },
+    SearchCatalogue {
+        query: String,
+        serial: u64,
+    },
+    SearchPlaylists {
+        query: String,
+        serial: u64,
+    },
     Artist {
         id: String,
     },
@@ -373,10 +381,20 @@ pub enum ApiResponse {
         uris: Vec<String>,
         result: ApiResult<Vec<bool>>,
     },
+    SearchStarted {
+        query: String,
+        serial: u64,
+        split: bool,
+    },
     Search {
         query: String,
         serial: u64,
         result: ApiResult<SearchResults>,
+    },
+    SearchPlaylists {
+        query: String,
+        serial: u64,
+        result: ApiResult<Page<Playlist>>,
     },
     Artist {
         id: String,
@@ -972,6 +990,7 @@ struct Worker {
     /// True while a playback grant or engine connection is in flight, so a
     /// second attempt does not pile up.
     engine_busy: bool,
+    search_tasks: Vec<tokio::task::AbortHandle>,
     signed_in: bool,
     /// The plan, once the Web API has answered.
     premium: Option<bool>,
@@ -1022,6 +1041,7 @@ impl Worker {
             engine: None,
             album_type_lookup: AlbumTypeLookup::default(),
             engine_busy: false,
+            search_tasks: Vec::new(),
             signed_in: false,
             premium: None,
             cancel_signin: None,
@@ -1080,7 +1100,10 @@ impl Worker {
                         "Local playback isn't set up on this computer yet".into(),
                     )),
                 },
-                Command::Api(request) => self.dispatch(request),
+                Command::Api(ApiRequest::Search { query, serial }) => self.search(query, serial),
+                Command::Api(request) => {
+                    self.dispatch(request);
+                }
                 Command::ApiFinished {
                     generation,
                     response,
@@ -1675,6 +1698,7 @@ impl Worker {
     }
 
     fn sign_out(&mut self) {
+        self.cancel_search();
         self.signed_in = false;
         self.session.send_modify(|generation| *generation += 1);
         self.authorization_attempt += 1;
@@ -2289,7 +2313,39 @@ impl Worker {
 
     // ---- api ----------------------------------------------------------------
 
-    fn dispatch(&self, request: ApiRequest) {
+    fn cancel_search(&mut self) {
+        for task in self.search_tasks.drain(..) {
+            task.abort();
+        }
+    }
+
+    fn search(&mut self, query: String, serial: u64) {
+        self.cancel_search();
+        if query.is_empty() {
+            return;
+        }
+        let split = self.api.personal_ready();
+        self.emit(Event::Api(Box::new(ApiResponse::SearchStarted {
+            query: query.clone(),
+            serial,
+            split,
+        })));
+        if split {
+            self.search_tasks
+                .push(self.dispatch(ApiRequest::SearchPlaylists {
+                    query: query.clone(),
+                    serial,
+                }));
+        }
+        let request = if split {
+            ApiRequest::SearchCatalogue { query, serial }
+        } else {
+            ApiRequest::Search { query, serial }
+        };
+        self.search_tasks.push(self.dispatch(request));
+    }
+
+    fn dispatch(&self, request: ApiRequest) -> tokio::task::AbortHandle {
         let api = Arc::clone(&self.api);
         let shared_lease = self.credentials.lease(CredentialSlot::Shared);
         let personal_lease = self.credentials.lease(CredentialSlot::Personal);
@@ -2319,7 +2375,8 @@ impl Worker {
                 shared_lease,
                 personal_lease,
             });
-        });
+        })
+        .abort_handle()
     }
 
     fn accent(&self, url: String) {
@@ -2384,7 +2441,11 @@ fn operation_for(api: &ApiGateway, request: &ApiRequest) -> Operation {
         }
         ApiRequest::MyPlaylists { .. } => Operation::PlaylistLibrary,
         ApiRequest::CreatePlaylist { .. } => Operation::PlaylistCreation,
-        ApiRequest::Discover { .. } | ApiRequest::Search { .. } => Operation::PlaylistSearch,
+        ApiRequest::Discover { .. } | ApiRequest::SearchPlaylists { .. } => {
+            Operation::PlaylistSearch
+        }
+        ApiRequest::SearchCatalogue { .. } => Operation::CatalogSearch,
+        ApiRequest::Search { .. } => Operation::PlaylistSearch,
         ApiRequest::Playlist { id, .. } => Operation::PlaylistMetadata(api.playlist_access(id)),
         ApiRequest::PlaylistItems { id, .. }
         | ApiRequest::PlaylistSample { id, .. }
@@ -2435,6 +2496,9 @@ fn observe_playlists(api: &ApiGateway, response: &ApiResponse) {
                 api.observe_playlists(&playlists.items);
             }
         }
+        ApiResponse::SearchPlaylists {
+            result: Ok(page), ..
+        } => api.observe_playlists(&page.items),
         ApiResponse::PlaylistUpdated {
             id,
             result: Err(error),
@@ -2688,6 +2752,20 @@ async fn handle(api: &ApiGateway, request: ApiRequest) -> (ApiResponse, Option<A
                 &query,
                 &["track", "artist", "album", "playlist", "show", "episode"]
             )),
+            query,
+            serial,
+        },
+        ApiRequest::SearchCatalogue { query, serial } => ApiResponse::Search {
+            result: routed!(search(
+                &query,
+                &["track", "artist", "album", "show", "episode"]
+            )),
+            query,
+            serial,
+        },
+        ApiRequest::SearchPlaylists { query, serial } => ApiResponse::SearchPlaylists {
+            result: routed!(search(&query, &["playlist"]))
+                .map(|results| results.playlists.unwrap_or_default()),
             query,
             serial,
         },
@@ -3256,6 +3334,77 @@ mod authorization_tests {
                 .exists()
         );
         let _ = std::fs::remove_dir_all(worker.dirs.state.parent().unwrap());
+    }
+
+    #[test]
+    fn search_requests_keep_their_scope_when_personal_readiness_changes() {
+        let (_runtime, worker, _) = worker("search-routing");
+        for ready in [false, true] {
+            worker.api.set_state(
+                ApiSource::Personal,
+                if ready {
+                    SessionState::Ready {
+                        account: AccountId::new("alice"),
+                    }
+                } else {
+                    SessionState::Unavailable
+                },
+            );
+            assert_eq!(
+                operation_for(
+                    &worker.api,
+                    &ApiRequest::Search {
+                        query: "q".into(),
+                        serial: 1,
+                    }
+                ),
+                Operation::PlaylistSearch
+            );
+            assert_eq!(
+                operation_for(
+                    &worker.api,
+                    &ApiRequest::SearchCatalogue {
+                        query: "q".into(),
+                        serial: 1,
+                    }
+                ),
+                Operation::CatalogSearch
+            );
+            assert_eq!(
+                operation_for(
+                    &worker.api,
+                    &ApiRequest::SearchPlaylists {
+                        query: "q".into(),
+                        serial: 1,
+                    }
+                ),
+                Operation::PlaylistSearch
+            );
+        }
+    }
+
+    #[test]
+    fn new_empty_queries_and_signout_cancel_searches_waiting_for_shared_access() {
+        let (runtime, mut worker, _) = worker("search-cancellation");
+        runtime.block_on(async {
+            for cancel in 0..3 {
+                worker
+                    .api
+                    .set_state(ApiSource::Shared, SessionState::Authorizing);
+                worker.search("old".into(), 1);
+                tokio::task::yield_now().await;
+                let old = worker.search_tasks[0].clone();
+                assert!(!old.is_finished(), "old search waits for shared access");
+                match cancel {
+                    0 => worker.search("new".into(), 2),
+                    1 => worker.search(String::new(), 2),
+                    _ => worker.sign_out(),
+                }
+                tokio::task::yield_now().await;
+                assert!(old.is_finished(), "abandoned search was cancelled");
+                worker.cancel_search();
+            }
+        });
     }
 
     fn verify(worker: &mut Worker, source: ApiSource, account: &str) {
