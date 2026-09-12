@@ -193,16 +193,33 @@ fn break_rows(
         }
     }
     rows.push(row);
-    if cut && let Some(mark) = overflow {
+    // The last row can be wider than the column even when nothing was cut:
+    // the first word of a row is taken whatever it measures, because a row
+    // has to hold something, and a word longer than the column has nowhere
+    // to break. `layout` hands the finished rows to epaint with no wrap
+    // width of its own -- the fitting is meant to have happened here -- so a
+    // row left too wide is drawn straight past the edge it was given.
+    if let Some(mark) = overflow {
         let mark_width = width(mark.encode_utf8(&mut [0; 4]));
         let last = rows.last_mut().expect("one row at least");
-        while last.1 + mark_width > wrap_width
-            && let Some(at) = last.0.rfind(' ')
-        {
-            last.1 -= width(&last.0[at + 1..]) + space;
-            last.0.truncate(at);
+        if cut || last.1 > wrap_width {
+            while last.1 + mark_width > wrap_width
+                && let Some(at) = last.0.rfind(' ')
+            {
+                last.1 -= width(&last.0[at + 1..]) + space;
+                last.0.truncate(at);
+            }
+            // A single word with no space left to give up: characters go
+            // instead, which is the only way the ellipsis can mean anything.
+            while last.1 + mark_width > wrap_width
+                && let Some(character) = last.0.chars().next_back()
+            {
+                let at = last.0.len() - character.len_utf8();
+                last.1 -= width(&last.0[at..]);
+                last.0.truncate(at);
+            }
+            last.0.push(mark);
         }
-        last.0.push(mark);
     }
     rows.into_iter().map(|(text, _)| text).collect()
 }
@@ -244,6 +261,52 @@ pub fn paint_line(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One unit of width per character, so a row's width is its length.
+    fn by_character(piece: &str) -> f32 {
+        piece.chars().count() as f32
+    }
+
+    #[test]
+    fn a_word_longer_than_the_column_still_fits_the_column() {
+        // A row has to hold something, so the first word of a row is taken
+        // whatever it measures. `layout` then gives epaint no wrap width of
+        // its own, so a row wider than the column is drawn past its edge.
+        let one = break_rows("abcdefghij", 5.0, 1, Some(ELLIPSIS), by_character);
+        assert_eq!(one, ["abcd\u{2026}"]);
+        assert!(by_character(&one[0]) <= 5.0);
+
+        // The same word with room for more rows: the last row is the one the
+        // mark belongs to, and it is the one that has to fit.
+        let two = break_rows("kl abcdefghij", 5.0, 2, Some(ELLIPSIS), by_character);
+        assert!(by_character(two.last().unwrap()) <= 5.0);
+        assert!(two.last().unwrap().ends_with(ELLIPSIS));
+
+        // A column narrower than the mark itself still terminates.
+        assert_eq!(
+            break_rows("abc", 0.5, 1, Some(ELLIPSIS), by_character),
+            ["\u{2026}"]
+        );
+    }
+
+    #[test]
+    fn rows_that_already_fit_are_left_alone() {
+        // No mark where nothing was cut, which is what says a title is whole.
+        assert_eq!(
+            break_rows("ab cd ef gh", 5.0, 2, Some(ELLIPSIS), by_character),
+            ["ab cd", "ef gh"]
+        );
+        // And the existing cut, which breaks at a space, is unchanged.
+        assert_eq!(
+            break_rows("ab cd ef gh", 5.0, 1, Some(ELLIPSIS), by_character),
+            ["ab\u{2026}"]
+        );
+        // Without an overflow character nothing is added or removed.
+        assert_eq!(
+            break_rows("abcdefghij", 5.0, 1, None, by_character),
+            ["abcdefghij"]
+        );
+    }
 
     #[test]
     fn detects_rtl() {
