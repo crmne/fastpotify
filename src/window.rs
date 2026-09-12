@@ -14,10 +14,8 @@ pub fn supports_window_level(display: raw_window_handle::RawDisplayHandle) -> bo
 
 /// Whether the window already covers the screen, maximized or full screen.
 ///
-/// eframe restores that state when it creates the window, and asking for an
-/// inner size or an outer position afterwards restores the window down again.
-/// A session's remembered size and position describe an ordinary window and
-/// are not applied to one that already fills the screen.
+/// eframe restores that state as it creates the window, and sizing or moving
+/// the window afterwards restores it down again.
 pub fn fills_the_screen(viewport: &egui::ViewportInfo) -> bool {
     viewport.maximized.unwrap_or(false) || viewport.fullscreen.unwrap_or(false)
 }

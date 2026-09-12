@@ -756,10 +756,8 @@ impl App {
             }
             return;
         }
-        // eframe restored the framework's own geometry before this ran, a
-        // maximized or full-screen window included. Sizing or moving such a
-        // window takes it straight back out of that state, so the session's
-        // size and position are for an ordinary window only.
+        // The session's geometry describes an ordinary window; applying it to
+        // one eframe restored maximized or full screen would restore it down.
         let filling_the_screen =
             ctx.input(|input| crate::window::fills_the_screen(input.viewport()));
         if let Some(size) = self.session_window_size.take()
@@ -7918,10 +7916,8 @@ mod tests {
         assert_eq!(app.session_window_pos, Some([100.0, 100.0]));
     }
 
-    /// A window left maximized or full screen comes back that way. eframe
-    /// restores the state as it creates the window, and asking for the
-    /// session's inner size or outer position on top of it would restore the
-    /// window down again, which is what the session geometry used to do.
+    /// A window left maximized or full screen comes back that way, instead of
+    /// being restored down by the session's size and position.
     #[test]
     fn a_window_that_fills_the_screen_keeps_its_state_over_the_session_geometry() {
         for (name, maximized, fullscreen) in [
