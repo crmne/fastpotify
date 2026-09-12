@@ -42,6 +42,10 @@ sidebar is not in compact mode.
 
 ## Keyboard and screen readers
 
+Right-click a search, filter, settings or playlist-editing text field for
+**Cut**, **Copy**, **Paste** and **Select all**. Cut and Copy require a text
+selection. The usual keyboard shortcuts, including Undo, still work.
+
 The main window provides screen-reader names for playback controls, library
 and song rows, menus, sliders, and settings switches. `Tab` and `Shift+Tab`
 move keyboard focus, shown by an outline. `Enter` or `Space` activates the

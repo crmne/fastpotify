@@ -2050,6 +2050,64 @@ pub fn chips<T: PartialEq + Copy>(
     selected
 }
 
+/// A text input with the native clipboard actions and a selection-aware menu.
+pub fn text_edit(ui: &mut Ui, edit: egui::TextEdit<'_>) -> egui::Response {
+    let mut output = edit.show(ui);
+    let response = &output.response;
+    let selection_id = response.id.with("edit-menu-selection");
+    // egui moves the caret on any mouse-button press and clears a selection
+    // when a popup takes focus. Keep the field's previous selection while its
+    // edit menu is opening or open.
+    let keep_selection = response.context_menu_opened()
+        || response.secondary_clicked()
+        || (response.contains_pointer()
+            && ui.input(|input| input.pointer.button_pressed(egui::PointerButton::Secondary)));
+    if keep_selection {
+        if let Some(range) = ui.data(|data| data.get_temp::<egui::text::CCursorRange>(selection_id))
+        {
+            output.state.cursor.set_char_range(Some(range));
+            output.state.clone().store(ui.ctx(), response.id);
+        }
+    } else if let Some(range) = output.state.cursor.char_range() {
+        ui.data_mut(|data| data.insert_temp(selection_id, range));
+    }
+    let selected = output
+        .state
+        .cursor
+        .char_range()
+        .is_some_and(|range| !range.is_empty());
+    response.context_menu(|ui| {
+        for (label, enabled, command) in [
+            ("Cut", selected, egui::ViewportCommand::RequestCut),
+            ("Copy", selected, egui::ViewportCommand::RequestCopy),
+            ("Paste", true, egui::ViewportCommand::RequestPaste),
+        ] {
+            if ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
+                // Menu clicks take focus. Restore this field before the native
+                // integration delivers the clipboard event on the next frame.
+                response.request_focus();
+                ui.ctx().send_viewport_cmd(command);
+                ui.close();
+            }
+        }
+        ui.separator();
+        if ui.button("Select all").clicked() {
+            let end = output.galley.job.text.chars().count();
+            output
+                .state
+                .cursor
+                .set_char_range(Some(egui::text::CCursorRange::two(
+                    egui::text::CCursor::new(0),
+                    egui::text::CCursor::new(end),
+                )));
+            output.state.clone().store(ui.ctx(), response.id);
+            response.request_focus();
+            ui.close();
+        }
+    });
+    output.response.response
+}
+
 /// A text field with a leading search icon.
 pub fn search_field(
     ui: &mut Ui,
@@ -2102,7 +2160,8 @@ pub fn search_field(
                 text_color,
             ))
     };
-    let response = child.add(
+    let response = text_edit(
+        &mut child,
         egui::TextEdit::singleline(text)
             .id(id)
             .hint_text(egui::RichText::new(hint).color(palette.dim))
@@ -2206,6 +2265,186 @@ mod tests {
     use crate::model::{Action, Page};
     use crate::paths::AppDirs;
     use crate::settings::Settings;
+
+    struct TextMenu {
+        ctx: egui::Context,
+        text: String,
+        multiline: bool,
+        response: Option<egui::Response>,
+    }
+
+    impl TextMenu {
+        fn new(multiline: bool) -> Self {
+            let ctx = egui::Context::default();
+            ctx.enable_accesskit();
+            theme::install(&ctx);
+            let mut menu = Self {
+                ctx,
+                text: "Björk 音楽".into(),
+                multiline,
+                response: None,
+            };
+            menu.frame(vec![]);
+            menu
+        }
+
+        fn frame(&mut self, events: Vec<egui::Event>) -> egui::FullOutput {
+            let mut output = self.ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(600.0, 400.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    self.response = Some(if self.multiline {
+                        text_edit(
+                            ui,
+                            egui::TextEdit::multiline(&mut self.text).id_source("edit"),
+                        )
+                    } else {
+                        search_field(
+                            ui,
+                            &Palette::dark(),
+                            egui::Id::new("edit"),
+                            &mut self.text,
+                            "Search",
+                            300.0,
+                        )
+                    });
+                },
+            );
+            output.textures_delta.clear();
+            output
+        }
+
+        fn select(&mut self, start: usize, end: usize) {
+            self.response.as_ref().unwrap().request_focus();
+            self.frame(vec![]);
+            let response = self.response.as_ref().unwrap();
+            let mut state = egui::TextEdit::load_state(&self.ctx, response.id).unwrap();
+            state
+                .cursor
+                .set_char_range(Some(egui::text::CCursorRange::two(
+                    egui::text::CCursor::new(start),
+                    egui::text::CCursor::new(end),
+                )));
+            state.store(&self.ctx, response.id);
+            response.request_focus();
+            self.frame(vec![]);
+        }
+
+        fn open(&mut self) -> egui::accesskit::TreeUpdate {
+            let pos = self.response.as_ref().unwrap().rect.center();
+            self.frame(vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Secondary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ]);
+            self.frame(vec![egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Secondary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }]);
+            self.frame(vec![]).platform_output.accesskit_update.unwrap()
+        }
+
+        fn choose(&mut self, label: &str) -> egui::FullOutput {
+            let tree = self.open();
+            let (target, node) = tree
+                .nodes
+                .iter()
+                .find(|(_, node)| node.label() == Some(label))
+                .expect(label);
+            assert!(!node.is_disabled(), "{label} is disabled");
+            self.frame(vec![egui::Event::AccessKitActionRequest(
+                egui::accesskit::ActionRequest {
+                    target_tree: egui::accesskit::TreeId::ROOT,
+                    target_node: *target,
+                    action: egui::accesskit::Action::Click,
+                    data: None,
+                },
+            )])
+        }
+    }
+
+    #[test]
+    fn text_menu_preserves_selection_and_uses_native_clipboard_events() {
+        for multiline in [false, true] {
+            let mut menu = TextMenu::new(multiline);
+            menu.select(6, 8);
+            let output = menu.choose("Copy");
+            assert!(
+                output.viewport_output[&egui::ViewportId::ROOT]
+                    .commands
+                    .contains(&egui::ViewportCommand::RequestCopy)
+            );
+            // The native integration delivers these events after reading the
+            // clipboard. Keep tests independent of the user's real clipboard.
+            let output = menu.frame(vec![egui::Event::Copy]);
+            assert!(
+                output
+                    .platform_output
+                    .commands
+                    .contains(&egui::OutputCommand::CopyText("音楽".into()))
+            );
+            assert_eq!(menu.text, "Björk 音楽");
+
+            let output = menu.choose("Cut");
+            assert!(
+                output.viewport_output[&egui::ViewportId::ROOT]
+                    .commands
+                    .contains(&egui::ViewportCommand::RequestCut)
+            );
+            menu.frame(vec![egui::Event::Cut]);
+            assert_eq!(menu.text, "Björk ");
+            assert!(menu.response.as_ref().unwrap().changed());
+
+            menu.frame(vec![egui::Event::Key {
+                key: egui::Key::Z,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::COMMAND,
+            }]);
+            assert_eq!(menu.text, "Björk 音楽", "menu edits keep keyboard undo");
+
+            menu.select(0, 5);
+            let output = menu.choose("Paste");
+            assert!(
+                output.viewport_output[&egui::ViewportId::ROOT]
+                    .commands
+                    .contains(&egui::ViewportCommand::RequestPaste)
+            );
+            menu.frame(vec![egui::Event::Paste("新しい".into())]);
+            assert_eq!(menu.text, "新しい 音楽");
+            assert!(menu.response.as_ref().unwrap().changed());
+
+            menu.choose("Select all");
+            menu.frame(vec![egui::Event::Text("replacement".into())]);
+            assert_eq!(menu.text, "replacement");
+            assert!(menu.response.as_ref().unwrap().has_focus());
+        }
+    }
+
+    #[test]
+    fn text_menu_disables_cut_and_copy_without_a_selection() {
+        let mut menu = TextMenu::new(false);
+        menu.select(2, 2);
+        let tree = menu.open();
+        for label in ["Cut", "Copy"] {
+            let (_, node) = tree
+                .nodes
+                .iter()
+                .find(|(_, node)| node.label() == Some(label))
+                .unwrap();
+            assert!(node.is_disabled(), "{label} needs a selection");
+        }
+    }
 
     fn test_app() -> App {
         let root = std::env::temp_dir().join(format!(

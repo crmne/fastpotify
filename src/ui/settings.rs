@@ -105,7 +105,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     .corner_radius(CornerRadius::same(6))
                     .inner_margin(Margin::symmetric(10, 6))
                     .show(ui, |ui| {
-                        ui.add(
+                        widgets::text_edit(
+                            ui,
                             egui::TextEdit::singleline(&mut client_id)
                                 .id(egui::Id::new("personal-web-client-id"))
                                 .hint_text(egui::RichText::new("Client ID").color(palette.dim))
@@ -239,7 +240,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     .corner_radius(CornerRadius::same(6))
                     .inner_margin(Margin::symmetric(10, 6))
                     .show(ui, |ui| {
-                        ui.add(
+                        widgets::text_edit(
+                            ui,
                             egui::TextEdit::singleline(&mut app.settings.device_name)
                                 .font(theme::regular(14.0))
                                 .frame(egui::Frame::NONE)

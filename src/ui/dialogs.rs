@@ -261,7 +261,8 @@ fn text_field(
         .corner_radius(CornerRadius::same(6))
         .inner_margin(Margin::symmetric(12, 8))
         .show(ui, |ui| {
-            ui.add(
+            super::widgets::text_edit(
+                ui,
                 egui::TextEdit::singleline(text)
                     .id(egui::Id::new(id))
                     .hint_text(egui::RichText::new(hint).color(palette.dim))
@@ -357,7 +358,8 @@ fn edit_playlist(app: &mut App, ui: &mut egui::Ui) {
         .corner_radius(CornerRadius::same(6))
         .inner_margin(Margin::symmetric(12, 8))
         .show(ui, |ui| {
-            ui.add(
+            super::widgets::text_edit(
+                ui,
                 egui::TextEdit::multiline(description)
                     .id(egui::Id::new("edit-description"))
                     .hint_text(egui::RichText::new("Optional description").color(palette.dim))
