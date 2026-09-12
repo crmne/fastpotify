@@ -270,11 +270,10 @@ pub fn actions_row(
                             )
                         });
                         if ui.is_rect_visible(rect) {
-                            let mut child = ui.new_child(
-                                egui::UiBuilder::new().max_rect(rect).layout(
+                            let mut child =
+                                ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(
                                     Layout::centered_and_justified(egui::Direction::LeftToRight),
-                                ),
-                            );
+                                ));
                             theme::spinner(&mut child, 22.0, palette.secondary);
                         }
                         response.on_hover_text("Refreshing…");
