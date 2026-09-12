@@ -54,7 +54,8 @@ everyday use, and connection details.
   recommendations. Right-click playlist shortcuts and shelf cards for their actions.
 - **Artist pages** with popular songs, a filterable discography, and related
   artists. **Album**, **playlist**, and **podcast** pages support playback
-  from any row.
+  from any row. Album and playlist scrollbars represent the full track count;
+  dragging to an unloaded section fetches that section directly.
   Discography and related-artist cards also have right-click menus (on `main`,
   after 0.7.1).
   Artist names in the player bar open their pages, including during local

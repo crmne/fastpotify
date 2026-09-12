@@ -2958,7 +2958,11 @@ impl App {
                 }
                 if let Some(page) = self.playlist_pages.get_mut(&id) {
                     let list = &mut page.items;
-                    if let Some(offset) = list.next_offset.filter(|_| list.can_load_more()) {
+                    if let Some(offset) = list
+                        .window_request
+                        .or(list.next_offset)
+                        .filter(|_| list.can_load_more())
+                    {
                         list.loading = true;
                         self.backend.api(ApiRequest::PlaylistItems {
                             id,
@@ -2971,9 +2975,26 @@ impl App {
             Page::Album(id) => {
                 if let Some(page) = self.album_pages.get_mut(&id) {
                     let list = &mut page.tracks;
-                    if let Some(offset) = list.next_offset.filter(|_| list.can_load_more()) {
+                    if list.base_offset > 0
+                        && self.table_sorts.contains_key(&Page::Album(id.clone()))
+                    {
+                        self.load_generation = self.load_generation.wrapping_add(1);
+                        page.generation = self.load_generation;
+                        let total = list.total;
+                        list.reset();
+                        list.total = total;
+                    }
+                    if let Some(offset) = list
+                        .window_request
+                        .or(list.next_offset)
+                        .filter(|_| list.can_load_more())
+                    {
                         list.loading = true;
-                        self.backend.api(ApiRequest::AlbumTracks { id, offset });
+                        self.backend.api(ApiRequest::AlbumTracks {
+                            id,
+                            offset,
+                            generation: page.generation,
+                        });
                     }
                 }
             }
@@ -2995,6 +3016,46 @@ impl App {
         }
     }
 
+    fn load_window(&mut self, page: Page, position: u32) {
+        match page {
+            Page::Playlist(id) => {
+                let Some(page) = self.playlist_pages.get_mut(&id) else {
+                    return;
+                };
+                if page.pending_writes > 0
+                    || !page.filter.trim().is_empty()
+                    || self.table_sorts.contains_key(&Page::Playlist(id.clone()))
+                {
+                    return;
+                }
+                let offset = page.items.window_at(position, PLAYLIST_PAGE_SIZE);
+                if let Some(offset) = offset {
+                    self.backend.api(ApiRequest::PlaylistItems {
+                        id,
+                        offset,
+                        generation: page.generation,
+                    });
+                }
+            }
+            Page::Album(id) => {
+                let Some(page) = self.album_pages.get_mut(&id) else {
+                    return;
+                };
+                if self.table_sorts.contains_key(&Page::Album(id.clone())) {
+                    return;
+                }
+                if let Some(offset) = page.tracks.window_at(position, 50) {
+                    self.backend.api(ApiRequest::AlbumTracks {
+                        id,
+                        offset,
+                        generation: page.generation,
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn load_playlist_items_at(&mut self, id: &str, offset: u32) {
         let generation = {
             let Some(page) = self.playlist_pages.get_mut(id) else {
@@ -3002,7 +3063,9 @@ impl App {
             };
             self.load_generation += 1;
             page.generation = self.load_generation;
+            let total = page.items.total;
             page.items.reset_at(offset);
+            page.items.total = total;
             page.items.loading = true;
             page.tail_checked = false;
             page.cache_restored_through = None;
@@ -3031,11 +3094,11 @@ impl App {
             return;
         };
         let position = position.clamp(1, total);
-        let offset = ((position - 1) / PLAYLIST_PAGE_SIZE) * PLAYLIST_PAGE_SIZE;
         if let Some(page) = self.playlist_pages.get_mut(id) {
             page.jump_position = position;
+            page.scroll_to = Some(position - 1);
         }
-        self.load_playlist_items_at(id, offset);
+        self.load_window(Page::Playlist(id.to_string()), position - 1);
     }
 
     fn reload(&mut self, page: Page) {
@@ -3055,6 +3118,7 @@ impl App {
                     self.load_generation += 1;
                     playlist.generation = self.load_generation;
                     playlist.items.loading = true;
+                    playlist.items.clear_windows();
                     playlist.cache_checked = true;
                     playlist.cache_restored_through = None;
                     playlist.pending_cache = None;
@@ -3931,6 +3995,7 @@ impl App {
                         .ok()
                         .and_then(|playlist| playlist.snapshot_id.as_deref());
                     if old_snapshot.is_some() && old_snapshot != new_snapshot {
+                        page.items.clear_windows();
                         page.cache_saved_through = None;
                         page.cache_restored_through = None;
                     }
@@ -3964,7 +4029,8 @@ impl App {
                     match result {
                         _ if page
                             .cache_restored_through
-                            .is_some_and(|cached| offset < cached) =>
+                            .is_some_and(|cached| offset < cached)
+                            && page.items.window_request != Some(offset) =>
                         {
                             // The initial request was already in flight when
                             // a longer cached prefix was restored.
@@ -4483,7 +4549,11 @@ impl App {
                             page.album = Loadable::Loaded(album);
                             if !page.tracks.loaded_once {
                                 page.tracks.loading = true;
-                                self.backend.api(ApiRequest::AlbumTracks { id, offset: 0 });
+                                self.backend.api(ApiRequest::AlbumTracks {
+                                    id,
+                                    offset: 0,
+                                    generation: page.generation,
+                                });
                             }
                         }
                         Err(error) => page.album = Loadable::Failed(error.to_string()),
@@ -4491,7 +4561,19 @@ impl App {
                 }
                 self.request_contains(uris);
             }
-            ApiResponse::AlbumTracks { id, offset, result } => {
+            ApiResponse::AlbumTracks {
+                id,
+                offset,
+                generation,
+                result,
+            } => {
+                if self
+                    .album_pages
+                    .get(&id)
+                    .is_none_or(|page| page.generation != generation)
+                {
+                    return;
+                }
                 let mut uris = Vec::new();
                 if let Some(page) = self.album_pages.get_mut(&id) {
                     match result {
@@ -4946,6 +5028,7 @@ impl App {
                 .tracks
                 .items
                 .iter()
+                .filter(|track| !track.uri.is_empty())
                 .map(|track| track.uri.clone())
                 .collect()
         } else if context_uri.ends_with(":collection") {
@@ -5168,12 +5251,13 @@ impl App {
                 return;
             };
             let cached_through = cache.next_offset.unwrap_or(cache.total);
-            let loaded_through = if page.items.loaded_once {
-                page.items
-                    .next_offset
-                    .unwrap_or(page.items.total.unwrap_or(0))
+            let loaded_through = if page.items.base_offset == 0 {
+                page.items.items.len() as u32
             } else {
-                0
+                page.items
+                    .windows
+                    .get(&0)
+                    .map_or(0, |items| items.len() as u32)
             };
             if loaded_through >= cached_through {
                 page.cache_saved_through = Some(cached_through);
@@ -5202,7 +5286,7 @@ impl App {
                 .collect();
             page.contributors.extend(adders.iter().cloned());
             page.items
-                .restore_cached(cache.items, cache.total, cache.next_offset);
+                .adopt_cached_prefix(cache.items, cache.total, cache.next_offset);
             page.items_generation = page.generation;
             page.cache_saved_through = Some(cached_through);
             page.cache_restored_through = Some(cached_through);
@@ -5720,6 +5804,7 @@ impl App {
         // Reads issued before the edit describe the old snapshot and must not
         // be allowed to replace the optimistic rows when they arrive.
         page.items.loading = false;
+        page.items.clear_windows();
         page.cache_saved_through = None;
         page.cache_restored_through = None;
         page.pending_cache = None;
@@ -6147,10 +6232,23 @@ impl App {
                 if let Some(page) = self.playlist_pages.get_mut(&playlist_id) {
                     page.local_additions
                         .retain(|uri| !uris.iter().any(|removed| removed == uri));
+                    let before = page.items.items.len();
                     page.items.retain(|item| {
                         item.playable()
                             .is_none_or(|playable| !uris.iter().any(|uri| uri == playable.uri()))
                     });
+                    let removed = (before - page.items.items.len()) as u32;
+                    page.items.total = page.items.total.map(|total| total.saturating_sub(removed));
+                    page.items.next_offset = page
+                        .items
+                        .next_offset
+                        .map(|offset| offset.saturating_sub(removed));
+                    if let Loadable::Loaded(playlist) = &mut page.playlist
+                        && let Some(count) =
+                            playlist.items_count.as_mut().or(playlist.tracks.as_mut())
+                    {
+                        count.total = count.total.saturating_sub(removed);
+                    }
                 }
                 self.playlist_busy = true;
                 self.backend.api(ApiRequest::RemoveFromPlaylist {
@@ -6274,6 +6372,7 @@ impl App {
                 }
             }
             Action::LoadMore(page) => self.load_more(page),
+            Action::LoadWindow { page, position } => self.load_window(page, position),
             Action::JumpToPlaylistPosition { id, position } => {
                 self.jump_to_playlist_position(&id, position)
             }
@@ -11466,6 +11565,270 @@ mod tests {
             Some(575),
             "the final short interval is still saved"
         );
+    }
+
+    #[test]
+    fn removing_a_song_updates_the_finite_extent_immediately() {
+        let mut app = headless_app();
+        app.backend.set_offline(true);
+        let mut items = PagedList::default();
+        items.restore_cached(
+            vec![
+                cached_playlist_row("spotify:track:remove"),
+                cached_playlist_row("spotify:track:keep"),
+            ],
+            2,
+            None,
+        );
+        app.playlist_pages.insert(
+            "edit".into(),
+            PlaylistPage {
+                items,
+                playlist: Loadable::Loaded(Playlist {
+                    items_count: Some(TrackCount { total: 2 }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        );
+        app.apply(
+            Action::RemoveFromPlaylist {
+                playlist_id: "edit".into(),
+                uris: vec!["spotify:track:remove".into()],
+            },
+            &egui::Context::default(),
+        );
+        let page = &app.playlist_pages["edit"];
+        assert_eq!(page.items.total, Some(1));
+        assert_eq!(page.items.items.len(), 1);
+        assert_eq!(page.items.next_offset, None);
+        assert_eq!(
+            page.playlist
+                .get()
+                .unwrap()
+                .items_count
+                .as_ref()
+                .unwrap()
+                .total,
+            1
+        );
+    }
+
+    #[test]
+    fn an_overlapping_window_can_extend_a_restored_partial_prefix() {
+        let mut app = headless_app();
+        app.backend.set_offline(true);
+        let mut items = PagedList::default();
+        items.restore_cached(
+            vec![cached_playlist_row("spotify:track:cached"); 499],
+            1000,
+            Some(499),
+        );
+        app.playlist_pages.insert(
+            "overlap".into(),
+            PlaylistPage {
+                items,
+                cache_restored_through: Some(499),
+                tail_checked: true,
+                ..Default::default()
+            },
+        );
+        app.load_window(Page::Playlist("overlap".into()), 499);
+        app.handle_api(ApiResponse::PlaylistItems {
+            id: "overlap".into(),
+            offset: 450,
+            generation: 0,
+            result: Ok(crate::api::models::Page {
+                items: vec![cached_playlist_row("spotify:track:fresh"); 50],
+                total: 1000,
+                offset: 450,
+                limit: 50,
+                next: Some("next".into()),
+            }),
+        });
+        let items = &app.playlist_pages["overlap"].items;
+        assert!(!items.loading);
+        assert_eq!(items.items.len(), 500);
+        assert_eq!(items.next_offset, Some(500));
+    }
+
+    #[test]
+    fn late_disk_prefix_does_not_replace_a_pending_distant_window() {
+        let mut app = headless_app();
+        app.backend.set_offline(true);
+        let mut items = PagedList::default();
+        items.restore_cached(
+            vec![cached_playlist_row("spotify:track:first"); 50],
+            1000,
+            Some(50),
+        );
+        items.window_at(720, 50);
+        app.playlist_pages.insert(
+            "late".into(),
+            PlaylistPage {
+                generation: 7,
+                items_generation: 7,
+                tail_checked: true,
+                playlist: Loadable::Loaded(Playlist {
+                    snapshot_id: Some("same".into()),
+                    ..Default::default()
+                }),
+                items,
+                pending_cache: Some(PlaylistCache {
+                    snapshot: "same".into(),
+                    items: vec![cached_playlist_row("spotify:track:cached"); 500],
+                    total: 1000,
+                    next_offset: Some(500),
+                }),
+                ..Default::default()
+            },
+        );
+        app.try_adopt_playlist_cache("late");
+        let page = &app.playlist_pages["late"];
+        assert_eq!(page.items.base_offset, 700);
+        assert!(page.items.loading);
+        assert_eq!(page.items.windows.get(&0).map(Vec::len), Some(500));
+    }
+
+    #[test]
+    fn scrollbar_windows_share_the_cache_and_deduplicate_pending_requests() {
+        let mut app = headless_app();
+        app.backend.set_offline(true);
+        let first = cached_playlist_row("spotify:track:first");
+        app.playlist_pages.insert(
+            "scroll".into(),
+            PlaylistPage {
+                generation: 7,
+                items_generation: 7,
+                tail_checked: true,
+                cache_checked: true,
+                items: PagedList {
+                    items: vec![first; 50],
+                    total: Some(1000),
+                    next_offset: Some(50),
+                    loaded_once: true,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        );
+        app.load_window(Page::Playlist("scroll".into()), 720);
+        app.load_window(Page::Playlist("scroll".into()), 730);
+        assert_eq!(
+            app.backend.take_playlist_item_requests(),
+            vec![("scroll".into(), 700, 7)]
+        );
+        app.handle_api(ApiResponse::PlaylistItems {
+            id: "scroll".into(),
+            offset: 700,
+            generation: 7,
+            result: Ok(crate::api::models::Page {
+                items: vec![cached_playlist_row("spotify:track:distant"); 50],
+                total: 1000,
+                offset: 700,
+                limit: 50,
+                next: Some("next".into()),
+            }),
+        });
+        app.load_window(Page::Playlist("scroll".into()), 10);
+        assert!(app.backend.take_playlist_item_requests().is_empty());
+        assert_eq!(app.playlist_pages["scroll"].items.base_offset, 0);
+        assert_eq!(app.playlist_pages["scroll"].items.total, Some(1000));
+    }
+
+    #[test]
+    fn sorting_an_album_invalidates_the_in_flight_window() {
+        let mut app = headless_app();
+        app.backend.set_offline(true);
+        app.load_generation = 7;
+        app.album_pages.insert(
+            "album".into(),
+            AlbumPage {
+                generation: 7,
+                tracks: PagedList {
+                    base_offset: 150,
+                    total: Some(200),
+                    loading: true,
+                    window_request: Some(150),
+                    next_offset: Some(150),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        );
+        app.table_sorts.insert(
+            Page::Album("album".into()),
+            TableSort {
+                column: SortColumn::Title,
+                ascending: true,
+            },
+        );
+        app.load_more(Page::Album("album".into()));
+        let generation = app.album_pages["album"].generation;
+        app.handle_api(ApiResponse::AlbumTracks {
+            id: "album".into(),
+            offset: 0,
+            generation,
+            result: Ok(crate::api::models::Page {
+                items: vec![Track::default(); 50],
+                total: 200,
+                offset: 0,
+                limit: 50,
+                next: Some("next".into()),
+            }),
+        });
+        app.handle_api(ApiResponse::AlbumTracks {
+            id: "album".into(),
+            offset: 150,
+            generation: 7,
+            result: Ok(crate::api::models::Page {
+                items: vec![Track::default(); 50],
+                total: 200,
+                offset: 150,
+                limit: 50,
+                next: None,
+            }),
+        });
+        assert_eq!(app.album_pages["album"].tracks.items.len(), 50);
+        assert_eq!(app.album_pages["album"].tracks.next_offset, Some(50));
+    }
+
+    #[test]
+    fn null_album_slots_are_not_shuffle_candidates() {
+        let mut app = headless_app();
+        app.backend.set_offline(true);
+        let album: crate::api::models::Album = serde_json::from_str(r#"{"tracks":{"items":[{"uri":"spotify:track:a"},null,{"uri":"spotify:track:c"}],"total":3}}"#).unwrap();
+        let mut page = AlbumPage::default();
+        page.tracks.absorb(0, album.tracks.unwrap());
+        app.album_pages.insert("album".into(), page);
+        assert_eq!(
+            app.context_track_uris("spotify:album:album"),
+            Some(vec!["spotify:track:a".into(), "spotify:track:c".into()])
+        );
+    }
+
+    #[test]
+    fn album_window_from_an_evicted_generation_cannot_replace_current_rows() {
+        let mut app = headless_app();
+        app.backend.set_offline(true);
+        app.album_pages.insert(
+            "album".into(),
+            AlbumPage {
+                generation: 8,
+                ..Default::default()
+            },
+        );
+        app.handle_api(ApiResponse::AlbumTracks {
+            id: "album".into(),
+            offset: 150,
+            generation: 7,
+            result: Ok(crate::api::models::Page {
+                items: vec![Track::default()],
+                total: 200,
+                ..Default::default()
+            }),
+        });
+        assert!(app.album_pages["album"].tracks.items.is_empty());
     }
 
     #[test]

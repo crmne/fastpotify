@@ -101,6 +101,11 @@ and dragging never write that order back to Spotify.
   Settings, or request one there at any time. On macOS, **Check for Updates**
   is also in the application menu.
 
+Album and playlist scrollbars can request a distant track page through the
+existing Web API grant, without fetching all preceding tracks. These reads run
+one at a time per list and retain the existing rate-limit handling. Unloaded
+rows are placeholders until their page arrives; scrolling never starts playback.
+
 ## When Spotify pushes back
 
 Each Web API session has separate concurrency and rate limits. A `Retry-After`

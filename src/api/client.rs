@@ -691,7 +691,7 @@ impl ApiClient {
         offset: u32,
         limit: u32,
     ) -> Result<Page<PlaylistItem>> {
-        self.get(
+        self.get::<PositionedPage<PlaylistItem>>(
             &format!("/playlists/{id}/items"),
             &[
                 ("limit", limit.to_string()),
@@ -700,6 +700,7 @@ impl ApiClient {
             ],
         )
         .await
+        .map(Into::into)
     }
 
     /// Requested songs already present in a playlist.
@@ -1029,11 +1030,12 @@ impl ApiClient {
     }
 
     pub async fn album_tracks(&self, id: &str, offset: u32, limit: u32) -> Result<Page<Track>> {
-        self.get(
+        self.get::<PositionedPage<Track>>(
             &format!("/albums/{id}/tracks"),
             &[("limit", limit.to_string()), ("offset", offset.to_string())],
         )
         .await
+        .map(Into::into)
     }
 
     pub async fn show(&self, id: &str) -> Result<Show> {

@@ -212,6 +212,7 @@ pub enum ApiRequest {
     AlbumTracks {
         id: String,
         offset: u32,
+        generation: u64,
     },
     Show {
         id: String,
@@ -421,6 +422,7 @@ pub enum ApiResponse {
     AlbumTracks {
         id: String,
         offset: u32,
+        generation: u64,
         result: ApiResult<Page<Track>>,
     },
     Show {
@@ -2791,7 +2793,12 @@ async fn handle(api: &ApiGateway, request: ApiRequest) -> (ApiResponse, Option<A
             result: routed!(album(&id)),
             id,
         },
-        ApiRequest::AlbumTracks { id, offset } => ApiResponse::AlbumTracks {
+        ApiRequest::AlbumTracks {
+            id,
+            offset,
+            generation,
+        } => ApiResponse::AlbumTracks {
+            generation,
             result: routed!(album_tracks(&id, offset, 50)),
             id,
             offset,

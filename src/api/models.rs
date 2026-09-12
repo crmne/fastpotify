@@ -48,6 +48,45 @@ impl<T> Page<T> {
     }
 }
 
+/// Positional track endpoints must retain null slots: dropping one changes
+/// every subsequent playback and edit offset. Other catalogue lists may skip them.
+#[derive(Deserialize)]
+#[serde(bound(deserialize = "T: Deserialize<'de>"))]
+pub(super) struct PositionedPage<T> {
+    #[serde(default)]
+    items: Vec<Option<T>>,
+    #[serde(default)]
+    total: u32,
+    #[serde(default)]
+    limit: u32,
+    #[serde(default)]
+    offset: u32,
+    #[serde(default)]
+    next: Option<String>,
+}
+
+impl<T: Default> From<PositionedPage<T>> for Page<T> {
+    fn from(page: PositionedPage<T>) -> Self {
+        Self {
+            items: page
+                .items
+                .into_iter()
+                .map(Option::unwrap_or_default)
+                .collect(),
+            total: page.total,
+            limit: page.limit,
+            offset: page.offset,
+            next: page.next,
+        }
+    }
+}
+
+fn positioned_album_tracks<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Page<Track>>, D::Error> {
+    Ok(Option::<PositionedPage<Track>>::deserialize(deserializer)?.map(Into::into))
+}
+
 /// A cursor-paginated collection (followed artists, recently played).
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(bound(deserialize = "T: Deserialize<'de>"))]
@@ -181,7 +220,7 @@ pub struct Album {
     pub genres: Vec<String>,
     #[serde(default)]
     pub popularity: Option<u8>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "positioned_album_tracks")]
     pub tracks: Option<Page<Track>>,
     #[serde(default)]
     pub external_urls: ExternalUrls,
@@ -782,6 +821,14 @@ mod tests {
         // No date at all is still no year.
         let json = r#"{"id":"a","name":"A","uri":"spotify:album:a"}"#;
         assert_eq!(serde_json::from_str::<Album>(json).unwrap().year(), None);
+    }
+
+    #[test]
+    fn album_tracks_keep_null_server_positions() {
+        let album: Album = serde_json::from_str(r#"{"tracks":{"items":[{"uri":"spotify:track:a"},null,{"uri":"spotify:track:c"}],"total":3,"limit":3}}"#).unwrap();
+        let tracks = album.tracks.unwrap();
+        assert_eq!(tracks.items.len(), 3);
+        assert_eq!(tracks.items[2].uri, "spotify:track:c");
     }
 
     #[test]

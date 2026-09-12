@@ -112,10 +112,19 @@ may ignore saved positions. On Windows, a position
 whose title bar is no longer on an available monitor's work area is discarded
 when reopening the window, keeping its initial on-screen placement instead.
 
+Album and playlist scrollbars reserve the full track count as soon as Spotify
+reports it. Dragging to an unloaded section shows placeholders and requests
+that section directly. Loaded windows stay in memory while the page is retained;
+returning to one does not download it again. Unavailable entries keep their row
+positions. Playlist edits and refreshes invalidate other cached windows because
+their server positions may have changed. Only contiguous playlist prefixes are
+saved on disk.
+
 Large playlist pages also have a **Go to song** control. Entering a song
-number loads its 50-item page directly, without requesting every earlier page.
-Filtering or sorting still covers the whole playlist, so either action returns
-to the beginning and loads the remaining pages as needed.
+number scrolls to that row and loads its 50-item page if needed. Filtering or
+sorting returns to the beginning and loads remaining pages as needed, since
+local search and ordering require the track metadata. A failed window stops
+automatic requests and shows a Retry button in the reserved row space.
 
 On `main`, for the release after 0.7.1, Flatpak also preserves the fallback
 state directory used when `XDG_STATE_HOME` is unset. Session state, history,
