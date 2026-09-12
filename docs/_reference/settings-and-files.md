@@ -112,6 +112,12 @@ may ignore saved positions. On Windows, a position
 whose title bar is no longer on an available monitor's work area is discarded
 when reopening the window, keeping its initial on-screen placement instead.
 
+On `main`, for the release after 0.7.1, a main window left maximized or full
+screen reopens that way, and comes back that way from the mini player. The
+remembered size and position describe an ordinary window and are not applied
+to one that already fills the screen, because sizing or moving such a window
+restores it down.
+
 Large playlist pages also have a **Go to song** control. Entering a song
 number loads its 50-item page directly, without requesting every earlier page.
 Filtering or sorting still covers the whole playlist, so either action returns

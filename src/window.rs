@@ -12,6 +12,16 @@ pub fn supports_window_level(display: raw_window_handle::RawDisplayHandle) -> bo
     !matches!(display, raw_window_handle::RawDisplayHandle::Wayland(_))
 }
 
+/// Whether the window already covers the screen, maximized or full screen.
+///
+/// eframe restores that state when it creates the window, and asking for an
+/// inner size or an outer position afterwards restores the window down again.
+/// A session's remembered size and position describe an ordinary window and
+/// are not applied to one that already fills the screen.
+pub fn fills_the_screen(viewport: &egui::ViewportInfo) -> bool {
+    viewport.maximized.unwrap_or(false) || viewport.fullscreen.unwrap_or(false)
+}
+
 /// Checks a position in egui points against the fixed coordinate limits.
 #[cfg(not(windows))]
 pub fn can_restore(pos: [f32; 2], _pixels_per_point: f32) -> bool {
@@ -111,6 +121,22 @@ mod tests {
     fn logical_coordinates_are_scaled_to_monitor_pixels() {
         assert!(reachable([900.0, 100.0], 2.0, [0.0, 0.0, 1920.0, 1080.0]));
         assert!(!reachable([1000.0, 100.0], 2.0, [0.0, 0.0, 1920.0, 1080.0]));
+    }
+
+    #[test]
+    fn only_a_maximized_or_full_screen_window_fills_the_screen() {
+        let state = |maximized, fullscreen| {
+            fills_the_screen(&egui::ViewportInfo {
+                maximized,
+                fullscreen,
+                ..Default::default()
+            })
+        };
+        assert!(state(Some(true), Some(false)));
+        assert!(state(Some(false), Some(true)));
+        assert!(!state(Some(false), Some(false)));
+        // A backend that does not report the state leaves the window ordinary.
+        assert!(!state(None, None));
     }
 
     #[test]
