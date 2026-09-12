@@ -32,6 +32,8 @@ everyday use, and connection details.
   combines entries with the same device ID.
 - **Library.** Browse playlists, Liked Songs, saved albums, followed artists,
   podcasts, and saved episodes. Filter, pin, and reorder sidebar items.
+  Settings offers a compact track list with one line per song and spaced
+  separators between its name, artists and added date.
   On `main`, after 0.7.1, choose name, recent plays, or saved-date order where
   available. Follow Spotify’s playlist order or keep a separate local arrangement.
   Move Liked Songs among your pins or unpin it and choose its local position;

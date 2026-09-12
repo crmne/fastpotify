@@ -654,6 +654,12 @@ pub(crate) fn artist_links(
         if index > 0 {
             theme::text(ui, ", ", font.clone(), color);
         }
+        // egui advances the cursor with the spacing of the widget just
+        // drawn. The final artist needs the surrounding gap before the
+        // next metadata separator, while commas between artists stay snug.
+        if index + 1 == artists.len() {
+            ui.spacing_mut().item_spacing = spacing;
+        }
         if let Some(id) = &artist.id {
             if theme::link(ui, &artist.name, font.clone(), color).clicked() {
                 app.actions.push(Action::Open(Page::Artist(id.clone())));

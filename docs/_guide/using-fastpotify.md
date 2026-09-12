@@ -98,6 +98,10 @@ has no place in Spotify's playlist tree. Returning to **Local custom order**
 restores its saved position. Dragging a song onto Liked Songs still saves that
 song, wherever the row sits.
 
+In **Settings > Appearance**, **Compact track list** puts each song on one
+line. In narrow lists, the added date follows the artist credits with a spaced
+bullet; each artist name remains a separate link.
+
 ## Windows taskbar controls
 
 On `main`, after 0.7.1, hovering Fastpotify's taskbar button offers **Previous**,
