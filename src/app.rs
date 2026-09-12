@@ -436,6 +436,12 @@ pub struct App {
     pub update: Option<crate::updates::Release>,
     last_update_check: Option<Instant>,
     pub update_checking: bool,
+    pub show_update: bool,
+    pub update_download: crate::updates::DownloadState,
+    pub update_source: crate::updates::Source,
+    pub update_support: Option<Result<crate::updates::install::Installation, String>>,
+    pub update_restart_arguments: Vec<String>,
+    pub update_receipt: Option<PathBuf>,
     /// Winamp window state and active skin.
     pub winamp: crate::winamp::WinampState,
 }
@@ -686,6 +692,12 @@ impl App {
             update: None,
             last_update_check: None,
             update_checking: false,
+            show_update: false,
+            update_download: crate::updates::DownloadState::Idle,
+            update_source: crate::updates::Source::default(),
+            update_support: None,
+            update_restart_arguments: Vec::new(),
+            update_receipt: None,
             winamp: crate::winamp::WinampState::new(session.winamp_pos, tap, eq),
         };
         app.local.volume = app.settings.volume;
@@ -1299,7 +1311,17 @@ impl App {
 
     fn handle_backend_events(&mut self, events: Vec<Event>) {
         for event in events {
-            if self.offline {
+            if self.offline
+                && (matches!(self.update_source, crate::updates::Source::GitHub)
+                    || !matches!(
+                        &event,
+                        Event::UpdateChecked { .. }
+                            | Event::UpdateSupport(_)
+                            | Event::UpdateProgress { .. }
+                            | Event::UpdateDownloaded(_)
+                            | Event::UpdateInstalling(_)
+                    ))
+            {
                 continue;
             }
             match event {
@@ -1393,6 +1415,31 @@ impl App {
                     Err(error) => log::debug!("album type unavailable for {uri}: {error}"),
                 },
                 Event::WebApp { client_id } => self.web_app = client_id,
+                Event::UpdateSupport(result) => {
+                    if result.is_ok()
+                        && self.settings.download_updates_automatically
+                        && matches!(self.update_download, crate::updates::DownloadState::Idle)
+                    {
+                        self.actions.push(Action::DownloadUpdate);
+                    }
+                    self.update_support = Some(result);
+                }
+                Event::UpdateProgress { received, total } => {
+                    self.update_download =
+                        crate::updates::DownloadState::Downloading { received, total };
+                }
+                Event::UpdateDownloaded(result) => {
+                    self.update_download = match result {
+                        Ok(prepared) => crate::updates::DownloadState::Ready(prepared),
+                        Err(error) => crate::updates::DownloadState::Failed(error),
+                    };
+                }
+                Event::UpdateInstalling(result) => match result {
+                    Ok(()) => self.actions.push(Action::Quit),
+                    Err(error) => {
+                        self.update_download = crate::updates::DownloadState::Failed(error)
+                    }
+                },
                 Event::UpdateChecked { manual, result } => {
                     self.update_checking = false;
                     match result {
@@ -1401,6 +1448,14 @@ impl App {
                                 self.toast(format!("Fastpotify {} is available", notice.version));
                             }
                             self.update = Some(notice);
+                            if self.settings.download_updates_automatically
+                                && matches!(
+                                    self.update_download,
+                                    crate::updates::DownloadState::Idle
+                                )
+                            {
+                                self.backend.send(Command::InspectUpdate);
+                            }
                         }
                         Ok(None) => {
                             self.update = None;
@@ -6379,6 +6434,37 @@ impl App {
                 }
             }
             Action::CheckForUpdates => self.check_for_updates(true),
+            Action::ShowUpdate => {
+                self.show_update = true;
+                if self.update_support.is_none() {
+                    self.backend.send(Command::InspectUpdate);
+                }
+            }
+            Action::DownloadUpdate => {
+                if matches!(
+                    self.update_download,
+                    crate::updates::DownloadState::Idle | crate::updates::DownloadState::Failed(_)
+                ) && let Some(release) = self.update.clone()
+                {
+                    self.update_download = crate::updates::DownloadState::Downloading {
+                        received: 0,
+                        total: 0,
+                    };
+                    self.backend.send(Command::DownloadUpdate {
+                        release,
+                        source: self.update_source.clone(),
+                    });
+                }
+            }
+            Action::InstallUpdate => {
+                if let crate::updates::DownloadState::Ready(prepared) = &self.update_download {
+                    self.backend.send(Command::InstallUpdate {
+                        prepared: prepared.clone(),
+                        arguments: self.update_restart_arguments.clone(),
+                    });
+                    self.update_download = crate::updates::DownloadState::Installing;
+                }
+            }
             Action::SetLibrarySort { shelf, sort } => {
                 if sort.supports(shelf) {
                     self.settings.library_sort.insert(shelf, sort);
@@ -6693,13 +6779,26 @@ impl App {
         });
     }
 
+    pub fn report_update_failure(&mut self, error: String) {
+        self.toast_error(error);
+    }
+
     fn check_for_updates(&mut self, manual: bool) {
-        if self.update_checking || self.offline {
+        if self.update_checking
+            || (self.offline && matches!(self.update_source, crate::updates::Source::GitHub))
+            || !matches!(
+                self.update_download,
+                crate::updates::DownloadState::Idle | crate::updates::DownloadState::Failed(_)
+            )
+        {
             return;
         }
         self.update_checking = true;
         self.last_update_check = Some(Instant::now());
-        self.backend.send(Command::CheckForUpdates { manual });
+        self.backend.send(Command::CheckForUpdates {
+            manual,
+            source: self.update_source.clone(),
+        });
     }
 
     fn maybe_suggest_personal_app(&mut self) {
@@ -10675,6 +10774,26 @@ mod tests {
             !app.table_rows.contains_key(&Page::Playlist("pl0".into())),
             "its table-row copy must go with it"
         );
+    }
+
+    #[test]
+    fn update_checks_leave_the_popup_closed_until_requested() {
+        for manual in [false, true] {
+            let mut app = headless_app();
+            app.handle_backend_events(vec![Event::UpdateChecked {
+                manual,
+                result: Ok(Some(crate::updates::Release {
+                    version: "1.2.3".into(),
+                    url: "https://github.com/crmne/fastpotify/releases/tag/v1.2.3".into(),
+                })),
+            }]);
+            let ctx = egui::Context::default();
+            app.apply_actions(&ctx);
+            assert!(app.update.is_some());
+            assert!(!app.show_update);
+            app.apply(Action::ShowUpdate, &ctx);
+            assert!(app.show_update);
+        }
     }
 
     #[test]

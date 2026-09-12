@@ -28,10 +28,24 @@ struct Cli {
     #[arg(short, long)]
     verbose: bool,
 
+    #[arg(long, hide = true)]
+    update_receipt: Option<std::path::PathBuf>,
+
+    #[arg(long, hide = true)]
+    update_error: Option<String>,
+
     /// Start with sample data and no Spotify connection (for screenshots).
     #[cfg(feature = "demo")]
     #[arg(long)]
     demo: bool,
+
+    #[cfg(feature = "demo")]
+    #[arg(long, requires = "demo")]
+    demo_update_feed: Option<String>,
+
+    #[cfg(feature = "demo")]
+    #[arg(long, requires = "demo")]
+    demo_data: Option<std::path::PathBuf>,
 
     /// Page to open in demo mode, e.g. `home`, `playlist:pl1`, `artist:art0`.
     #[cfg(feature = "demo")]
@@ -281,6 +295,14 @@ fn format_devices(snapshot: &str) -> String {
 }
 
 fn main() -> eframe::Result<()> {
+    let arguments: Vec<_> = std::env::args_os().collect();
+    if arguments.len() == 3 && arguments[1] == "--apply-update" {
+        let result = fastpotify::updates::install::run_helper(std::path::Path::new(&arguments[2]));
+        if let Err(error) = &result {
+            eprintln!("{error:#}");
+        }
+        std::process::exit(if result.is_ok() { 0 } else { 1 });
+    }
     // A MilkDrop child launch is a bare visualiser window, not the app: it has
     // its own event loop and OpenGL context, reads the sound from a shared
     // buffer, and never touches the app's state. Handle it before anything
@@ -314,6 +336,16 @@ fn main() -> eframe::Result<()> {
         "warn,fastpotify=info"
     };
     let dirs = paths::AppDirs::discover();
+    #[cfg(feature = "demo")]
+    let dirs = cli
+        .demo_data
+        .as_ref()
+        .map(|base| paths::AppDirs {
+            config: base.join("config"),
+            state: base.join("state"),
+            cache: base.join("cache"),
+        })
+        .unwrap_or(dirs);
     let dirs_ready = dirs.ensure();
     let mut logger =
         env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(default_filter));
@@ -388,6 +420,10 @@ fn main() -> eframe::Result<()> {
     let desktop_surfaces = options.media_controls;
     #[allow(unused_mut)]
     let mut app = app::App::new(&waker, dirs, settings, options);
+    app.update_receipt = cli.update_receipt;
+    if let Some(error) = cli.update_error {
+        app.report_update_failure(error);
+    }
     if let Some(guard) = &instance {
         app.set_remote_control(guard);
     }
@@ -398,6 +434,22 @@ fn main() -> eframe::Result<()> {
     if demo {
         fastpotify::demo::populate(&mut app);
         fastpotify::demo::apply_flags(&mut app, cli.demo_page.as_deref(), cli.demo_show.as_deref());
+        if let Some(feed) = &cli.demo_update_feed {
+            match fastpotify::updates::Source::local(feed) {
+                Ok(source) => app.update_source = source,
+                Err(error) => {
+                    eprintln!("{error:#}");
+                    std::process::exit(2);
+                }
+            }
+            app.update_restart_arguments =
+                vec!["--demo".into(), "--demo-page".into(), "settings".into()];
+            if let Some(base) = &cli.demo_data {
+                app.update_restart_arguments
+                    .extend(["--demo-data".into(), base.to_string_lossy().into_owned()]);
+            }
+            app.actions.push(fastpotify::model::Action::CheckForUpdates);
+        }
         if let Some(locale) = cli.demo_language {
             app.locale = locale;
         }
@@ -979,6 +1031,13 @@ impl eframe::App for Shell {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         if let Some(app) = self.app.as_mut() {
             app.frame_ui(ui);
+            if let Some(receipt) = app.update_receipt.take() {
+                std::thread::spawn(move || {
+                    if let Err(error) = fastpotify::updates::install::acknowledge(&receipt) {
+                        log::error!("Could not confirm the update: {error:#}");
+                    }
+                });
+            }
             #[cfg(windows)]
             self.thumbbar
                 .sync(app.thumb_state(ui.ctx().system_theme() != Some(egui::Theme::Light)));

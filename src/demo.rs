@@ -1196,6 +1196,72 @@ mod tests {
     }
 
     #[test]
+    fn update_window_keeps_downloads_running_and_waits_for_restart() {
+        use crate::updates::{
+            DownloadState,
+            install::{Installation, Kind, Prepared},
+        };
+        use egui::accesskit::{Action as AccessibleAction, Role};
+        let (ctx, mut app) = accessible_app("update-window");
+        app.update = Some(crate::updates::Release {
+            version: "9.9.9".into(),
+            url: "https://example.invalid/release".into(),
+        });
+        let installation = Installation {
+            executable: std::path::PathBuf::from("/test/fastpotify"),
+            kind: Kind::Portable,
+        };
+        app.update_support = Some(Ok(installation.clone()));
+        assert!(!app.show_update);
+        app.actions.push(Action::ShowUpdate);
+        accessible_frame(&ctx, &mut app, vec![]);
+        let tree = accessible_frame(&ctx, &mut app, vec![]);
+        let download = accessible_node(&tree, "Download update", Role::Button);
+        accessible_frame(
+            &ctx,
+            &mut app,
+            vec![accessible_action(download, AccessibleAction::Click, None)],
+        );
+        assert!(matches!(
+            app.update_download,
+            DownloadState::Downloading { .. }
+        ));
+        let tree = accessible_frame(&ctx, &mut app, vec![]);
+        let close = accessible_node(&tree, "Close update", Role::Button);
+        accessible_frame(
+            &ctx,
+            &mut app,
+            vec![accessible_action(close, AccessibleAction::Click, None)],
+        );
+        assert!(!app.show_update);
+        assert!(matches!(
+            app.update_download,
+            DownloadState::Downloading { .. }
+        ));
+        app.update_download = DownloadState::Ready(Box::new(Prepared {
+            installation,
+            directory: "/test/stage".into(),
+            payload: "/test/stage/payload".into(),
+            version: "9.9.9".into(),
+            sha256: String::new(),
+        }));
+        accessible_frame(&ctx, &mut app, vec![]);
+        assert!(!app.show_update);
+        assert!(matches!(app.update_download, DownloadState::Ready(_)));
+        app.actions.push(Action::ShowUpdate);
+        accessible_frame(&ctx, &mut app, vec![]);
+        let tree = accessible_frame(&ctx, &mut app, vec![]);
+        let restart = accessible_node(&tree, "Restart to update", Role::Button);
+        accessible_frame(
+            &ctx,
+            &mut app,
+            vec![accessible_action(restart, AccessibleAction::Click, None)],
+        );
+        assert!(matches!(app.update_download, DownloadState::Installing));
+        app.backend.shutdown();
+    }
+
+    #[test]
     fn settings_search_filters_rows_clearing_and_empty_state() {
         use egui::accesskit::{Action as AccessibleAction, Role};
         let (ctx, mut app) = accessible_app("settings-search");
@@ -1322,6 +1388,10 @@ mod tests {
             ("without a cover", "Compact track list"),
             ("Ctrl+0", "Interface zoom"),
             ("Rust", "About"),
+            (
+                "Downloads in the background",
+                "Download updates automatically",
+            ),
         ] {
             let query = if cfg!(target_os = "macos") && query == "Ctrl+0" {
                 "Cmd+0"

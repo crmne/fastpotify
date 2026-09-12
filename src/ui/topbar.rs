@@ -107,8 +107,22 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             }
             ui.add_space(8.0);
 
+            let update_galley = app.update.as_ref().map(|update| {
+                let label = match &app.update_download {
+                    crate::updates::DownloadState::Ready(_) => "Update ready".into(),
+                    crate::updates::DownloadState::Downloading { .. } => {
+                        "Downloading update…".into()
+                    }
+                    _ => format!("Update to {}", update.version),
+                };
+                ui.painter()
+                    .layout_no_wrap(label, theme::medium(12.5), palette.accent)
+            });
+            let update_width = update_galley.as_ref().map_or(0.0, |galley| {
+                galley.size().x + 32.0 + ui.spacing().item_spacing.x
+            });
             let search_room = (ui.available_width() - window_controls.topbar_width).max(0.0);
-            let search_width = (search_room * 0.5).clamp(200.0, 440.0);
+            let search_width = ((search_room * 0.5).clamp(200.0, 440.0) - update_width).max(80.0);
             let id = egui::Id::new("global-search");
             let before = app.search.query.clone();
             let response = super::widgets::search_field(
@@ -333,15 +347,18 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 }
                 // A newer release. Most people never visit a releases page,
                 // so the app says so, quietly, until they do.
-                if let Some(update) = app.update.clone() {
-                    let label = format!("Update to {}", update.version);
-                    let galley =
-                        ui.painter()
-                            .layout_no_wrap(label, theme::medium(12.5), palette.accent);
+                if let (Some(galley), Some(update)) = (update_galley, app.update.clone()) {
                     // The text starts 24 px in; leave 8 px after it to match
                     // the space before the icon.
                     let size = galley.size() + vec2(32.0, 12.0);
                     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+                    response.widget_info(|| {
+                        egui::WidgetInfo::labeled(
+                            egui::WidgetType::Button,
+                            ui.is_enabled(),
+                            &galley.job.text,
+                        )
+                    });
                     ui.painter().rect_filled(
                         rect,
                         CornerRadius::same(14),
@@ -361,13 +378,10 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     );
                     if response
                         .on_hover_cursor(egui::CursorIcon::PointingHand)
-                        .on_hover_text(format!(
-                            "Version {} is available. Open the download page.",
-                            update.version
-                        ))
+                        .on_hover_text(format!("Version {} is available.", update.version))
                         .clicked()
                     {
-                        app.actions.push(Action::OpenUrl(update.url));
+                        app.actions.push(Action::ShowUpdate);
                     }
                 }
             });

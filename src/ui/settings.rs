@@ -317,7 +317,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         RowText::new("Output buffer", "More buffering can prevent clicks on busy computers. Less buffering makes controls respond sooner.").when(cfg!(windows)),
         RowText::new("Audio cache", "Save downloaded audio for later playback."),
         RowText::new("Apply and restart playback", "Restart local playback to apply these settings.").when(playback_dirty),
-        RowText::new("Playback settings applied", "").when(!playback_dirty)
+        RowText::new("Playback settings applied", "").when(!playback_dirty),
+        RowText::new("Download updates automatically", "Downloads in the background. You choose when to restart.")
     ];
     if section_matches(&needle, "Playback on this computer", &playback_rows) {
         any_visible = true;
@@ -481,6 +482,25 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                         &palette,
                         "Automatic update checks",
                         &mut app.settings.check_for_updates,
+                    )
+                    .changed()
+                    {
+                        changed = true;
+                    }
+                },
+            );
+            filtered_row(
+                ui,
+                &palette,
+                &needle,
+                "Playback on this computer",
+                &playback_rows[13],
+                |ui| {
+                    if widgets::switch(
+                        ui,
+                        &palette,
+                        "Download updates automatically",
+                        &mut app.settings.download_updates_automatically,
                     )
                     .changed()
                     {

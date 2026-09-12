@@ -101,6 +101,26 @@ and dragging never write that order back to Spotify.
   Settings, or request one there at any time. On macOS, **Check for Updates**
   is also in the application menu.
 
+  On Windows, macOS, and Linux, downloading an update fetches release metadata and
+  `checksums.txt` from the project's GitHub release, then the matching binary
+  archive, Windows installer, or universal macOS DMG. Fastpotify checks the published SHA-256 digest
+  and the portable executable's reported version before offering a restart.
+  Automatic downloads are optional; installation always waits for your click.
+  Checks and downloads do not open the update popup. The green update pill opens
+  it on request; closing the popup does not cancel a download.
+  No Spotify credential is sent. These are GitHub-hosted checksums, not a
+  separate publisher signature.
+
+  Updates stage their files in a private `.fastpotify-update-*` directory beside
+  the application so replacement stays on the same filesystem. The directory
+  retains the previous executable or Mac app bundle and `result.txt` for recovery and diagnosis.
+  Settings, caches and credential stores are not replaced. Package-manager
+  installs keep their package-manager update path. Mac updates verify the bundle
+  identifier, version and code signature before replacing the whole app bundle.
+  A Developer ID installation also requires the same signing team and a passing
+  macOS security assessment. Apps running from a disk image or an App Translocation
+  directory must be moved to a writable installation directory first.
+
 ## When Spotify pushes back
 
 Each Web API session has separate concurrency and rate limits. A `Retry-After`
