@@ -313,6 +313,10 @@ fn install_fonts(ctx: &egui::Context) {
         // epaint rebuilds the glyph atlas.
         let mut data = FontData::from_static(&font.bytes);
         data.index = font.index;
+        let offset = fallback_baseline_y_offset(&font.bytes, font.index);
+        if offset.abs() > 0.001 {
+            data.tweak.y_offset_factor = offset;
+        }
         fonts.font_data.insert(font.name.clone(), Arc::new(data));
         for family in fonts.families.values_mut() {
             family.push(font.name.clone());
@@ -320,6 +324,53 @@ fn install_fonts(ctx: &egui::Context) {
     }
 
     ctx.set_fonts(fonts);
+}
+
+// Adjusts a fallback face's baseline to align with Inter.
+//
+// epaint positions fallback glyphs by centering the difference between the
+// primary font's row height and the fallback font's row height:
+//
+//     glyph.pos.y = fallback.ascent + 0.5 * (primary.row_height - fallback.row_height)
+//
+// When the fallback face has vertical metrics different from Inter (for example,
+// Hiragino Sans on macOS, which declares a line height of 1.5 em via a 0.5 em lineGap),
+// this centering shifts the fallback baseline upward or downward relative to Latin text.
+//
+// Offsetting the glyph downward by the difference in baseline-to-center distances:
+//
+//     (inter.ascent - 0.5 * inter.row_height) - (fallback.ascent - 0.5 * fallback.row_height)
+//
+// neutralises epaint's centering and aligns the baselines across all mixed scripts
+// and font sizes.
+fn fallback_baseline_y_offset(bytes: &[u8], index: u32) -> f32 {
+    use skrifa::MetadataProvider as _;
+
+    let Ok(font) = skrifa::FontRef::from_index(bytes, index) else {
+        return 0.0;
+    };
+    let metrics = font.metrics(
+        skrifa::instance::Size::unscaled(),
+        skrifa::instance::LocationRef::default(),
+    );
+    let upm = metrics.units_per_em as f32;
+    if upm <= 0.0 {
+        return 0.0;
+    }
+    let fallback_height = metrics.ascent - metrics.descent + metrics.leading;
+    if fallback_height <= 0.0 {
+        return 0.0;
+    }
+
+    // Inter's metrics from assets/fonts/InterVariable.ttf:
+    // units_per_em = 2048, typo_asc = 1984, typo_desc = -494, typo_line_gap = 0
+    // ascent_ratio = 1984 / 2048 = 0.96875
+    // row_height_ratio = (1984 - (-494)) / 2048 = 2478 / 2048 = 1.2099609375
+    // baseline_center = 0.96875 - 0.5 * 1.2099609375 = 0.36376953125
+    const INTER_BASELINE_CENTER: f32 = (1984.0 / 2048.0) - 0.5 * ((1984.0 + 494.0) / 2048.0);
+
+    let fallback_baseline_center = (metrics.ascent - 0.5 * fallback_height) / upm;
+    INTER_BASELINE_CENTER - fallback_baseline_center
 }
 
 macro_rules! icons {
@@ -892,6 +943,49 @@ mod tests {
                 Color32::WHITE,
             );
             assert!(galley.rows[0].glyphs.len() >= 5);
+        });
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn fallback_baseline_offset_is_zero_for_inter() {
+        let inter = include_bytes!("../assets/fonts/InterVariable.ttf");
+        let offset = fallback_baseline_y_offset(inter, 0);
+        assert!(
+            offset.abs() < 1e-4,
+            "Inter should have zero offset relative to itself, got {offset}"
+        );
+    }
+
+    #[test]
+    fn fallback_baseline_offset_is_bounded_for_installed_fonts() {
+        for font in crate::system_fonts::fallbacks() {
+            let offset = fallback_baseline_y_offset(&font.bytes, font.index);
+            assert!(
+                offset.is_finite(),
+                "{} offset was not finite: {offset}",
+                font.name
+            );
+            assert!(
+                (-1.0..=1.0).contains(&offset),
+                "{} offset was out of expected range: {offset}",
+                font.name
+            );
+        }
+    }
+
+    #[test]
+    fn fonts_install_and_layout_mixed_cjk() {
+        let ctx = egui::Context::default();
+        install(&ctx);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let galley = ui.painter().layout_no_wrap(
+                "Track 87: 恋におちて -Fall in love- (Live)".to_string(),
+                regular(14.0),
+                Color32::WHITE,
+            );
+            assert!(!galley.rows.is_empty());
+            assert!(galley.rows[0].glyphs.len() >= 10);
         });
         output.textures_delta.clear();
     }
