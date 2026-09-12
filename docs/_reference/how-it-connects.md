@@ -45,13 +45,15 @@ adds a separate Development Mode quota. See
 
 On `main`, for the release after 0.7.1, a search runs as two requests when a
 personal app is ready: songs, artists, albums, podcasts, and episodes on the
-personal app, and playlists on the shared app. The six-type query is the slowest
-request Fastpotify makes, and this keeps most of it off the quota Spotify
-divides among every user of the shared app. Each half is shown the moment it
+personal app, and playlists on the shared app. This moves catalogue search off the quota Spotify divides among every user
+of the shared app. Each half is shown the moment it
 arrives, so a shared app waiting out a rate limit no longer holds up the songs,
 and playlists appear underneath when that wait ends. A half belonging to an
-earlier search is discarded rather than shown beside a newer one. If the
-playlist half fails, the rest of the results still stand. A personal app answers
+earlier search is discarded rather than shown beside a newer one. A newer or cleared search cancels the previous requests, including waits
+for shared access. If either half fails, the successful results remain usable
+with an error for the failed part. A new query starts a fresh result set; old
+songs never appear under its name. The loading indicator remains until both
+parts finish. A personal app answers
 with ten results for each type where the shared app answers with twenty, because
 Development Mode rejects the larger page. Without a personal app, one request
 still asks for all six types and nothing about a search changes.

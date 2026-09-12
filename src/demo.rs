@@ -1889,6 +1889,27 @@ mod tests {
         app.backend.shutdown();
     }
 
+    #[test]
+    fn an_empty_search_half_is_not_reported_as_no_results_while_the_other_waits_or_fails() {
+        let (ctx, mut app) = accessible_app("partial-search-status");
+        app.search.committed = "new query".into();
+        app.search.results = Loadable::Loaded(SearchResults::default());
+        for pending in [true, false] {
+            app.search.catalogue_pending = pending;
+            app.search.error = (!pending).then(|| "Search: network error".into());
+            search_frame(&ctx, &mut app, vec![]);
+            let text = search_frame(&ctx, &mut app, vec![]);
+            assert!(!text.iter().any(|(label, _)| label.contains("No results")));
+            if !pending {
+                assert!(
+                    text.iter()
+                        .any(|(label, _)| label.contains("network error"))
+                );
+            }
+        }
+        app.backend.shutdown();
+    }
+
     fn search_frame(
         ctx: &egui::Context,
         app: &mut App,
