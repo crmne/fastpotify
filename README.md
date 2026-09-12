@@ -32,6 +32,8 @@ everyday use, and connection details.
   combines entries with the same device ID.
 - **Library.** Browse playlists, Liked Songs, saved albums, followed artists,
   podcasts, and saved episodes. Filter, pin, and reorder sidebar items.
+  On `main`, after 0.7.1, double-click a playlist in Library to start playback;
+  a single click opens it.
   Settings offers a compact track list with one line per song and spaced
   separators between its name, artists and added date.
   On `main`, after 0.7.1, choose name, recent plays, or saved-date order where
