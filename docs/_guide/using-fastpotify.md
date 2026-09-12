@@ -113,6 +113,11 @@ Changing the option while the mini player is open replaces that window while
 playback continues. This setting is available on Windows; it does not change
 Linux panels or the macOS Dock.
 
+On `main`, after 0.7.1, the top bar reserves room for the device and update
+badges beside Search. In narrow windows those badges show only their icons.
+Hover to read the device name or available version; click to open the device
+picker or download page.
+
 ## Recent
 
 The queue panel's second tab combines Spotify's history with tracks played
