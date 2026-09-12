@@ -619,6 +619,13 @@ fn parse_demo_size(spec: &str) -> Result<[f32; 2], String> {
     Ok([width, height])
 }
 
+// Windows can stop drawing a window created outside the current monitors.
+// App::attach restores the saved position only once the native scale is known
+// and window::can_restore has checked its title bar against a live work area.
+fn mini_creation_position(position: Option<[f32; 2]>, on_windows: bool) -> Option<[f32; 2]> {
+    if on_windows { None } else { position }
+}
+
 fn native_options(
     fullscreen: bool,
     mini: Option<MiniWindow>,
@@ -661,7 +668,7 @@ fn native_options(
                 .with_window_level(level);
             // egui applies this native attribute on Windows only.
             let viewport = viewport.with_taskbar(mini.taskbar);
-            match mini.position {
+            match mini_creation_position(mini.position, cfg!(windows)) {
                 Some([x, y]) => viewport.with_position([x, y]),
                 None => viewport,
             }
@@ -708,6 +715,14 @@ mod native_window_tests {
     use super::*;
 
     #[test]
+    fn windows_never_creates_the_mini_player_at_an_unchecked_saved_position() {
+        for position in [Some([3560.0, 908.0]), Some([-1920.0, 100.0]), None] {
+            assert_eq!(mini_creation_position(position, true), None);
+            assert_eq!(mini_creation_position(position, false), position);
+        }
+    }
+
+    #[test]
     fn only_the_main_window_persists_framework_geometry() {
         assert!(native_options(false, None, None).persist_window);
         for shaded in [false, true] {
@@ -733,7 +748,10 @@ mod native_window_tests {
                 "mini geometry must not overwrite main"
             );
             assert_eq!(options.viewport.inner_size, Some(size));
-            assert_eq!(options.viewport.position, Some(egui::pos2(300.0, 200.0)));
+            assert_eq!(
+                options.viewport.position,
+                mini_creation_position(Some([300.0, 200.0]), cfg!(windows)).map(egui::Pos2::from)
+            );
             assert!(options.persistence_path.is_some());
         }
     }
@@ -759,7 +777,10 @@ mod native_window_tests {
             };
             let options = native_options(false, Some(mini), None);
             assert_eq!(options.viewport.taskbar, Some(taskbar));
-            assert_eq!(options.viewport.position, Some(egui::pos2(123.0, 456.0)));
+            assert_eq!(
+                options.viewport.position,
+                mini_creation_position(Some([123.0, 456.0]), cfg!(windows)).map(egui::Pos2::from)
+            );
             assert_eq!(options.viewport.inner_size, Some(egui::vec2(550.0, 232.0)));
             assert_eq!(
                 options.viewport.window_level,

@@ -120,6 +120,11 @@ Changing the option while the mini player is open replaces that window while
 playback continues. This setting is available on Windows; it does not change
 Linux panels or the macOS Dock.
 
+On Windows, after 0.7.1, the mini player starts on the current desktop if its
+saved title bar is outside every connected monitor’s work area. Positions on
+connected secondary monitors still restore. Reinstalling preserves settings;
+it is not needed to recover a position left on an unplugged display.
+
 ## Recent
 
 The queue panel's second tab combines Spotify's history with tracks played
