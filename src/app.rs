@@ -8,7 +8,7 @@ use egui::Color32;
 
 use crate::api::PlayRequest;
 use crate::api::models::{
-    ArtistRef, Device, PlayableItem, PlaybackState, Playlist, PlaylistItem, Queue, Track,
+    Album, ArtistRef, Device, PlayableItem, PlaybackState, Playlist, PlaylistItem, Queue, Track,
     TrackCount, User, UserRef, pick_image,
 };
 use crate::backend::{
@@ -276,6 +276,10 @@ pub struct App {
     pub show_pages: HashMap<String, ShowPage>,
     pub track_cache: HashMap<String, Track>,
     track_requests: HashSet<String>,
+    /// Album URIs already resolved or attempted through librespot this session.
+    album_types_requested: HashSet<String>,
+    /// Album URIs positively identified as EPs by librespot.
+    confirmed_ep_albums: HashSet<String>,
     /// Built table rows, keyed by page. Capped; dropped on reset and eviction.
     pub table_rows: HashMap<Page, TableRowsCache>,
     page_used: HashMap<Page, Instant>,
@@ -591,6 +595,8 @@ impl App {
             show_pages: HashMap::new(),
             track_cache: HashMap::new(),
             track_requests: HashSet::new(),
+            album_types_requested: HashSet::new(),
+            confirmed_ep_albums: HashSet::new(),
             table_rows: HashMap::new(),
             page_used: HashMap::new(),
             track_used: HashMap::new(),
@@ -802,6 +808,14 @@ impl App {
             Some(true)
         } else {
             exact
+        }
+    }
+
+    pub(crate) fn album_kind_label(&self, album: &Album) -> &'static str {
+        if album.is_single_release() && self.confirmed_ep_albums.contains(&album.uri) {
+            "EP"
+        } else {
+            album.kind_label()
         }
     }
 
@@ -1367,6 +1381,13 @@ impl App {
                 Event::UserName { id, name } => {
                     self.set_user_name(id, name);
                 }
+                Event::AlbumType { uri, result } => match result {
+                    Ok(true) => {
+                        self.confirmed_ep_albums.insert(uri);
+                    }
+                    Ok(false) => {}
+                    Err(error) => log::debug!("album type unavailable for {uri}: {error}"),
+                },
                 Event::WebApp { client_id } => self.web_app = client_id,
                 Event::UpdateChecked { manual, result } => {
                     self.update_checking = false;
@@ -1469,6 +1490,8 @@ impl App {
         self.album_pages.clear();
         self.artist_pages.clear();
         self.show_pages.clear();
+        self.album_types_requested.clear();
+        self.confirmed_ep_albums.clear();
         self.saved.clear();
         self.saved_pending.clear();
         self.track_recordings.clear();
@@ -3406,6 +3429,21 @@ impl App {
         self.backend.send(Command::UserNames(unknown));
     }
 
+    fn request_album_types<'a>(&mut self, albums: impl IntoIterator<Item = &'a Album>) {
+        let mut uris = Vec::new();
+        for album in albums {
+            if album.is_single_release()
+                && !album.uri.is_empty()
+                && self.album_types_requested.insert(album.uri.clone())
+            {
+                uris.push(album.uri.clone());
+            }
+        }
+        if !uris.is_empty() {
+            self.backend.album_types(uris);
+        }
+    }
+
     pub fn request_contains(&mut self, uris: Vec<String>) {
         let mut batch = Vec::new();
         for uri in uris {
@@ -4144,6 +4182,7 @@ impl App {
             }
             ApiResponse::SavedAlbums { offset, result } => match result {
                 Ok(page) => {
+                    self.request_album_types(page.items.iter().map(|item| &item.album));
                     for item in &page.items {
                         self.saved.insert(item.album.uri.clone(), true);
                     }
@@ -4330,6 +4369,9 @@ impl App {
                 offset,
                 result,
             } => {
+                if let Ok(albums) = &result {
+                    self.request_album_types(albums.items.iter());
+                }
                 if let Some(page) = self.artist_pages.get_mut(&id) {
                     let list = page.albums.entry(groups).or_default();
                     match result {
@@ -4345,6 +4387,9 @@ impl App {
             }
             ApiResponse::Album { id, result } => {
                 let mut uris = Vec::new();
+                if let Ok(album) = &result {
+                    self.request_album_types(std::iter::once(album));
+                }
                 if let Ok(album) = &result
                     && let Some(image) = pick_image(&album.images, 300)
                 {
@@ -9736,6 +9781,148 @@ mod tests {
                 ..Track::default()
             },
         );
+    }
+
+    fn web_album(uri: &str, album_type: &str, album_group: Option<&str>) -> Album {
+        Album {
+            id: uri.rsplit(':').next().unwrap_or_default().into(),
+            uri: uri.into(),
+            album_type: Some(album_type.into()),
+            album_group: album_group.map(str::to_string),
+            ..Album::default()
+        }
+    }
+
+    #[test]
+    fn precise_album_types_are_requested_only_for_web_singles_and_once_per_uri() {
+        use crate::api::models::{Page as ApiPage, SavedAlbum};
+
+        let mut app = headless_app();
+        app.backend.set_offline(true);
+        let first = web_album("spotify:album:first", "single", Some("single"));
+        let second = web_album("spotify:album:second", "single", Some("single"));
+        let detail = web_album("spotify:album:detail", "single", None);
+        let album = web_album("spotify:album:album", "album", Some("album"));
+        let compilation = web_album(
+            "spotify:album:compilation",
+            "compilation",
+            Some("compilation"),
+        );
+        let appears_on = web_album("spotify:album:appears", "single", Some("appears_on"));
+
+        app.handle_api(ApiResponse::SavedAlbums {
+            offset: 0,
+            result: Ok(ApiPage {
+                items: vec![
+                    SavedAlbum {
+                        album: first.clone(),
+                        ..SavedAlbum::default()
+                    },
+                    SavedAlbum {
+                        album: compilation,
+                        ..SavedAlbum::default()
+                    },
+                    SavedAlbum {
+                        album,
+                        ..SavedAlbum::default()
+                    },
+                ],
+                ..ApiPage::default()
+            }),
+        });
+        assert_eq!(
+            app.backend.take_album_type_requests(),
+            vec![vec![first.uri.clone()]]
+        );
+
+        app.artist_pages
+            .insert("artist".into(), ArtistPage::default());
+        app.handle_api(ApiResponse::ArtistAlbums {
+            id: "artist".into(),
+            groups: "album,single,compilation,appears_on".into(),
+            offset: 0,
+            result: Ok(ApiPage {
+                items: vec![first, second.clone(), appears_on],
+                ..ApiPage::default()
+            }),
+        });
+        assert_eq!(
+            app.backend.take_album_type_requests(),
+            vec![vec![second.uri.clone()]]
+        );
+
+        app.album_pages
+            .insert(detail.id.clone(), AlbumPage::default());
+        app.handle_api(ApiResponse::Album {
+            id: detail.id.clone(),
+            result: Ok(detail.clone()),
+        });
+        assert_eq!(
+            app.backend.take_album_type_requests(),
+            vec![vec![detail.uri.clone()]]
+        );
+
+        app.handle_api(ApiResponse::Album {
+            id: detail.id.clone(),
+            result: Ok(detail),
+        });
+        assert!(app.backend.take_album_type_requests().is_empty());
+    }
+
+    #[test]
+    fn precise_ep_confirmation_preserves_fallback_and_web_kind_precedence() {
+        let mut app = headless_app();
+        app.backend.set_offline(true);
+        let ep = web_album("spotify:album:ep", "single", Some("single"));
+        let failed = web_album("spotify:album:failed", "single", Some("single"));
+        let timed_out = web_album("spotify:album:timeout", "single", Some("single"));
+        let regular = web_album("spotify:album:regular", "single", Some("single"));
+
+        app.request_album_types([&ep, &failed, &timed_out, &regular]);
+        let _ = app.backend.take_album_type_requests();
+        app.handle_backend_events(vec![
+            Event::AlbumType {
+                uri: ep.uri.clone(),
+                result: Ok(true),
+            },
+            Event::AlbumType {
+                uri: failed.uri.clone(),
+                result: Err("unavailable".into()),
+            },
+            Event::AlbumType {
+                uri: timed_out.uri.clone(),
+                result: Err("album metadata timed out".into()),
+            },
+            Event::AlbumType {
+                uri: regular.uri.clone(),
+                result: Ok(false),
+            },
+        ]);
+
+        assert_eq!(app.album_kind_label(&ep), "EP");
+        assert_eq!(app.album_kind_label(&failed), "Single");
+        assert_eq!(app.album_kind_label(&timed_out), "Single");
+        assert_eq!(app.album_kind_label(&regular), "Single");
+        let appears_on = web_album(&ep.uri, "single", Some("appears_on"));
+        let compilation = web_album(&ep.uri, "single", Some("compilation"));
+        let album = web_album(&ep.uri, "single", Some("album"));
+        assert_eq!(app.album_kind_label(&appears_on), "Appears On");
+        assert_eq!(app.album_kind_label(&compilation), "Compilation");
+        assert_eq!(app.album_kind_label(&album), "Album");
+
+        app.request_album_types([&failed, &timed_out]);
+        assert!(
+            app.backend.take_album_type_requests().is_empty(),
+            "failed lookups are terminal for this session"
+        );
+
+        app.handle_auth(AuthStatus::SignedOut);
+        assert_eq!(app.album_kind_label(&ep), "Single");
+        app.handle_auth(AuthStatus::Connected {
+            username: "next-session".into(),
+        });
+        app.request_album_types([&ep]);
+        assert_eq!(app.backend.take_album_type_requests(), vec![vec![ep.uri]]);
     }
 
     #[test]

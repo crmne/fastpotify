@@ -17,6 +17,7 @@ use librespot_connect::{
     Spirc,
 };
 use librespot_core::{
+    SpotifyUri,
     authentication::Credentials,
     cache::Cache,
     config::{DeviceType, SessionConfig},
@@ -24,7 +25,11 @@ use librespot_core::{
     session::Session,
     spotify_id::SpotifyId,
 };
-use librespot_metadata::audio::{AudioItem, UniqueFields};
+use librespot_metadata::{
+    Album as MetadataAlbum, Metadata,
+    album::AlbumType,
+    audio::{AudioItem, UniqueFields},
+};
 use librespot_playback::{
     audio_backend::{self, Sink},
     config::{AudioFormat, Bitrate, NormalisationType, PlayerConfig, VolumeCtrl},
@@ -420,6 +425,15 @@ impl Engine {
 
     pub fn device_id(&self) -> &str {
         &self.device_id
+    }
+
+    /// Whether Spotify classifies this album as an EP in its internal metadata.
+    pub(crate) async fn album_is_ep(&self, album_uri: &str) -> Result<bool> {
+        let uri = SpotifyUri::from_uri(album_uri).context("invalid album URI")?;
+        let album = MetadataAlbum::get(&self.session, &uri)
+            .await
+            .context("album metadata")?;
+        Ok(album.album_type == AlbumType::EP)
     }
 
     /// Spotify's own transcription of a track, as the raw JSON its clients

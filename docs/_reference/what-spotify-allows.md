@@ -52,6 +52,7 @@ clients. Fastpotify uses its session for:
   these playlists. Fastpotify cannot manage collaborators.
 - **Lyrics** when Spotify has them.
 - **Display names** for the user IDs attached to songs in a playlist.
+- **Precise EP types** for releases that the Web API groups with singles.
 - **Song radio and autoplay** through Spotify's context resolver.
 
 ## librespot playback

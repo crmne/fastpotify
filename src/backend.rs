@@ -6,6 +6,7 @@
 //! the interface with `request_repaint`, so the app stays event-driven and
 //! idle when nothing is happening.
 
+use std::collections::{HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -29,6 +30,9 @@ use crate::player::{Engine, EngineConfig, EngineEvent, LoadSpec, LocalState, Pla
 pub type ApiResult<T> = Result<T, ApiError>;
 
 const PREMIUM_NEEDED: &str = "Local playback needs Spotify Premium.";
+const ALBUM_TYPE_TIMEOUT: Duration = Duration::from_secs(30);
+// Keep at most one full Web API album page outstanding for a playback engine.
+const MAX_PENDING_ALBUM_TYPES: usize = 50;
 pub const PLAYLIST_PAGE_SIZE: u32 = 50;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -496,6 +500,7 @@ pub enum Command {
     },
     /// Internal: an engine connection attempt finished.
     EngineConnected {
+        session_generation: u64,
         engine: Box<Option<Engine>>,
         error: Option<String>,
         lease: CredentialLease,
@@ -538,6 +543,15 @@ pub enum Command {
         generation: u64,
     },
     StoreLikedSongsCache(crate::liked::Cache),
+    /// Resolve the precise type of Web API singles through the streaming session.
+    AlbumTypes(Vec<String>),
+    /// Internal: one precise album type lookup finished.
+    AlbumTypeResolved {
+        uri: String,
+        session_generation: u64,
+        engine_generation: u64,
+        result: Result<bool, String>,
+    },
 }
 
 pub struct LyricsRequest {
@@ -588,6 +602,11 @@ pub enum Event {
     UserName {
         id: String,
         name: Option<String>,
+    },
+    /// Whether Spotify's internal metadata positively identifies an album as an EP.
+    AlbumType {
+        uri: String,
+        result: Result<bool, String>,
     },
     /// The verified personal Web API app, or `None` when it is disabled.
     WebApp {
@@ -655,6 +674,8 @@ pub struct Backend {
     playlist_sample_requests: std::sync::Mutex<Vec<(String, u32, u64)>>,
     #[cfg(test)]
     playlist_add_requests: std::sync::Mutex<Vec<ApiRequest>>,
+    #[cfg(test)]
+    album_type_requests: std::sync::Mutex<Vec<Vec<String>>>,
 }
 
 impl Backend {
@@ -722,6 +743,8 @@ impl Backend {
             playlist_sample_requests: std::sync::Mutex::new(Vec::new()),
             #[cfg(test)]
             playlist_add_requests: std::sync::Mutex::new(Vec::new()),
+            #[cfg(test)]
+            album_type_requests: std::sync::Mutex::new(Vec::new()),
         }
     }
 
@@ -816,6 +839,25 @@ impl Backend {
         self.send(Command::Player(command));
     }
 
+    pub(crate) fn album_types(&self, uris: Vec<String>) {
+        #[cfg(test)]
+        self.album_type_requests
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(uris.clone());
+        self.send(Command::AlbumTypes(uris));
+    }
+
+    #[cfg(test)]
+    pub(crate) fn take_album_type_requests(&self) -> Vec<Vec<String>> {
+        std::mem::take(
+            &mut *self
+                .album_type_requests
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        )
+    }
+
     pub fn poll(&self) -> Vec<Event> {
         self.events.try_iter().collect()
     }
@@ -829,6 +871,82 @@ impl Backend {
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AlbumTypeRequest {
+    uri: String,
+    session_generation: u64,
+    engine_generation: u64,
+}
+
+#[derive(Default)]
+struct AlbumTypeLookup {
+    session_generation: u64,
+    engine_generation: u64,
+    pending: VecDeque<String>,
+    seen: HashSet<String>,
+    active: Option<AlbumTypeRequest>,
+}
+
+impl AlbumTypeLookup {
+    fn enqueue(&mut self, signed_in: bool, premium: Option<bool>, uris: Vec<String>) {
+        if !signed_in || premium == Some(false) {
+            return;
+        }
+        for uri in uris {
+            if self.pending.len() + usize::from(self.active.is_some()) >= MAX_PENDING_ALBUM_TYPES {
+                break;
+            }
+            if self.seen.insert(uri.clone()) {
+                self.pending.push_back(uri);
+            }
+        }
+    }
+
+    fn next(&mut self) -> Option<AlbumTypeRequest> {
+        if self.active.is_some() {
+            return None;
+        }
+        let request = AlbumTypeRequest {
+            uri: self.pending.pop_front()?,
+            session_generation: self.session_generation,
+            engine_generation: self.engine_generation,
+        };
+        self.active = Some(request.clone());
+        Some(request)
+    }
+
+    fn finish(&mut self, request: &AlbumTypeRequest) -> bool {
+        if self.active.as_ref() != Some(request) {
+            return false;
+        }
+        self.active = None;
+        true
+    }
+
+    fn retire_engine(&mut self) {
+        self.engine_generation = self.engine_generation.wrapping_add(1);
+        self.active = None;
+    }
+
+    fn requeue_active_for_new_engine(&mut self) {
+        self.engine_generation = self.engine_generation.wrapping_add(1);
+        if let Some(request) = self.active.take() {
+            self.pending.push_front(request.uri);
+        }
+    }
+
+    fn clear_engine_work(&mut self) {
+        self.retire_engine();
+        self.pending.clear();
+        self.seen.clear();
+    }
+
+    fn reset_session(&mut self) {
+        self.session_generation = self.session_generation.wrapping_add(1);
+        self.clear_engine_work();
     }
 }
 
@@ -850,6 +968,7 @@ struct Worker {
     commands: mpsc::UnboundedSender<Command>,
     waker: Waker,
     engine: Option<Arc<Engine>>,
+    album_type_lookup: AlbumTypeLookup,
     /// True while a playback grant or engine connection is in flight, so a
     /// second attempt does not pile up.
     engine_busy: bool,
@@ -901,6 +1020,7 @@ impl Worker {
             commands,
             waker,
             engine: None,
+            album_type_lookup: AlbumTypeLookup::default(),
             engine_busy: false,
             signed_in: false,
             premium: None,
@@ -1055,12 +1175,13 @@ impl Worker {
                     }
                 }
                 Command::EngineConnected {
+                    session_generation,
                     engine,
                     error,
                     lease,
                 } => {
                     if lease.current() && self.signed_in {
-                        self.on_engine_connected(*engine, error)
+                        self.on_engine_connected(session_generation, *engine, error)
                     } else if let Some(engine) = *engine {
                         engine.shutdown();
                     }
@@ -1132,6 +1253,20 @@ impl Worker {
                         }
                     }
                 }
+                Command::AlbumTypes(uris) => self.fetch_album_types(uris),
+                Command::AlbumTypeResolved {
+                    uri,
+                    session_generation,
+                    engine_generation,
+                    result,
+                } => self.on_album_type_resolved(
+                    AlbumTypeRequest {
+                        uri,
+                        session_generation,
+                        engine_generation,
+                    },
+                    result,
+                ),
                 Command::ConfigurePersonalWebApp(client_id) => {
                     self.configure_personal_web_app(client_id)
                 }
@@ -1553,6 +1688,7 @@ impl Worker {
         self.premium = None;
         self.resume = None;
         self.resume_verify = None;
+        self.album_type_lookup.reset_session();
         if let Some(engine) = self.engine.take() {
             engine.shutdown();
         }
@@ -1636,6 +1772,7 @@ impl Worker {
             return;
         }
         self.resume_verify = None;
+        self.album_type_lookup.requeue_active_for_new_engine();
         if let Some(engine) = self.engine.take() {
             self.resume = engine.interrupted().map(|interrupted| LoadSpec {
                 uris: vec![interrupted.uri],
@@ -1751,12 +1888,14 @@ impl Worker {
         let events = self.events.clone();
         let commands = self.commands.clone();
         let waker = self.waker.clone();
+        let session_generation = self.album_type_lookup.session_generation;
         tokio::spawn(async move {
             let cache = match config.open_cache() {
                 Ok(cache) => cache,
                 Err(error) => {
                     let _ = commands.send(Command::EngineConnected {
                         lease: lease.clone(),
+                        session_generation,
                         engine: Box::new(None),
                         error: Some(error.to_string()),
                     });
@@ -1771,6 +1910,7 @@ impl Worker {
             let outcome = match attempt {
                 Ok(Ok(engine)) => Command::EngineConnected {
                     lease: lease.clone(),
+                    session_generation,
                     engine: Box::new(Some(engine)),
                     error: None,
                 },
@@ -1778,12 +1918,14 @@ impl Worker {
                     log::error!("engine connect failed: {error:#}");
                     Command::EngineConnected {
                         lease: lease.clone(),
+                        session_generation,
                         engine: Box::new(None),
                         error: Some(friendly_connect_error(&error)),
                     }
                 }
                 Err(_) => Command::EngineConnected {
                     lease: lease.clone(),
+                    session_generation,
                     engine: Box::new(None),
                     error: Some("Connecting to Spotify timed out".into()),
                 },
@@ -1794,7 +1936,18 @@ impl Worker {
         });
     }
 
-    fn on_engine_connected(&mut self, engine: Option<Engine>, error: Option<String>) {
+    fn on_engine_connected(
+        &mut self,
+        session_generation: u64,
+        engine: Option<Engine>,
+        error: Option<String>,
+    ) {
+        if !self.signed_in || session_generation != self.album_type_lookup.session_generation {
+            if let Some(engine) = engine {
+                engine.shutdown();
+            }
+            return;
+        }
         self.engine_busy = false;
         match engine {
             Some(engine) => {
@@ -1826,6 +1979,7 @@ impl Worker {
                 self.engine = Some(engine);
                 self.reconnects.clear();
                 self.emit(Event::Playback(LocalPlayback::Ready { device_id }));
+                self.start_album_type_lookup();
             }
             None => {
                 self.resume = None;
@@ -1841,6 +1995,7 @@ impl Worker {
     fn on_account_checked(&mut self, premium: Option<bool>) {
         self.premium = premium;
         if premium == Some(false) {
+            self.album_type_lookup.clear_engine_work();
             if let Some(engine) = self.engine.take() {
                 engine.shutdown();
             }
@@ -1977,6 +2132,48 @@ impl Worker {
             let _ = events.send(Event::Rootlist { result });
             waker.wake();
         });
+    }
+
+    fn fetch_album_types(&mut self, uris: Vec<String>) {
+        self.album_type_lookup
+            .enqueue(self.signed_in, self.premium, uris);
+        self.start_album_type_lookup();
+    }
+
+    fn start_album_type_lookup(&mut self) {
+        let Some(engine) = self.engine.clone() else {
+            return;
+        };
+        let Some(request) = self.album_type_lookup.next() else {
+            return;
+        };
+        let commands = self.commands.clone();
+        tokio::spawn(async move {
+            let result =
+                match tokio::time::timeout(ALBUM_TYPE_TIMEOUT, engine.album_is_ep(&request.uri))
+                    .await
+                {
+                    Ok(result) => result.map_err(|error| format!("{error:#}")),
+                    Err(_) => Err("album metadata timed out".into()),
+                };
+            let _ = commands.send(Command::AlbumTypeResolved {
+                uri: request.uri,
+                session_generation: request.session_generation,
+                engine_generation: request.engine_generation,
+                result,
+            });
+        });
+    }
+
+    fn on_album_type_resolved(&mut self, request: AlbumTypeRequest, result: Result<bool, String>) {
+        if !self.signed_in || !self.album_type_lookup.finish(&request) {
+            return;
+        }
+        self.emit(Event::AlbumType {
+            uri: request.uri,
+            result,
+        });
+        self.start_album_type_lookup();
     }
 
     fn fetch_lyrics(&self, request: LyricsRequest) {
@@ -2641,6 +2838,121 @@ async fn write_cached_playlist(
 }
 
 #[cfg(test)]
+mod album_type_lookup_tests {
+    use super::AlbumTypeLookup;
+
+    #[test]
+    fn signed_out_requests_are_dropped_and_valid_pending_work_is_deduplicated() {
+        let mut lookup = AlbumTypeLookup::default();
+        lookup.enqueue(false, None, vec!["signed-out".into()]);
+        assert!(lookup.pending.is_empty());
+
+        lookup.enqueue(
+            true,
+            None,
+            vec!["first".into(), "first".into(), "second".into()],
+        );
+        assert_eq!(lookup.pending.len(), 2);
+
+        let first = lookup.next().expect("first request when an engine appears");
+        assert_eq!(first.uri, "first");
+        assert!(lookup.next().is_none(), "only one lookup may be active");
+        assert!(lookup.finish(&first));
+        assert_eq!(lookup.next().expect("remaining request").uri, "second");
+    }
+
+    #[test]
+    fn results_from_a_signed_out_session_are_rejected_after_a_new_session_starts() {
+        let mut lookup = AlbumTypeLookup::default();
+        lookup.enqueue(true, None, vec!["old".into()]);
+        let old = lookup.next().expect("old session request");
+
+        lookup.reset_session();
+        assert!(!lookup.finish(&old));
+        lookup.enqueue(false, None, vec!["after-logout".into()]);
+        assert!(lookup.pending.is_empty());
+
+        lookup.enqueue(true, None, vec!["new".into()]);
+        let new = lookup.next().expect("new session request");
+        assert_ne!(old.session_generation, new.session_generation);
+        assert!(!lookup.finish(&old));
+        assert!(lookup.finish(&new));
+    }
+
+    #[test]
+    fn reconnect_requeues_active_work_for_the_new_engine() {
+        let mut lookup = AlbumTypeLookup::default();
+        lookup.enqueue(true, None, vec!["active".into(), "waiting".into()]);
+        let retired = lookup.next().expect("retired engine request");
+
+        lookup.requeue_active_for_new_engine();
+        assert_eq!(lookup.pending.front().map(String::as_str), Some("active"));
+
+        lookup.enqueue(true, None, vec!["active".into()]);
+        assert_eq!(lookup.pending.len(), 2, "external duplicates stay ignored");
+
+        let replacement = lookup.next().expect("new engine request");
+        assert_eq!(replacement.uri, "active");
+        assert_eq!(retired.session_generation, replacement.session_generation);
+        assert_ne!(retired.engine_generation, replacement.engine_generation);
+        assert!(!lookup.finish(&retired));
+        assert_eq!(lookup.active.as_ref(), Some(&replacement));
+        assert!(lookup.finish(&replacement));
+        assert_eq!(lookup.next().expect("remaining request").uri, "waiting");
+    }
+
+    #[test]
+    fn completed_failures_remain_terminal_for_the_session() {
+        let mut lookup = AlbumTypeLookup::default();
+
+        for uri in ["error", "timeout"] {
+            lookup.enqueue(true, None, vec![uri.into()]);
+            let request = lookup.next().expect("request before failure");
+            assert!(lookup.finish(&request));
+
+            lookup.enqueue(true, None, vec![uri.into()]);
+            assert!(lookup.pending.is_empty(), "failed request must not retry");
+        }
+    }
+
+    #[test]
+    fn non_premium_status_clears_and_invalidates_all_engine_work() {
+        let mut lookup = AlbumTypeLookup::default();
+        lookup.enqueue(true, None, vec!["active".into(), "pending".into()]);
+        let active = lookup.next().expect("request before account check");
+        let session_generation = lookup.session_generation;
+
+        lookup.clear_engine_work();
+
+        assert_eq!(lookup.session_generation, session_generation);
+        assert_ne!(lookup.engine_generation, active.engine_generation);
+        assert!(lookup.active.is_none());
+        assert!(lookup.pending.is_empty());
+        assert!(lookup.seen.is_empty());
+        assert!(!lookup.finish(&active));
+
+        lookup.enqueue(true, Some(false), vec!["after-check".into()]);
+        assert!(lookup.pending.is_empty());
+        assert!(lookup.seen.is_empty());
+    }
+
+    #[test]
+    fn unknown_and_premium_accounts_accept_album_type_work() {
+        let mut lookup = AlbumTypeLookup::default();
+
+        lookup.enqueue(true, None, vec!["unknown".into()]);
+        let unknown = lookup.next().expect("unknown account request");
+        assert_eq!(unknown.uri, "unknown");
+        assert!(lookup.finish(&unknown));
+
+        lookup.enqueue(true, Some(true), vec!["premium".into()]);
+        let premium = lookup.next().expect("premium account request");
+        assert_eq!(premium.uri, "premium");
+        assert!(lookup.finish(&premium));
+    }
+}
+
+#[cfg(test)]
 mod playlist_cache_tests {
     use super::{CachedPlaylist, write_cached_playlist};
 
@@ -2832,6 +3144,7 @@ mod authorization_tests {
         let shared = worker.credentials.lease(CredentialSlot::Shared);
         let playback = worker.credentials.lease(CredentialSlot::Playback);
         let attempt = worker.authorization_attempt;
+        let album_type_session = worker.album_type_lookup.session_generation;
         let token = crate::auth::StoredToken {
             client_id: crate::auth::DEFAULT_WEB_CLIENT_ID.into(),
             access_token: "dummy-access".into(),
@@ -2883,6 +3196,7 @@ mod authorization_tests {
             .unwrap();
         commands
             .send(Command::EngineConnected {
+                session_generation: album_type_session,
                 engine: Box::new(None),
                 error: Some("late engine error".into()),
                 lease: playback,
@@ -2999,6 +3313,29 @@ mod authorization_tests {
                 .try_iter()
                 .any(|event| matches!(event, Event::Auth(AuthStatus::Connected { .. })))
         );
+    }
+
+    #[test]
+    fn premium_without_local_playback_keeps_album_type_work_bounded() {
+        let (runtime, mut worker, _) = worker("album-types-without-playback");
+        let _entered = runtime.enter();
+        verify(&mut worker, ApiSource::Shared, "alice");
+        assert_eq!(worker.premium, Some(true));
+        assert!(worker.playback_grant.is_none());
+        assert!(worker.engine.is_none());
+
+        worker.fetch_album_types(
+            (0..MAX_PENDING_ALBUM_TYPES + 10)
+                .map(|index| format!("spotify:album:{index}"))
+                .collect(),
+        );
+
+        assert!(worker.album_type_lookup.active.is_none());
+        assert_eq!(
+            worker.album_type_lookup.pending.len(),
+            MAX_PENDING_ALBUM_TYPES
+        );
+        assert_eq!(worker.album_type_lookup.seen.len(), MAX_PENDING_ALBUM_TYPES);
     }
 
     #[test]
