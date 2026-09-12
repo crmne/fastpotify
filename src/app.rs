@@ -756,7 +756,13 @@ impl App {
             }
             return;
         }
-        if let Some(size) = self.session_window_size.take() {
+        // The session's geometry describes an ordinary window; applying it to
+        // one eframe restored maximized or full screen would restore it down.
+        let filling_the_screen =
+            ctx.input(|input| crate::window::fills_the_screen(input.viewport()));
+        if let Some(size) = self.session_window_size.take()
+            && !filling_the_screen
+        {
             // Clamp to a sane range so a stale session never creates an
             // unusable window; the OS will further clamp to the monitor.
             if (400.0..=3000.0).contains(&size[0]) && (300.0..=2000.0).contains(&size[1]) {
@@ -767,6 +773,7 @@ impl App {
         }
         // If the saved position is off-screen, leave the window where eframe put it.
         if let Some(pos) = self.session_window_pos.take()
+            && !filling_the_screen
             && crate::window::can_restore(pos, ctx.pixels_per_point())
         {
             ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(
@@ -7907,6 +7914,45 @@ mod tests {
         );
         assert_eq!(app.session_window_size, Some([1024.0, 768.0]));
         assert_eq!(app.session_window_pos, Some([100.0, 100.0]));
+    }
+
+    /// A window left maximized or full screen comes back that way, instead of
+    /// being restored down by the session's size and position.
+    #[test]
+    fn a_window_that_fills_the_screen_keeps_its_state_over_the_session_geometry() {
+        for (name, maximized, fullscreen) in [
+            ("maximized", Some(true), None),
+            ("full screen", None, Some(true)),
+        ] {
+            let mut app = headless_app();
+            app.session_window_size = Some([1024.0, 768.0]);
+            app.session_window_pos = Some([100.0, 150.0]);
+
+            let ctx = egui::Context::default();
+            let mut raw_input = egui::RawInput::default();
+            let viewport = raw_input
+                .viewports
+                .entry(egui::ViewportId::ROOT)
+                .or_default();
+            viewport.maximized = maximized;
+            viewport.fullscreen = fullscreen;
+
+            let mut output = ctx.run_ui(raw_input, |_ui| app.attach(&ctx));
+            output.textures_delta.clear();
+            let commands = &output
+                .viewport_output
+                .get(&egui::ViewportId::ROOT)
+                .expect("the root viewport")
+                .commands;
+            assert!(
+                !commands.iter().any(|command| matches!(
+                    command,
+                    egui::ViewportCommand::InnerSize(_) | egui::ViewportCommand::OuterPosition(_)
+                )),
+                "a {name} window is neither resized nor moved: {commands:?}"
+            );
+            app.backend.shutdown();
+        }
     }
 
     /// The song the last session ended on is shown, paused, at the position
