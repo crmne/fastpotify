@@ -403,7 +403,7 @@ pub fn replace(prepared: &Prepared) -> Result<()> {
         Kind::MacBundle => super::macos::replace(prepared)?,
         Kind::Portable => {
             ensure!(!backup.exists(), "This update was already applied");
-            fs::copy(target, &backup).context("Cannot back up the current app")?;
+            backup_current(target, &backup).context("Cannot back up the current app")?;
             #[cfg(windows)]
             fs::remove_file(target).context("The app is still running or cannot be replaced")?;
             if let Err(error) = fs::rename(&prepared.payload, target) {
@@ -413,7 +413,7 @@ pub fn replace(prepared: &Prepared) -> Result<()> {
             }
         }
         Kind::WindowsInstaller => {
-            fs::copy(target, &backup)?;
+            backup_current(target, &backup).context("Cannot back up the current app")?;
             let mut command = Command::new(&prepared.payload);
             command
                 .args([
@@ -437,6 +437,44 @@ pub fn replace(prepared: &Prepared) -> Result<()> {
                 "The installer failed. See the update installer log."
             );
         }
+    }
+    Ok(())
+}
+
+fn backup_current(target: &Path, backup: &Path) -> Result<()> {
+    let mut source = File::open(target)?;
+    let permissions = source.metadata()?.permissions();
+    write_backup(&mut source, backup, permissions)
+}
+
+/// Rollback recognizes only `previous`. Publish that name after the complete
+/// copy has been synced, so a failed copy cannot replace a working executable
+/// with the partial backup it left behind.
+fn write_backup(source: &mut impl Read, backup: &Path, permissions: fs::Permissions) -> Result<()> {
+    ensure!(
+        fs::symlink_metadata(backup)
+            .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound),
+        "This update already has a backup"
+    );
+    let partial = backup.with_extension("partial");
+    let mut output = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&partial)?;
+    let result = (|| -> Result<()> {
+        std::io::copy(source, &mut output)?;
+        output.sync_all()?;
+        fs::set_permissions(&partial, permissions)?;
+        Ok(())
+    })();
+    drop(output);
+    if let Err(error) = result {
+        let _ = fs::remove_file(&partial);
+        return Err(error);
+    }
+    if let Err(error) = fs::rename(&partial, backup) {
+        let _ = fs::remove_file(&partial);
+        return Err(error.into());
     }
     Ok(())
 }
@@ -568,6 +606,45 @@ pub fn acknowledge(job: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_interrupted_backup_is_never_available_to_rollback() {
+        struct InterruptedCopy(bool);
+        impl Read for InterruptedCopy {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                if self.0 {
+                    return Err(std::io::Error::other("injected copy failure"));
+                }
+                self.0 = true;
+                buffer[0] = b'p';
+                Ok(1)
+            }
+        }
+        let directory =
+            std::env::temp_dir().join(format!("fastpotify-backup-test-{}", rand::random::<u64>()));
+        fs::create_dir(&directory).unwrap();
+        let target = directory.join("fastpotify");
+        fs::write(&target, b"working executable").unwrap();
+        let backup = directory.join("previous");
+        let permissions = fs::metadata(&target).unwrap().permissions();
+        assert!(write_backup(&mut InterruptedCopy(false), &backup, permissions).is_err());
+        assert!(
+            !backup.exists(),
+            "rollback must not see the incomplete copy"
+        );
+        assert!(!backup.with_extension("partial").exists());
+        assert_eq!(fs::read(&target).unwrap(), b"working executable");
+        backup_current(&target, &backup).unwrap();
+        assert_eq!(fs::read(&backup).unwrap(), b"working executable");
+        fs::write(&target, b"new executable").unwrap();
+        assert!(backup_current(&target, &backup).is_err());
+        assert_eq!(
+            fs::read(&backup).unwrap(),
+            b"working executable",
+            "a retry keeps the known backup"
+        );
+        fs::remove_dir_all(directory).unwrap();
+    }
 
     #[cfg(target_os = "linux")]
     #[test]

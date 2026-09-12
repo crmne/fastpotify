@@ -128,16 +128,20 @@ fn validate(bundle: &Path, installation: &Installation, version: &str) -> Result
 
 struct Mounted(PathBuf);
 
+fn mountpoint(archive: &Path) -> Result<PathBuf> {
+    let mount = archive
+        .parent()
+        .context("Missing update directory")?
+        .join(format!("mounted-{:016x}", rand::random::<u64>()));
+    fs::create_dir(&mount)?;
+    Ok(mount)
+}
+
 impl Mounted {
     fn open(archive: &Path) -> Result<Self> {
-        let mount = archive
-            .parent()
-            .context("Missing update directory")?
-            .join("mounted");
-        if mount.exists() {
-            let _ = fs::remove_dir_all(&mount);
-        }
-        fs::create_dir(&mount)?;
+        // A failed detach can leave the previous attempt mounted. Never
+        // traverse that volume or reuse its directory on a later attempt.
+        let mount = mountpoint(archive)?;
         let output = Command::new("/usr/bin/hdiutil")
             .args(["attach", "-readonly", "-nobrowse", "-mountpoint"])
             .arg(&mount)
@@ -227,6 +231,24 @@ pub(super) fn restore(prepared: &Prepared) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn another_mount_attempt_leaves_the_previous_volume_alone() {
+        let directory =
+            std::env::temp_dir().join(format!("fastpotify-mount-test-{}", rand::random::<u64>()));
+        fs::create_dir(&directory).unwrap();
+        let archive = directory.join("update.dmg");
+        let first = mountpoint(&archive).unwrap();
+        fs::write(first.join("still-mounted"), b"existing volume").unwrap();
+        let second = mountpoint(&archive).unwrap();
+        assert_ne!(first, second);
+        assert_eq!(
+            fs::read(first.join("still-mounted")).unwrap(),
+            b"existing volume"
+        );
+        assert!(second.is_dir());
+        fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     fn homebrew_app_symlink_does_not_claim_other_copies() {
