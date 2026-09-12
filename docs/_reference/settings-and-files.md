@@ -224,3 +224,45 @@ cargo run --release --features demo -- \
 The image uses the current window size. `--demo-size WIDTHxHEIGHT` sets that
 size for a shot (for example `760x800` or `1240x800`). `--demo-shot-delay <MS>`
 sets how long to wait for cover art before taking it.
+
+## Home layout
+
+Quit Fastpotify before editing `settings.json`, then restart it. Add a `home`
+object to hide shelves, limit their displayed items, or choose playlist sources:
+
+```json
+"home": {
+  "quick_access": {
+    "limit": 12,
+    "liked_songs": true,
+    "discover_weekly": true,
+    "release_radar": true,
+    "pinned_playlists": true,
+    "library_playlists": false
+  },
+  "made_for_you": {
+    "limit": 7,
+    "discover_weekly": false,
+    "release_radar": false
+  },
+  "recently_played": { "limit": 7 },
+  "top_artists": { "visible": false },
+  "top_songs": { "visible": false },
+  "recommendations": { "visible": false }
+}
+```
+
+Every section accepts `visible` and `limit` (0 to 255). Setting `visible` to
+`false` or `limit` to `0` hides it. Omitted preferences retain the standard
+layout. Limits cap loaded items; they do not request more data from Spotify.
+Hidden shelves still refresh in the background.
+
+Quick Access defaults to Liked Songs followed by library playlists, up to eight
+items. Optional Discover Weekly and Release Radar come next after Liked Songs,
+then pinned playlists in local pin order, then library playlists. Duplicates
+are omitted. Pins must be playlists present in the loaded library.
+
+Made for You defaults to all four sources: `discover_weekly`, `release_radar`,
+`daily_mixes`, and `daylist`. Each can be disabled separately. Recently Played
+defaults to 16 items, Top Songs to 10, and Recommendations to 20. Made for You
+and Top Artists show all currently fetched items by default (up to 255).

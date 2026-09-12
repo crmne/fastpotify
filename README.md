@@ -325,6 +325,8 @@ on Linux). They include the Connect device name, bitrate, normalisation,
 autoplay, gapless playback, the audio backend (PulseAudio/PipeWire or ALSA on
 Linux), audio cache size, theme, sidebar state, whether pages take colour
 from artwork, and the mini player's skin and size.
+Home shelves and playlist sources can also be configured in JSON; see
+[Home layout](docs/_reference/settings-and-files.md#home-layout).
 Playback settings apply when you press **Apply and restart playback**.
 You can also check for a new release from Settings. On macOS, the same command
 is in the application menu.
