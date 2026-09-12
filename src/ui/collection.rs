@@ -116,6 +116,9 @@ pub struct Actions<'a> {
     pub saved_icons: (Icon, Icon),
     pub saved_tooltips: (&'a str, &'a str),
     pub owned_playlist: Option<Playlist>,
+    /// When set, a refresh control sits by the filter. The bool is true while
+    /// that page is already reloading.
+    pub reload: Option<(Page, bool)>,
     pub name: &'a str,
 }
 
@@ -241,16 +244,53 @@ pub fn actions_row(
                     )
                 });
         }
-        if let Some(filter) = filter {
+        if filter.is_some() || actions.reload.is_some() {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                widgets::search_field(
-                    ui,
-                    &palette,
-                    egui::Id::new(("collection-filter", actions.name)),
-                    filter,
-                    "Filter",
-                    220.0,
-                );
+                ui.spacing_mut().item_spacing.x = 10.0;
+                if let Some(filter) = filter {
+                    widgets::search_field(
+                        ui,
+                        &palette,
+                        egui::Id::new(("collection-filter", actions.name)),
+                        filter,
+                        "Filter",
+                        220.0,
+                    );
+                }
+                if let Some((page, loading)) = &actions.reload {
+                    if *loading {
+                        let edge = 38.0;
+                        let (rect, response) =
+                            ui.allocate_exact_size(Vec2::splat(edge), Sense::hover());
+                        response.widget_info(|| {
+                            egui::WidgetInfo::labeled(
+                                egui::WidgetType::ProgressIndicator,
+                                ui.is_enabled(),
+                                "Refreshing…",
+                            )
+                        });
+                        if ui.is_rect_visible(rect) {
+                            let mut child = ui.new_child(
+                                egui::UiBuilder::new().max_rect(rect).layout(
+                                    Layout::centered_and_justified(egui::Direction::LeftToRight),
+                                ),
+                            );
+                            theme::spinner(&mut child, 22.0, palette.secondary);
+                        }
+                        response.on_hover_text("Refreshing…");
+                    } else if theme::icon_button(
+                        ui,
+                        Icon::Refresh,
+                        26.0,
+                        palette.secondary,
+                        palette.text,
+                        "Refresh",
+                    )
+                    .clicked()
+                    {
+                        app.actions.push(Action::Reload(page.clone()));
+                    }
+                }
             });
         }
     });
@@ -949,6 +989,7 @@ pub fn playlist(app: &mut App, ui: &mut egui::Ui, id: &str) {
                     saved_icons: (Icon::CirclePlus, Icon::CircleCheck),
                     saved_tooltips: ("Add to Your Library", "Remove from Your Library"),
                     owned_playlist: owned.then_some(playlist_clone),
+                    reload: Some((Page::Playlist(id.to_string()), page.items.loading)),
                     name: &playlist.name,
                 },
                 Some(&mut page.filter),
@@ -1065,6 +1106,7 @@ pub fn album(app: &mut App, ui: &mut egui::Ui, id: &str) {
                     saved_icons: (Icon::CirclePlus, Icon::CircleCheck),
                     saved_tooltips: ("Save to Your Library", "Remove from Your Library"),
                     owned_playlist: None,
+                    reload: None,
                     name: &album.name,
                 },
                 None,
@@ -1265,6 +1307,7 @@ pub fn liked(app: &mut App, ui: &mut egui::Ui) {
             saved_icons: (Icon::Heart, Icon::HeartFilled),
             saved_tooltips: ("", ""),
             owned_playlist: None,
+            reload: None,
             name: "Liked Songs",
         },
         Some(&mut filter),
@@ -1624,6 +1667,7 @@ mod tests {
                     saved_icons: (Icon::CirclePlus, Icon::CircleCheck),
                     saved_tooltips: ("", ""),
                     owned_playlist: None,
+                    reload: None,
                     name: "Test",
                 },
                 None,
@@ -1669,6 +1713,7 @@ mod tests {
                     saved_icons: (Icon::CirclePlus, Icon::CircleCheck),
                     saved_tooltips: ("", ""),
                     owned_playlist: None,
+                    reload: None,
                     name: "Test",
                 },
                 None,
@@ -1718,6 +1763,7 @@ mod tests {
                     saved_icons: (Icon::CirclePlus, Icon::CircleCheck),
                     saved_tooltips: ("", ""),
                     owned_playlist: None,
+                    reload: None,
                     name: "Test",
                 },
                 None,
@@ -1763,6 +1809,7 @@ mod tests {
                     saved_icons: (Icon::CirclePlus, Icon::CircleCheck),
                     saved_tooltips: ("", ""),
                     owned_playlist: None,
+                    reload: None,
                     name: "Test",
                 },
                 None,
@@ -1813,6 +1860,7 @@ mod tests {
                     saved_icons: (Icon::CirclePlus, Icon::CircleCheck),
                     saved_tooltips: ("", ""),
                     owned_playlist: None,
+                    reload: None,
                     name: "Test",
                 },
                 Some(&mut filter),
@@ -1858,6 +1906,7 @@ mod tests {
                     saved_icons: (Icon::CirclePlus, Icon::CircleCheck),
                     saved_tooltips: ("", ""),
                     owned_playlist: None,
+                    reload: None,
                     name: "Test",
                 },
                 Some(&mut filter),
