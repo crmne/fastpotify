@@ -40,6 +40,12 @@ Library sidebar to start playing it. A single click still opens the row's page.
 Pointing at a row's cover art also shows a play button, but only when the
 sidebar is not in compact mode.
 
+## Finding a setting
+
+The Settings page has its own search field under the title. Type to narrow
+the page to matching rows; sections without matches disappear. Clear the
+field to see everything again.
+
 ## Keyboard and screen readers
 
 Right-click a search, filter, settings or playlist-editing text field for

@@ -6335,6 +6335,9 @@ impl App {
                 self.settings_dirty = true;
                 self.dialog = None;
                 self.open(Page::Settings);
+                // A saved search could be hiding the Client ID field the
+                // flow is about to focus, so drop it before landing.
+                crate::ui::settings::clear_search(ctx);
                 ctx.data_mut(|data| {
                     data.insert_temp(
                         egui::Id::new(crate::ui::settings::PERSONAL_APP_FOCUS_ID),

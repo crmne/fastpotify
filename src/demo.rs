@@ -1188,6 +1188,216 @@ mod tests {
         app.backend.shutdown();
     }
 
+    fn settings_filter(ctx: &egui::Context) -> String {
+        ctx.data_mut(|data| {
+            data.get_temp::<String>(egui::Id::new("settings-filter"))
+                .unwrap_or_default()
+        })
+    }
+
+    #[test]
+    fn settings_search_filters_rows_clearing_and_empty_state() {
+        use egui::accesskit::{Action as AccessibleAction, Role};
+        let (ctx, mut app) = accessible_app("settings-search");
+        app.open(Page::Settings);
+        accessible_frame(&ctx, &mut app, vec![]);
+        let tree = accessible_frame(&ctx, &mut app, vec![]);
+        let field = accessible_node(&tree, "Search settings", Role::TextInput);
+        // Typing narrows the page to matching rows.
+        accessible_frame(
+            &ctx,
+            &mut app,
+            vec![accessible_action(field, AccessibleAction::Focus, None)],
+        );
+        let tree = accessible_frame(&ctx, &mut app, vec![egui::Event::Text("volume".into())]);
+        assert_eq!(settings_filter(&ctx), "volume");
+        accessible_node(&tree, "Normalize volume", Role::CheckBox);
+        assert!(
+            !tree
+                .nodes
+                .iter()
+                .any(|(_, node)| node.label() == Some("Compact track list")),
+            "non-matching rows stay hidden while filtering"
+        );
+        // Clearing the field brings every row back.
+        let tree = accessible_frame(&ctx, &mut app, vec![]);
+        let clear = accessible_node(&tree, "Clear", Role::Button);
+        let tree = accessible_frame(
+            &ctx,
+            &mut app,
+            vec![accessible_action(clear, AccessibleAction::Click, None)],
+        );
+        assert!(settings_filter(&ctx).is_empty());
+        accessible_node(&tree, "Compact track list", Role::CheckBox);
+        // Gibberish matches nothing: every section's controls disappear
+        // and the empty state takes the page. (Plain labels expose no
+        // accesskit name, so the empty state itself is covered through
+        // the absence of each section's controls.)
+        let field = accessible_node(&tree, "Search settings", Role::TextInput);
+        accessible_frame(
+            &ctx,
+            &mut app,
+            vec![accessible_action(field, AccessibleAction::Focus, None)],
+        );
+        let tree = accessible_frame(&ctx, &mut app, vec![egui::Event::Text("zzznope".into())]);
+        assert_eq!(settings_filter(&ctx), "zzznope");
+        for (label, role) in [
+            ("Sign out", Role::Button),
+            ("Normalize volume", Role::CheckBox),
+            ("Dark", Role::Button),
+            ("Switch to it", Role::Button),
+            ("MilkDrop window", Role::CheckBox),
+            ("Equalizer", Role::CheckBox),
+            ("Clear artwork", Role::Button),
+            ("Check for updates", Role::Button),
+        ] {
+            assert!(
+                tree.nodes
+                    .iter()
+                    .all(|(_, node)| !(node.label() == Some(label) && node.role() == role)),
+                "{label} is hidden when nothing matches"
+            );
+        }
+        app.backend.shutdown();
+    }
+
+    #[test]
+    fn personal_app_setup_clears_a_saved_settings_search() {
+        use egui::accesskit::{Action as AccessibleAction, Role};
+        let (ctx, mut app) = accessible_app("settings-search-setup");
+        app.open(Page::Settings);
+        accessible_frame(&ctx, &mut app, vec![]);
+        let tree = accessible_frame(&ctx, &mut app, vec![]);
+        let field = accessible_node(&tree, "Search settings", Role::TextInput);
+        // Search for something that hides the Account section...
+        accessible_frame(
+            &ctx,
+            &mut app,
+            vec![accessible_action(field, AccessibleAction::Focus, None)],
+        );
+        accessible_frame(&ctx, &mut app, vec![egui::Event::Text("theme".into())]);
+        assert_eq!(settings_filter(&ctx), "theme");
+        // ...leave Settings...
+        app.open(Page::Home);
+        accessible_frame(&ctx, &mut app, vec![]);
+        // ...and enter Personal App setup, which must reveal and focus
+        // the Client ID field instead of landing on a filtered-out row.
+        app.dialog = Some(Dialog::PersonalAppIntro);
+        accessible_frame(&ctx, &mut app, vec![]);
+        let tree = accessible_frame(&ctx, &mut app, vec![]);
+        let setup = accessible_node(&tree, "Set up personal app", Role::Button);
+        accessible_frame(
+            &ctx,
+            &mut app,
+            vec![accessible_action(setup, AccessibleAction::Click, None)],
+        );
+        assert_eq!(app.page(), &Page::Settings);
+        assert!(
+            settings_filter(&ctx).is_empty(),
+            "setup must drop the saved search so its row is visible"
+        );
+        accessible_frame(&ctx, &mut app, vec![]);
+        assert!(
+            ctx.memory(|memory| memory.has_focus(egui::Id::new("personal-web-client-id"))),
+            "the Client ID field takes focus once its row is visible"
+        );
+        app.backend.shutdown();
+    }
+
+    fn settings_text(ctx: &egui::Context, app: &mut App, query: &str) -> Vec<String> {
+        ctx.data_mut(|data| {
+            data.insert_temp(egui::Id::new("settings-filter"), query.to_owned());
+        });
+        view_frame(ctx, app, vec![], crate::ui::settings::show);
+        view_frame(ctx, app, vec![], crate::ui::settings::show)
+            .into_iter()
+            .map(|(text, _)| text)
+            .collect()
+    }
+
+    #[test]
+    fn settings_search_finds_complete_descriptions_and_current_status() {
+        let (ctx, mut app) = accessible_app("settings-search-text");
+        for (query, row) in [
+            ("without a cover", "Compact track list"),
+            ("Ctrl+0", "Interface zoom"),
+            ("Rust", "About"),
+        ] {
+            let query = if cfg!(target_os = "macos") && query == "Ctrl+0" {
+                "Cmd+0"
+            } else {
+                query
+            };
+            let text = settings_text(&ctx, &mut app, query);
+            assert!(text.iter().any(|text| text == row), "{query}: {text:?}");
+        }
+        for query in ["Rodio", "ALSA"] {
+            let text = settings_text(&ctx, &mut app, query);
+            assert_eq!(
+                text.iter().any(|text| text == "Audio output"),
+                cfg!(target_os = "linux")
+            );
+            assert_eq!(
+                text.iter().any(|text| text == "Playback on this computer"),
+                cfg!(target_os = "linux")
+            );
+        }
+        app.local_playback =
+            crate::backend::LocalPlayback::Failed("Test connection failure".into());
+        let text = settings_text(&ctx, &mut app, "connection failure");
+        assert!(text.iter().any(|text| text == "Status: Unavailable"));
+        app.backend.shutdown();
+    }
+
+    #[test]
+    fn settings_search_never_shows_a_section_for_an_unavailable_row() {
+        let (ctx, mut app) = accessible_app("settings-search-availability");
+        let text = settings_text(&ctx, &mut app, "Show in taskbar");
+        assert_eq!(
+            text.iter().any(|text| text == "Winamp skins"),
+            cfg!(windows)
+        );
+        if !cfg!(windows) {
+            assert!(text.iter().any(|text| text.starts_with("No settings for")));
+        }
+        app.demo_windows_controls = true;
+        let text = settings_text(&ctx, &mut app, "Show in taskbar");
+        assert!(text.iter().any(|text| text == "Winamp skins"));
+        assert!(text.iter().any(|text| text == "Show in taskbar"));
+
+        app.settings.web_client_id = None;
+        app.web_app = None;
+        let text = settings_text(&ctx, &mut app, "Personal app ready");
+        assert!(!text.iter().any(|text| text == "Account"));
+        assert!(text.iter().any(|text| text.starts_with("No settings for")));
+        app.settings.web_client_id = Some("test-client".into());
+        app.web_app = Some("test-client".into());
+        let text = settings_text(&ctx, &mut app, "Personal app ready");
+        assert!(text.iter().any(|text| text == "Personal app ready"));
+        app.backend.shutdown();
+    }
+
+    #[test]
+    fn settings_search_keeps_apply_available_after_a_playback_edit() {
+        use egui::accesskit::{Action as AccessibleAction, Role};
+        let (ctx, mut app) = accessible_app("settings-search-apply");
+        app.open(Page::Settings);
+        ctx.data_mut(|data| {
+            data.insert_temp(egui::Id::new("settings-filter"), "normalize".to_string())
+        });
+        accessible_frame(&ctx, &mut app, vec![]);
+        let tree = accessible_frame(&ctx, &mut app, vec![]);
+        let toggle = accessible_node(&tree, "Normalize volume", Role::CheckBox);
+        accessible_frame(
+            &ctx,
+            &mut app,
+            vec![accessible_action(toggle, AccessibleAction::Click, None)],
+        );
+        let tree = accessible_frame(&ctx, &mut app, vec![]);
+        accessible_node(&tree, "Apply and restart playback", Role::Button);
+        app.backend.shutdown();
+    }
+
     #[test]
     fn accessible_sliders_accept_keyboard_and_screen_reader_values() {
         use crate::ui::widgets::{SliderEvent, thin_slider};
