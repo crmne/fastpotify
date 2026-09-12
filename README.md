@@ -141,6 +141,24 @@ On macOS, with [Homebrew](https://brew.sh):
 brew install --cask crmne/tap/fastpotify
 ```
 
+On Gentoo, [niko-overlays](https://github.com/NikoMalik/niko-overlays) offers
+an optional **community-maintained** package. Its current `0.7.1` ebuild
+builds post-release snapshot `67b8dfb`, rather than the `v0.7.1` release, and
+omits MilkDrop. Use the released binary or build instructions below if you
+want the standard release and feature set.
+
+To enable the overlay with `eselect-repository`, run as root:
+
+```sh
+emerge --ask app-eselect/eselect-repository
+eselect repository add niko-overlays git https://github.com/NikoMalik/niko-overlays.git
+emaint sync -r niko-overlays
+emerge --ask --autounmask-write media-sound/fastpotify::niko-overlays
+```
+
+Review and apply any proposed keyword changes with `dispatch-conf`, then
+repeat the final `emerge` command.
+
 Everywhere else, build the single binary with Rust 1.95 or newer:
 
 ```bash
