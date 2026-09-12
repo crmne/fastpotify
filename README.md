@@ -97,6 +97,8 @@ everyday use, and connection details.
   the tray menu still offers Show or hide.
   On Windows, after 0.7.1, hide its taskbar button from Settings or the mini
   player's options menu while keeping the window and tray controls available.
+  On Wayland, use the desktop's Keep Above shortcut or rule; the app's
+  Always on top controls are unavailable there.
 
   ![The mini player wearing the built-in skin](docs/assets/images/winamp.png)
 - **Equalizer.** Winamp's ten bands and presets over the music played on

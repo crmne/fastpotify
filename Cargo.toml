@@ -65,7 +65,9 @@ projectm-sys = { version = "1.2.2", default-features = false, features = ["stati
 winit = { version = "0.30", optional = true }
 glutin = { version = "0.32", optional = true }
 glutin-winit = { version = "0.5", optional = true }
-raw-window-handle = { version = "0.6", optional = true }
+# Detect the live window backend, including when MilkDrop is disabled.
+# eframe already compiles this crate.
+raw-window-handle = "0.6"
 # Spotify playback and Connect. rustls everywhere so the client links one TLS
 # stack and builds without OpenSSL on every platform.
 #
@@ -132,9 +134,6 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["std
 windows-native-keyring-store = { version = "1.1", default-features = false }
 # A hidden window for the media controls to belong to, and message loops.
 windows-sys = { version = "0.60", features = ["Win32_Foundation", "Win32_Globalization", "Win32_Graphics_Gdi", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_LibraryLoader", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_Accessibility", "Win32_UI_HiDpi", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
-# The thumbnail toolbar needs eframe's native window handle even without
-# MilkDrop. This is the same crate already compiled by eframe and winit.
-raw-window-handle = "0.6"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Reuses the zbus/Tokio stack already used for desktop integration.
@@ -169,7 +168,7 @@ demo = []
 # MilkDrop, through libprojectM: a C++ library that CMake builds into the
 # binary at compile time, so building needs cmake, a C++ compiler, and
 # libclang. `--no-default-features` leaves it out.
-milkdrop = ["dep:projectm-sys", "dep:winit", "dep:glutin", "dep:glutin-winit", "dep:raw-window-handle"]
+milkdrop = ["dep:projectm-sys", "dep:winit", "dep:glutin", "dep:glutin-winit"]
 
 [profile.release]
 lto = "thin"

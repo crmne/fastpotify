@@ -1631,6 +1631,31 @@ mod tests {
         app.backend.shutdown();
     }
 
+    #[test]
+    fn wayland_on_top_setting_is_disabled_and_does_not_look_active() {
+        use egui::accesskit::{Role, Toggled};
+        let (ctx, mut app) = accessible_app("wayland-on-top");
+        app.window_level_supported = false;
+        app.settings.winamp_on_top = true;
+        app.open(Page::Settings);
+        accessible_frame(&ctx, &mut app, vec![]);
+        let tree = accessible_frame(&ctx, &mut app, vec![]);
+        let id = accessible_node(&tree, "Always on top", Role::CheckBox);
+        let node = &tree
+            .nodes
+            .iter()
+            .find(|(node_id, _)| *node_id == id)
+            .unwrap()
+            .1;
+        assert!(node.is_disabled());
+        assert_eq!(node.toggled(), Some(Toggled::False));
+        assert!(
+            app.settings.winamp_on_top,
+            "the saved preference is preserved"
+        );
+        app.backend.shutdown();
+    }
+
     fn frame(ctx: &egui::Context, app: &mut App) {
         frame_events(ctx, app, Vec::new());
     }

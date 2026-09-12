@@ -3,6 +3,15 @@
 //! eframe already places the window on-screen. The session can still refer
 //! to a monitor that was unplugged, so check before moving the window there.
 
+pub const ON_TOP_UNAVAILABLE: &str =
+    "On Wayland, use your desktop's Keep Above shortcut or window rule.";
+
+/// The active backend matters: a Wayland session can also host X11 windows.
+/// winit's Wayland backend cannot change a window's stacking level.
+pub fn supports_window_level(display: raw_window_handle::RawDisplayHandle) -> bool {
+    !matches!(display, raw_window_handle::RawDisplayHandle::Wayland(_))
+}
+
 /// Checks a position in egui points against the fixed coordinate limits.
 #[cfg(not(windows))]
 pub fn can_restore(pos: [f32; 2], _pixels_per_point: f32) -> bool {
@@ -56,6 +65,21 @@ pub fn can_restore(pos: [f32; 2], pixels_per_point: f32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_wayland_backend_lacks_window_level_control() {
+        use raw_window_handle::{
+            RawDisplayHandle, WaylandDisplayHandle, XcbDisplayHandle, XlibDisplayHandle,
+        };
+        let wayland = WaylandDisplayHandle::new(std::ptr::NonNull::dangling());
+        assert!(!supports_window_level(RawDisplayHandle::Wayland(wayland)));
+        assert!(supports_window_level(RawDisplayHandle::Xlib(
+            XlibDisplayHandle::new(None, 0)
+        )));
+        assert!(supports_window_level(RawDisplayHandle::Xcb(
+            XcbDisplayHandle::new(None, 0)
+        )));
+    }
 
     fn reachable(pos: [f32; 2], scale: f32, area: [f32; 4]) -> bool {
         let rect =

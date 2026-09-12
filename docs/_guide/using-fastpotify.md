@@ -137,6 +137,15 @@ saved title bar is outside every connected monitor’s work area. Positions on
 connected secondary monitors still restore. Reinstalling preserves settings;
 it is not needed to recover a position left on an unplugged display.
 
+## Keeping the mini player above other windows
+
+**Always on top** works on Windows, macOS and X11. On Wayland the app's
+controls are unavailable, because the window backend cannot apply them.
+Use your desktop's window rule or shortcut instead. In KDE Plasma, configure
+**Keep Window Above Others** under **Settings > Keyboard > Shortcuts >
+Window Management**. Your saved preference remains available when you use
+Fastpotify on a supported backend again.
+
 ## Recent
 
 The queue panel's second tab combines Spotify's history with tracks played

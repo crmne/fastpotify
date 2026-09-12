@@ -686,12 +686,18 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             ui,
             &palette,
             "Always on top",
-            "Keep the Winamp window above everything else.",
+            if app.window_level_supported {
+                "Keep the Winamp window above everything else."
+            } else {
+                crate::window::ON_TOP_UNAVAILABLE
+            },
             |ui| {
-                let mut on_top = app.settings.winamp_on_top;
-                if widgets::switch(ui, &palette, "Always on top", &mut on_top).changed() {
-                    app.actions.push(Action::ToggleWinampOnTop);
-                }
+                ui.add_enabled_ui(app.window_level_supported, |ui| {
+                    let mut on_top = app.settings.winamp_on_top && app.window_level_supported;
+                    if widgets::switch(ui, &palette, "Always on top", &mut on_top).changed() {
+                        app.actions.push(Action::ToggleWinampOnTop);
+                    }
+                });
             },
         );
         if app.windows_controls_visible() {

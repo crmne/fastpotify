@@ -709,10 +709,16 @@ fn options_menu(app: &mut App, ui: &mut Ui, unit: f32) {
             }
         }
     });
-    let mut on_top = app.settings.winamp_on_top;
-    if ui.checkbox(&mut on_top, "Always on top").clicked() {
-        app.actions.push(Action::ToggleWinampOnTop);
-    }
+    ui.add_enabled_ui(app.window_level_supported, |ui| {
+        let mut on_top = app.settings.winamp_on_top && app.window_level_supported;
+        if ui
+            .checkbox(&mut on_top, "Always on top")
+            .on_disabled_hover_text(crate::window::ON_TOP_UNAVAILABLE)
+            .clicked()
+        {
+            app.actions.push(Action::ToggleWinampOnTop);
+        }
+    });
     if app.windows_controls_visible() {
         let mut visible = app.settings.winamp_show_taskbar;
         if ui.checkbox(&mut visible, "Show in taskbar").changed() {
@@ -838,11 +844,16 @@ fn clutter_bar(app: &mut App, view: &mut View, now: Option<&NowPlaying>) {
         .lamp_button(
             layout::CLUTTER_A,
             sprites::CLUTTER_A_LIT,
-            app.settings.winamp_on_top,
+            app.settings.winamp_on_top && app.window_level_supported,
             "clutter-a",
         )
-        .on_hover_text("Always on top")
+        .on_hover_text(if app.window_level_supported {
+            "Always on top"
+        } else {
+            crate::window::ON_TOP_UNAVAILABLE
+        })
         .clicked()
+        && app.window_level_supported
     {
         app.actions.push(Action::ToggleWinampOnTop);
     }
