@@ -93,6 +93,119 @@ impl Palette {
     }
 }
 
+/// A local JSON palette, identified by its filename in the themes directory.
+#[derive(Clone, Debug)]
+pub struct CustomTheme {
+    pub filename: String,
+    pub palette: Palette,
+}
+
+#[derive(Default, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum ThemeBase {
+    #[default]
+    Dark,
+    Light,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ThemeFile {
+    #[serde(default)]
+    base: ThemeBase,
+    #[serde(default)]
+    colors: std::collections::BTreeMap<String, String>,
+}
+
+fn parse_palette(text: &str) -> Result<Palette, String> {
+    let file: ThemeFile = serde_json::from_str(text).map_err(|error| error.to_string())?;
+    let mut palette = match file.base {
+        ThemeBase::Dark => Palette::dark(),
+        ThemeBase::Light => Palette::light(),
+    };
+    for (name, value) in file.colors {
+        let hex = value
+            .strip_prefix('#')
+            .ok_or_else(|| format!("{name}: expected #RRGGBB or #RRGGBBAA"))?;
+        if !matches!(hex.len(), 6 | 8) || !hex.bytes().all(|c| c.is_ascii_hexdigit()) {
+            return Err(format!("{name}: expected #RRGGBB or #RRGGBBAA"));
+        }
+        let color = u32::from_str_radix(hex, 16).map_err(|error| error.to_string())?;
+        let color = if hex.len() == 6 {
+            Color32::from_rgb((color >> 16) as u8, (color >> 8) as u8, color as u8)
+        } else {
+            Color32::from_rgba_unmultiplied(
+                (color >> 24) as u8,
+                (color >> 16) as u8,
+                (color >> 8) as u8,
+                color as u8,
+            )
+        };
+        match name.as_str() {
+            "window" => palette.window = color,
+            "panel" => palette.panel = color,
+            "surface" => palette.surface = color,
+            "surface_hover" => palette.surface_hover = color,
+            "surface_active" => palette.surface_active = color,
+            "outline" => palette.outline = color,
+            "text" => palette.text = color,
+            "secondary" => palette.secondary = color,
+            "dim" => palette.dim = color,
+            "accent" => palette.accent = color,
+            "accent_hover" => palette.accent_hover = color,
+            "on_accent" => palette.on_accent = color,
+            "danger" => palette.danger = color,
+            "warning" => palette.warning = color,
+            "overlay" => palette.overlay = color,
+            "shadow" => palette.shadow = color,
+            _ => return Err(format!("unknown color: {name}")),
+        }
+    }
+    Ok(palette)
+}
+
+/// Read once at startup, never during a frame. Invalid themes stay out of the picker.
+pub fn load_custom_themes(dir: &std::path::Path) -> Vec<CustomTheme> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) => {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                log::warn!("unable to read themes at {}: {error}", dir.display());
+            }
+            return Vec::new();
+        }
+    };
+    let mut themes = Vec::new();
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                log::warn!("unable to read theme entry: {error}");
+                continue;
+            }
+        };
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+            continue;
+        }
+        let Some(filename) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        match std::fs::read_to_string(&path)
+            .map_err(|error| error.to_string())
+            .and_then(|text| parse_palette(&text))
+        {
+            Ok(palette) => themes.push(CustomTheme {
+                filename: filename.to_owned(),
+                palette,
+            }),
+            Err(error) => log::warn!("unable to load theme {}: {error}", path.display()),
+        }
+    }
+    themes.sort_by(|a, b| a.filename.cmp(&b.filename));
+    themes
+}
+
 pub const RADIUS: u8 = 8;
 pub const RADIUS_SMALL: u8 = 4;
 pub const ROW_HEIGHT: f32 = 56.0;
@@ -894,5 +1007,61 @@ mod tests {
             assert!(galley.rows[0].glyphs.len() >= 5);
         });
         output.textures_delta.clear();
+    }
+}
+
+#[cfg(test)]
+mod custom_theme_tests {
+    use super::*;
+
+    #[test]
+    fn overrides_inherit_the_base_and_support_alpha() {
+        let palette =
+            parse_palette(r##"{"base":"light","colors":{"text":"#ebdbb2","shadow":"#00000080"}}"##)
+                .unwrap();
+        assert_eq!(palette.window, Palette::light().window);
+        assert!(!palette.dark);
+        assert_eq!(palette.text, Color32::from_rgb(235, 219, 178));
+        assert_eq!(palette.shadow, Color32::from_black_alpha(128));
+        assert_eq!(parse_palette("{}").unwrap(), Palette::dark());
+    }
+
+    #[test]
+    fn invalid_themes_are_rejected() {
+        for text in [
+            r##"{"colors":{"text":"#fff"}}"##,
+            r##"{"colors":{"text":"#zzzzzz"}}"##,
+            r##"{"colors":{"typo":"#ffffff"}}"##,
+            r#"{"base":"system"}"#,
+            r#"{"typo":true}"#,
+            "not json",
+        ] {
+            assert!(parse_palette(text).is_err(), "{text}");
+        }
+    }
+
+    #[test]
+    fn discovery_sorts_valid_files_and_skips_invalid_files() {
+        let dir = std::env::temp_dir().join(format!("fastpotify-themes-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(load_custom_themes(&dir).is_empty());
+        std::fs::create_dir_all(&dir).unwrap();
+        for (name, text) in [
+            ("z.json", "{}"),
+            ("a.json", "{}"),
+            ("bad.json", "invalid"),
+            ("ignored.txt", "{}"),
+        ] {
+            std::fs::write(dir.join(name), text).unwrap();
+        }
+        let themes = load_custom_themes(&dir);
+        assert_eq!(
+            themes
+                .iter()
+                .map(|theme| theme.filename.as_str())
+                .collect::<Vec<_>>(),
+            ["a.json", "z.json"]
+        );
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

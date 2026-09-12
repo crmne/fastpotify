@@ -145,7 +145,8 @@ main fields are:
 | `gapless` | `true` | Gapless playback |
 | `audio_backend` | platform | `pulseaudio` or `rodio` on Linux |
 | `audio_cache_mb` | `1024` | On-disk audio cache budget |
-| `theme` | `dark` | `dark`, `light`, or `system` |
+| `theme` | `dark` | `dark`, `light`, or `system`; fallback for unavailable custom themes |
+| `custom_theme` | `null` | Selected JSON filename from the `themes` folder |
 | `accent_from_art` | `true` | Tint pages with album art |
 | `library_sort` | `{}` | Per-section Library order overrides, after 0.7.1: `library`, `recently_played`, `name`, `recently_added`, `local`, or `spotify`, where supported |
 | `sidebar_order` | `[]` | Saved local playlist arrangement, including an unpinned Liked Songs, retained when another sort is selected |
@@ -224,3 +225,38 @@ cargo run --release --features demo -- \
 The image uses the current window size. `--demo-size WIDTHxHEIGHT` sets that
 size for a shot (for example `760x800` or `1240x800`). `--demo-shot-delay <MS>`
 sets how long to wait for cover art before taking it.
+
+## Custom themes
+
+Create a `themes` folder beside `settings.json` and put JSON files in it.
+Restart Fastpotify, then select the filename under **Settings → Appearance → Theme**.
+The picker includes the built-in Dark, Light, and Follow system choices.
+Choosing a built-in theme clears the custom selection.
+
+For example, `themes/gruvbox.json`:
+
+```json
+{
+  "base": "dark",
+  "colors": {
+    "window": "#282828",
+    "panel": "#1d2021",
+    "surface": "#32302f",
+    "text": "#ebdbb2",
+    "accent": "#b8bb26"
+  }
+}
+```
+
+`base` is `dark` (the default) or `light`. Omitted colors inherit that palette.
+Supported colors are `window`, `panel`, `surface`, `surface_hover`,
+`surface_active`, `outline`, `text`, `secondary`, `dim`, `accent`,
+`accent_hover`, `on_accent`, `danger`, `warning`, `overlay`, and `shadow`.
+Values must be `#RRGGBB` or `#RRGGBBAA`.
+
+Files are read at startup. Restart after adding or editing a theme.
+Invalid files are skipped with a warning in the log. If the selected file
+is removed or invalid, the built-in theme applies without resetting other
+preferences. Album-art tinting remains an independent setting; turn it off
+for fixed colors throughout. These palettes apply to the main window;
+Winamp skins remain separate.

@@ -313,6 +313,8 @@ on Linux). They include the Connect device name, bitrate, normalisation,
 autoplay, gapless playback, the audio backend (PulseAudio/PipeWire or ALSA on
 Linux), audio cache size, theme, sidebar state, whether pages take colour
 from artwork, and the mini player's skin and size.
+Custom JSON palettes go in a `themes` folder beside `settings.json` and appear
+in the Theme picker after restarting. See [custom themes](docs/_reference/settings-and-files.md#custom-themes).
 Playback settings apply when you press **Apply and restart playback**.
 You can also check for a new release from Settings. On macOS, the same command
 is in the application menu.
