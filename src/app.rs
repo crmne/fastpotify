@@ -6230,6 +6230,17 @@ impl App {
                     self.play_request(request, false);
                 }
                 RowContext::Uris(uris) => {
+                    // The click names a song. A row that plays a list of its
+                    // own, as each Recent row does, still hands over its
+                    // place in the list on screen; when that place holds
+                    // another song, the song wins, as it does in Next up.
+                    let index = if uris.get(index as usize).is_some_and(|held| *held == uri) {
+                        index
+                    } else {
+                        uris.iter()
+                            .position(|held| *held == uri)
+                            .map_or(index, |position| position as u32)
+                    };
                     let (uris, index) = cap_uris(uris.as_ref(), index);
                     let request = PlayRequest::tracks(uris).starting_at_index(index);
                     self.play_request(request, false);
@@ -13097,6 +13108,126 @@ mod tests {
         );
         app.handle_playback(LocalPlayback::Failed("test connection failure".into()));
         assert!(app.requested_track_preview().is_none());
+        app.backend.shutdown();
+    }
+
+    /// A row in the Recent tab plays its own song. Each row plays a list
+    /// holding only that song, but it hands over its place in the whole
+    /// tab, which is past the end of that list for every row but the top.
+    #[test]
+    fn a_recent_row_plays_its_own_song() {
+        use crate::api::models::{ArtistRef, PlayHistory, Track};
+        use egui::accesskit::{Action as AccessibleAction, ActionRequest, Role, TreeId};
+
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let mut app = headless_app();
+        app.attach(&ctx);
+        crate::demo::populate(&mut app);
+        app.remote = None;
+        app.selected_device = None;
+        app.local.connected = false;
+        app.shuffle_wanted = false;
+        assert!(matches!(app.target(), Target::Local));
+        app.recents.items = ["newest", "middle", "oldest"]
+            .iter()
+            .enumerate()
+            .map(|(index, id)| PlayHistory {
+                track: Track {
+                    id: Some((*id).into()),
+                    uri: format!("spotify:track:{id}"),
+                    name: format!("Recent {id}"),
+                    artists: vec![ArtistRef {
+                        name: "Recent Artist".into(),
+                        ..Default::default()
+                    }],
+                    duration_ms: 200_000,
+                    ..Default::default()
+                },
+                played_at: Some(format!("2026-09-01T1{}:00:00Z", 5 - index)),
+                context: None,
+            })
+            .collect();
+        app.recents.loaded_once = true;
+        app.recents.complete = true;
+        app.rebuild_recents();
+        app.queue_tab = QueueTab::Recents;
+        app.show_queue_panel = true;
+
+        let mut draw = |events| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1280.0, 800.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| crate::ui::queue::side_panel(&mut app, ui),
+            );
+            output.textures_delta.clear();
+            app.apply_actions(&ctx);
+            output.platform_output.accesskit_update.unwrap()
+        };
+        draw(Vec::new());
+        let tree = draw(Vec::new());
+        let row = tree
+            .nodes
+            .iter()
+            .find(|(_, node)| {
+                node.role() == Role::Button
+                    && node.label() == Some("Play Recent middle, Recent Artist")
+            })
+            .expect("the second row of the Recent tab")
+            .0;
+        draw(vec![egui::Event::AccessKitActionRequest(ActionRequest {
+            target_tree: TreeId::ROOT,
+            target_node: row,
+            action: AccessibleAction::Click,
+            data: None,
+        })]);
+
+        let request = app
+            .queued_play
+            .as_ref()
+            .expect("waiting for the local engine");
+        assert_eq!(request.uris, ["spotify:track:middle"]);
+        assert_eq!(
+            request.offset_position,
+            Some(0),
+            "the song's place in the list it plays from"
+        );
+        assert_eq!(
+            app.intent_track.as_ref().map(|intent| intent.uri.as_str()),
+            Some("spotify:track:middle"),
+            "the chosen song is the one shown as starting"
+        );
+
+        // A row whose place holds its own song keeps that place, even when
+        // the song is in the list earlier as well.
+        app.apply(
+            Action::PlayFromRow {
+                context: RowContext::Uris(
+                    vec![
+                        "spotify:track:middle".to_string(),
+                        "spotify:track:newest".to_string(),
+                        "spotify:track:middle".to_string(),
+                    ]
+                    .into(),
+                ),
+                uri: "spotify:track:middle".into(),
+                index: 2,
+            },
+            &ctx,
+        );
+        assert_eq!(
+            app.queued_play
+                .as_ref()
+                .and_then(|request| request.offset_position),
+            Some(2),
+            "the second copy of a repeated song plays from its own place"
+        );
         app.backend.shutdown();
     }
 
