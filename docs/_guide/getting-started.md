@@ -35,6 +35,10 @@ scripts. macOS and Windows include fonts for the common cases. On Linux,
 install `noto-fonts` and `noto-fonts-cjk` (Arch) or `fonts-noto` and
 `fonts-noto-cjk` (Debian or Ubuntu) if titles appear as empty boxes.
 
+On `main`, after 0.7.1, long right-to-left titles in song rows and the player
+bar end with an ellipsis inside their text area. Joined Arabic letters are
+measured together so the last visible letter stays whole at the edge.
+
 ![Japanese, Chinese, and Korean titles in a playlist](/assets/images/scripts.png)
 
 A desktop entry ships in `packaging/applications/fastpotify.desktop`. It

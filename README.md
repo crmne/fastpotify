@@ -148,6 +148,9 @@ macOS and Windows include common fonts. On Linux, install `noto-fonts` and
 `noto-fonts-cjk` (Arch) or `fonts-noto` and `fonts-noto-cjk` (Debian or
 Ubuntu) if titles appear as empty boxes.
 
+On `main`, after 0.7.1, long right-to-left titles in song rows and the player
+bar end with an ellipsis inside their text area, including joined Arabic letters.
+
 A desktop entry is provided in `packaging/applications/fastpotify.desktop`.
 It registers Fastpotify for `spotify:` links; `xdg-mime default
 fastpotify.desktop x-scheme-handler/spotify` makes it the one the desktop
