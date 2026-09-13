@@ -200,28 +200,56 @@ fn break_rows(
     // width of its own -- the fitting is meant to have happened here -- so a
     // row left too wide is drawn straight past the edge it was given.
     if let Some(mark) = overflow {
-        let mark_width = width(mark.encode_utf8(&mut [0; 4]));
         let last = rows.last_mut().expect("one row at least");
         if cut || last.1 > wrap_width {
-            while last.1 + mark_width > wrap_width
+            // Each candidate is measured as `layout` will draw it: shaped
+            // whole, mark included, in display order. Letters join and
+            // ligate, so what is left of a word cannot be worked out from
+            // the widths of the letters taken away.
+            let drawn = |row: &str| width(&display_line(&format!("{row}{mark}")));
+            while drawn(&last.0) > wrap_width
                 && let Some(at) = last.0.rfind(' ')
             {
-                last.1 -= width(&last.0[at + 1..]) + space;
                 last.0.truncate(at);
             }
-            // A single word with no space left to give up: characters go
+            // A single word with no space left to give up: letters go
             // instead, which is the only way the ellipsis can mean anything.
-            while last.1 + mark_width > wrap_width
-                && let Some(character) = last.0.chars().next_back()
-            {
-                let at = last.0.len() - character.len_utf8();
-                last.1 -= width(&last.0[at..]);
-                last.0.truncate(at);
+            // A piece is kept only once it has been measured to fit, so what
+            // is drawn fits even where a shorter piece joins into a wider
+            // form.
+            if !last.0.is_empty() && drawn(&last.0) > wrap_width {
+                let cuts = cuts(&last.0);
+                let (mut fits, mut over) = (0, cuts.len());
+                while over - fits > 1 {
+                    let middle = (fits + over) / 2;
+                    if drawn(&last.0[..cuts[middle]]) <= wrap_width {
+                        fits = middle;
+                    } else {
+                        over = middle;
+                    }
+                }
+                last.0.truncate(cuts[fits]);
             }
             last.0.push(mark);
         }
     }
     rows.into_iter().map(|(text, _)| text).collect()
+}
+
+/// Where `word` can be cut, as byte offsets from its start up to but not
+/// including its end: never before a mark that rides on the letter ahead of
+/// it, and never after a joiner.
+fn cuts(word: &str) -> Vec<usize> {
+    let mut previous = None;
+    word.char_indices()
+        .filter(|&(at, character)| {
+            let joined = previous == Some('\u{200d}');
+            previous = Some(character);
+            let rides = matches!(bidi_class(character), BidiClass::NSM | BidiClass::BN);
+            at == 0 || !(rides || joined)
+        })
+        .map(|(at, _)| at)
+        .collect()
 }
 
 /// Where to paint a galley from [`layout`] so that it sits inside `rect`:
@@ -306,6 +334,63 @@ mod tests {
             break_rows("abcdefghij", 5.0, 1, None, by_character),
             ["abcdefghij"]
         );
+    }
+
+    /// The row `layout` draws for a right-to-left word longer than its
+    /// column fits the column as epaint shapes it, in the fonts the app
+    /// installs. Letters join and ligate, so no sum of letters measured on
+    /// their own says how wide a piece of a word is; laying it out does.
+    #[test]
+    fn a_shaped_word_longer_than_the_column_is_drawn_inside_it() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        // Fonts set on a context take effect from its next pass.
+        ctx.run_ui(egui::RawInput::default(), |_| {})
+            .textures_delta
+            .clear();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let painter = ui.painter();
+            let font = FontId::proportional(18.0);
+            for word in ["لالالالالالا", "והתקשרויותיהם"] {
+                for wrap_width in [25.0, 40.0, 60.0] {
+                    for max_rows in [1, 2] {
+                        let galley = layout(
+                            painter,
+                            word,
+                            font.clone(),
+                            Color32::WHITE,
+                            wrap_width,
+                            max_rows,
+                            Some(ELLIPSIS),
+                        );
+                        let text = galley.text();
+                        assert_eq!(galley.rows.len(), 1, "{text:?}");
+                        assert!(text.starts_with(ELLIPSIS), "{text:?}");
+                        let drawn = galley.rows[0].size.x;
+                        assert!(
+                            drawn <= wrap_width,
+                            "{word} in a {wrap_width} px column is drawn as {text}, {drawn} px wide"
+                        );
+                    }
+                }
+                // Given the room, the word stays whole and unmarked.
+                let whole = painter
+                    .layout_no_wrap(word.to_owned(), font.clone(), Color32::WHITE)
+                    .size()
+                    .x;
+                let galley = layout(
+                    painter,
+                    word,
+                    font.clone(),
+                    Color32::WHITE,
+                    whole + 1.0,
+                    1,
+                    Some(ELLIPSIS),
+                );
+                assert_eq!(galley.text(), word);
+            }
+        });
+        output.textures_delta.clear();
     }
 
     #[test]
