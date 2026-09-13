@@ -16,7 +16,8 @@ const COUNTS_AFTER: std::time::Duration = std::time::Duration::from_secs(30);
 /// Maximum number of stored local plays.
 const KEPT: usize = 500;
 
-/// Matching plays within this many seconds are treated as duplicates.
+/// A play made here and a play of the same song Spotify reports within this
+/// many seconds of it are the same play.
 const SAME_PLAY: i64 = 60;
 
 /// When a song has been listened to long enough to count.
@@ -129,23 +130,44 @@ pub fn played_track(now: &crate::app::NowPlaying) -> Track {
 
 /// Merges local and Spotify history, newest first.
 ///
-/// Matching plays within the duplicate window are deduplicated. Entries
-/// without a timestamp sort to the end.
+/// A play Spotify reports within the duplicate window of one made here is
+/// that same play, and is shown once. Plays from one source are never
+/// merged with each other: each is its own listen, however close together
+/// they start. Entries without a timestamp sort to the end.
 pub fn merged(local: &[PlayHistory], remote: &[PlayHistory]) -> Vec<PlayHistory> {
-    let mut seen: HashMap<String, Vec<i64>> = HashMap::new();
-    let mut out: Vec<(Option<i64>, PlayHistory)> = Vec::new();
-    for play in local.iter().chain(remote) {
-        let at = play
-            .played_at
+    let time = |play: &PlayHistory| {
+        play.played_at
             .as_deref()
             .and_then(|at| at.parse::<jiff::Timestamp>().ok())
-            .map(|at| at.as_second());
+            .map(|at| at.as_second())
+    };
+    // The plays made here that no report from Spotify has matched yet.
+    let mut unmatched: HashMap<&str, Vec<i64>> = HashMap::new();
+    let mut out: Vec<(Option<i64>, PlayHistory)> = Vec::new();
+    for play in local {
+        let at = time(play);
         if let Some(at) = at {
-            let times = seen.entry(play.track.uri.clone()).or_default();
-            if times.iter().any(|held| (held - at).abs() <= SAME_PLAY) {
-                continue;
-            }
-            times.push(at);
+            unmatched
+                .entry(play.track.uri.as_str())
+                .or_default()
+                .push(at);
+        }
+        out.push((at, play.clone()));
+    }
+    for play in remote {
+        let at = time(play);
+        // Each play made here stands for at most one report: the closest.
+        if let Some(at) = at
+            && let Some(times) = unmatched.get_mut(play.track.uri.as_str())
+            && let Some(nearest) = times
+                .iter()
+                .enumerate()
+                .filter(|&(_, &held)| (held - at).abs() <= SAME_PLAY)
+                .min_by_key(|&(_, &held)| (held - at).abs())
+                .map(|(index, _)| index)
+        {
+            times.swap_remove(nearest);
+            continue;
         }
         out.push((at, play.clone()));
     }
@@ -236,6 +258,27 @@ mod tests {
         assert_eq!(merged(&local, &remote).len(), 1, "twenty seconds apart");
         let distant = vec![play("spotify:track:a", "2026-09-01T15:05:00Z")];
         assert_eq!(merged(&local, &distant).len(), 2, "five minutes apart");
+    }
+
+    /// Each source reports every play it heard: a short song played twice
+    /// in a row is two plays, however close together they start. Only a
+    /// play that both sources report becomes one row.
+    #[test]
+    fn a_short_song_played_twice_by_one_source_is_two_rows() {
+        // A forty-second interlude played twice, on another device.
+        let remote = vec![
+            play("spotify:track:short", "2026-09-01T15:00:40Z"),
+            play("spotify:track:short", "2026-09-01T15:00:00Z"),
+        ];
+        assert_eq!(merged(&[], &remote).len(), 2, "two plays on another device");
+        // The same two plays, made here.
+        assert_eq!(merged(&remote, &[]).len(), 2, "two plays on this computer");
+        // Made here and reported by Spotify as well: two plays, each once.
+        let reported = vec![
+            play("spotify:track:short", "2026-09-01T15:00:45Z"),
+            play("spotify:track:short", "2026-09-01T15:00:05Z"),
+        ];
+        assert_eq!(merged(&remote, &reported).len(), 2, "each play once");
     }
 
     /// A play without a timestamp sorts to the end.
