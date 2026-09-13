@@ -23,6 +23,29 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
                 actions.push(action);
             }
         };
+        // egui ignores an extra Shift when it matches, so a Shift shortcut
+        // is looked for before the plain one it extends: Ctrl+B would
+        // otherwise take Ctrl+Shift+B, and Ctrl+Q Ctrl+Shift+Q.
+        key(
+            Modifiers::COMMAND | Modifiers::SHIFT,
+            Key::A,
+            Action::OpenUri("artist".into()),
+        );
+        key(
+            Modifiers::COMMAND | Modifiers::SHIFT,
+            Key::B,
+            Action::OpenUri("album".into()),
+        );
+        // Cmd+Shift+Q is Log Out, taken by the window server.
+        if cfg!(target_os = "macos") {
+            key(Modifiers::COMMAND, Key::U, Action::ToggleQueuePanel);
+        } else {
+            key(
+                Modifiers::COMMAND | Modifiers::SHIFT,
+                Key::Q,
+                Action::ToggleQueuePanel,
+            );
+        }
         key(Modifiers::COMMAND, Key::F, Action::FocusSearch);
         key(Modifiers::COMMAND, Key::B, Action::ToggleSidebar);
         key(Modifiers::COMMAND, Key::Comma, Action::Open(Page::Settings));
@@ -70,26 +93,6 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
         key(Modifiers::COMMAND, Key::ArrowRight, Action::Next);
         key(Modifiers::COMMAND, Key::ArrowUp, Action::VolumeBy(5));
         key(Modifiers::COMMAND, Key::ArrowDown, Action::VolumeBy(-5));
-        key(
-            Modifiers::COMMAND | Modifiers::SHIFT,
-            Key::A,
-            Action::OpenUri("artist".into()),
-        );
-        key(
-            Modifiers::COMMAND | Modifiers::SHIFT,
-            Key::B,
-            Action::OpenUri("album".into()),
-        );
-        // Cmd+Shift+Q is Log Out, taken by the window server.
-        if cfg!(target_os = "macos") {
-            key(Modifiers::COMMAND, Key::U, Action::ToggleQueuePanel);
-        } else {
-            key(
-                Modifiers::COMMAND | Modifiers::SHIFT,
-                Key::Q,
-                Action::ToggleQueuePanel,
-            );
-        }
         if !typing {
             key(
                 Modifiers::NONE,
@@ -305,6 +308,86 @@ mod tests {
             app.actions.as_slice(),
             [Action::ToggleSaved(uri)] if uri == "spotify:track:trk0"
         ));
+        app.backend.shutdown();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// egui ignores an extra Shift when it matches a shortcut, so the
+    /// plain Ctrl+Q would also take Ctrl+Shift+Q if it were looked for
+    /// first.
+    #[test]
+    fn a_shift_shortcut_is_not_taken_by_the_plain_one_it_extends() {
+        let root = std::env::temp_dir().join(format!(
+            "fastpotify-shift-shortcut-test-{}",
+            std::process::id()
+        ));
+        let dirs = AppDirs {
+            config: root.join("config"),
+            state: root.join("state"),
+            cache: root.join("cache"),
+        };
+        let mut app = App::new(
+            &crate::backend::Waker::default(),
+            dirs,
+            Settings::default(),
+            AppOptions {
+                media_controls: false,
+                restore_sign_in: false,
+                tray: false,
+            },
+        );
+        crate::demo::populate(&mut app);
+        let album = app.now_playing().and_then(|now| now.album_id);
+        assert!(album.is_some(), "the demo song has an album to go to");
+
+        // The modifiers as the platform reports its command key.
+        let command = if cfg!(target_os = "macos") {
+            Modifiers::MAC_CMD | Modifiers::COMMAND
+        } else {
+            Modifiers::CTRL | Modifiers::COMMAND
+        };
+        let ctx = egui::Context::default();
+        let press = |app: &mut App, key: Key, modifiers: Modifiers| {
+            app.actions.clear();
+            let input = egui::RawInput {
+                events: vec![egui::Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers,
+                }],
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(input, |ui| handle(app, ui.ctx()));
+            output.textures_delta.clear();
+            format!("{:?}", app.actions)
+        };
+
+        let shift = command | Modifiers::SHIFT;
+        // macOS shows the queue on Cmd+U; Cmd+Shift+Q is Log Out.
+        if !cfg!(target_os = "macos") {
+            assert_eq!(
+                press(&mut app, Key::Q, shift),
+                format!("{:?}", [Action::ToggleQueuePanel]),
+                "the queue shortcut shows the queue"
+            );
+        }
+        assert_eq!(
+            press(&mut app, Key::Q, command),
+            format!("{:?}", [Action::Quit]),
+            "the quit shortcut still quits"
+        );
+        assert_eq!(
+            press(&mut app, Key::B, shift),
+            format!("{:?}", [Action::Open(Page::Album(album.unwrap()))]),
+            "the album shortcut goes to the album"
+        );
+        assert_eq!(
+            press(&mut app, Key::B, command),
+            format!("{:?}", [Action::ToggleSidebar]),
+            "the sidebar shortcut still toggles the sidebar"
+        );
         app.backend.shutdown();
         let _ = std::fs::remove_dir_all(root);
     }
