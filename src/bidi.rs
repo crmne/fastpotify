@@ -351,8 +351,19 @@ mod tests {
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
             let painter = ui.painter();
             let font = FontId::proportional(18.0);
+            let measure = |piece: &str| {
+                painter
+                    .layout_no_wrap(piece.to_owned(), font.clone(), Color32::WHITE)
+                    .size()
+                    .x
+            };
+            let mark = measure(&ELLIPSIS.to_string());
             for word in ["لالالالالالا", "והתקשרויותיהם"] {
-                for wrap_width in [25.0, 40.0, 60.0] {
+                // Which Arabic and Hebrew faces a system has decides how wide
+                // the word is, so the columns are taken from the word itself.
+                let whole = measure(word);
+                for share in [0.4, 0.6, 0.85] {
+                    let wrap_width = (whole * share).max(mark + 1.0);
                     for max_rows in [1, 2] {
                         let galley = layout(
                             painter,
@@ -374,10 +385,6 @@ mod tests {
                     }
                 }
                 // Given the room, the word stays whole and unmarked.
-                let whole = painter
-                    .layout_no_wrap(word.to_owned(), font.clone(), Color32::WHITE)
-                    .size()
-                    .x;
                 let galley = layout(
                     painter,
                     word,
