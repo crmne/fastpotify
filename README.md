@@ -143,6 +143,9 @@ and link `"/Applications"` through `environment.pathsToLink`; with Home
 Manager, `home.packages` is enough, as its darwin support links the bundle
 into `~/Applications`.
 
+On `main`, after 0.7.1, system fallback fonts align with Latin text, including
+Japanese titles drawn with Hiragino Sans on macOS.
+
 Fastpotify uses system fonts for scripts not covered by its interface font,
 including Chinese, Japanese, Korean, Arabic, Hebrew, Thai, and Indic scripts.
 On macOS it draws each of them with the face the system itself uses, in the

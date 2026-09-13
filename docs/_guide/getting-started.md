@@ -29,6 +29,10 @@ On Debian or Ubuntu:
 sudo apt install libasound2-dev libpulse-dev libxkbcommon-dev libwayland-dev libgl1-mesa-dev
 ```
 
+On `main`, after 0.7.1, letters from system fallback fonts share the Latin
+baseline. This keeps mixed Japanese and Latin titles aligned when macOS
+selects Hiragino Sans, including when Japanese is a preferred language.
+
 Fastpotify uses system fonts for scripts that its interface font does not
 cover, including Chinese, Japanese, Korean, Arabic, Hebrew, Thai, and Indic
 scripts. macOS and Windows include fonts for the common cases. On Linux,

@@ -989,4 +989,95 @@ mod tests {
         });
         output.textures_delta.clear();
     }
+
+    /// Compare the painted glyph positions, including the raster offset, with
+    /// the same glyph drawn by its untweaked face. Inspecting `glyph.pos` alone
+    /// misses FontTweak, which is applied to the glyph's texture offset.
+    #[test]
+    fn fallback_glyphs_are_painted_on_the_latin_baseline() {
+        use egui::{FontFamily, FontId};
+        use skrifa::MetadataProvider as _;
+        use std::sync::Arc;
+
+        for pixels_per_point in [1.0, 1.5, 2.0] {
+            let ctx = egui::Context::default();
+            ctx.set_pixels_per_point(pixels_per_point);
+            install(&ctx);
+            ctx.run_ui(egui::RawInput::default(), |_| {})
+                .textures_delta
+                .clear();
+            let mut fonts = ctx.fonts(|fonts| fonts.definitions().clone());
+            let inter_data = Arc::clone(&fonts.font_data["inter"]);
+            let inter = skrifa::FontRef::from_index(&inter_data.font, 0).expect("bundled Inter");
+            let inter_map = inter.charmap();
+            let mut cases = Vec::new();
+            for font in crate::system_fonts::fallbacks() {
+                let face = skrifa::FontRef::from_index(&font.bytes, font.index)
+                    .expect("readable system fallback");
+                let Some(character) = crate::system_fonts::FALLBACK_SCRIPTS
+                    .iter()
+                    .map(|(_, probe, _)| *probe)
+                    .find(|probe| {
+                        inter_map.map(*probe).is_none() && face.charmap().map(*probe).is_some()
+                    })
+                else {
+                    continue;
+                };
+                let reference = format!("raw-{}", font.name);
+                let mut raw = (*fonts.font_data[&font.name]).clone();
+                raw.tweak.y_offset_factor = 0.0;
+                raw.tweak.y_offset = 0.0;
+                fonts.font_data.insert(reference.clone(), Arc::new(raw));
+                fonts.families.insert(
+                    FontFamily::Name(reference.clone().into()),
+                    vec![reference.clone()],
+                );
+                // Use the application's actual installed faces, selecting this
+                // fallback explicitly so an earlier face cannot mask a failure.
+                for primary in ["inter", INTER_MEDIUM, INTER_SEMIBOLD, INTER_BOLD] {
+                    let mixed = format!("{primary}-{}", font.name);
+                    fonts.families.insert(
+                        FontFamily::Name(mixed.clone().into()),
+                        vec![primary.into(), font.name.clone()],
+                    );
+                    cases.push((character, reference.clone(), mixed));
+                }
+            }
+            ctx.set_fonts(fonts);
+            ctx.run_ui(egui::RawInput::default(), |_| {})
+                .textures_delta
+                .clear();
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                for (character, reference, mixed) in &cases {
+                    for size in [14.0, 28.0] {
+                        let layout = |text, family: &String| {
+                            ui.painter().layout_no_wrap(
+                                text,
+                                FontId::new(size, FontFamily::Name(family.clone().into())),
+                                Color32::WHITE,
+                            )
+                        };
+                        let raw = layout(character.to_string(), reference);
+                        let galley = layout(format!("A{character}A"), mixed);
+                        let row = &galley.rows[0];
+                        let glyph = row.glyphs.iter().find(|g| g.chr == *character).unwrap();
+                        let raw_row = &raw.rows[0];
+                        let raw_glyph = &raw_row.glyphs[0];
+                        let top = row.visuals.mesh.vertices[glyph.first_vertex as usize].pos.y;
+                        let raw_top =
+                            raw_row.visuals.mesh.vertices[raw_glyph.first_vertex as usize].pos.y;
+                        let baseline = top - raw_top + raw_glyph.pos.y;
+                        let latin_baseline = row.glyphs[0].pos.y;
+                        // Glyphs and their offsets snap independently to pixels.
+                        let error_pixels = (baseline - latin_baseline).abs() * pixels_per_point;
+                        assert!(
+                            error_pixels <= 1.01,
+                            "{mixed}, {character}, {size} pt at {pixels_per_point}x: baseline {baseline}, Latin {latin_baseline} ({error_pixels} px apart)"
+                        );
+                    }
+                }
+            });
+            output.textures_delta.clear();
+        }
+    }
 }
