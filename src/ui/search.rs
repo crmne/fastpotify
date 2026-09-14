@@ -90,7 +90,10 @@ fn recent(app: &mut App, ui: &mut egui::Ui) {
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
         for query in &history {
-            if theme::soft_button(ui, &palette, Some(Icon::Clock), query, false).clicked() {
+            let (response, forget) = theme::soft_button_dismiss(ui, &palette, Icon::Clock, query);
+            if forget {
+                app.actions.push(Action::ForgetSearch(query.clone()));
+            } else if response.clicked() {
                 app.actions.push(Action::Search(query.clone()));
             }
         }

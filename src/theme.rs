@@ -793,6 +793,28 @@ pub fn soft_button(
     label: &str,
     active: bool,
 ) -> Response {
+    soft_button_inner(ui, palette, icon, label, active, false).0
+}
+
+/// A [`soft_button`] whose icon turns into a cross on hover, allowing the
+/// entry to be dismissed. The returned flag reports clicks on that cross.
+pub fn soft_button_dismiss(
+    ui: &mut egui::Ui,
+    palette: &Palette,
+    icon: Icon,
+    label: &str,
+) -> (Response, bool) {
+    soft_button_inner(ui, palette, Some(icon), label, false, true)
+}
+
+fn soft_button_inner(
+    ui: &mut egui::Ui,
+    palette: &Palette,
+    icon: Option<Icon>,
+    label: &str,
+    active: bool,
+    dismissible: bool,
+) -> (Response, bool) {
     let font = medium(13.0);
     let color = if active { palette.window } else { palette.text };
     let galley =
@@ -806,8 +828,32 @@ pub fn soft_button(
     response.widget_info(|| {
         egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)
     });
+    let icon_rect = egui::Rect::from_center_size(
+        egui::pos2(rect.left() + padding.x + icon_size / 2.0, rect.center().y),
+        Vec2::splat(icon_size),
+    );
+    // Claimed after the button, so the cross sits on top and keeps its own click.
+    let dismiss = (dismissible && icon.is_some()).then(|| {
+        let dismiss = ui.interact(
+            icon_rect.expand(3.0),
+            response.id.with("dismiss"),
+            Sense::click(),
+        );
+        dismiss.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::WidgetType::Button,
+                ui.is_enabled(),
+                format!("Remove {label}"),
+            )
+        });
+        dismiss
+    });
+    let dismissed = dismiss.as_ref().is_some_and(Response::clicked);
+    let over_dismiss = dismiss
+        .as_ref()
+        .is_some_and(|dismiss| dismiss.hovered() || dismiss.has_focus());
     if ui.is_rect_visible(rect) {
-        let hovered = response.hovered();
+        let hovered = response.hovered() || over_dismiss;
         let fill = if active {
             palette.text
         } else if hovered {
@@ -818,10 +864,11 @@ pub fn soft_button(
         ui.painter().rect_filled(rect, rect.height() / 2.0, fill);
         let mut x = rect.left() + padding.x;
         if let Some(icon) = icon {
-            let icon_rect = egui::Rect::from_center_size(
-                egui::pos2(x + icon_size / 2.0, rect.center().y),
-                Vec2::splat(icon_size),
-            );
+            let icon = if dismiss.is_some() && hovered {
+                Icon::X
+            } else {
+                icon
+            };
             icon.image(color, icon_size).paint_at(ui, icon_rect);
             x += icon_width;
         }
@@ -829,7 +876,14 @@ pub fn soft_button(
         ui.painter().galley(pos, galley, color);
     }
     focus_ring(ui, &response);
-    response.on_hover_cursor(egui::CursorIcon::PointingHand)
+    if let Some(dismiss) = dismiss {
+        focus_ring(ui, &dismiss);
+        dismiss.on_hover_cursor(egui::CursorIcon::PointingHand);
+    }
+    (
+        response.on_hover_cursor(egui::CursorIcon::PointingHand),
+        dismissed,
+    )
 }
 
 /// An animated busy indicator paced independently of the graphics driver.
