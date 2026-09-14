@@ -58,6 +58,8 @@ const QUEUE_RECHECK: Duration = Duration::from_millis(700);
 const QUEUE_STALE_RETRIES: u8 = 6;
 /// Duplicate queue requests within this window count as one click.
 const QUEUE_ADD_DEBOUNCE: Duration = Duration::from_millis(1500);
+/// How many played contexts the sidebar's Recently played order keeps.
+const RECENT_CONTEXTS_KEPT: usize = 60;
 const CONTAINS_BATCH: usize = 40;
 
 pub struct RemoteSnapshot {
@@ -5044,12 +5046,36 @@ impl App {
     /// sidebar's order.
     fn note_recent_context(&mut self, uri: &str) {
         self.session_dirty = true;
-        if !uri.contains(":playlist:") && !uri.contains(":album:") && !uri.contains(":collection") {
+        if !Self::is_sidebar_context(uri) {
             return;
         }
         self.recent_contexts.retain(|held| held != uri);
         self.recent_contexts.insert(0, uri.to_string());
-        self.recent_contexts.truncate(60);
+        self.recent_contexts.truncate(RECENT_CONTEXTS_KEPT);
+    }
+
+    /// Whether the sidebar lists `uri`, so its order has a place for it.
+    fn is_sidebar_context(uri: &str) -> bool {
+        uri.contains(":playlist:") || uri.contains(":album:") || uri.contains(":collection")
+    }
+
+    /// Notes the contexts of a page of history older than every play the
+    /// order already holds. They go after it, newest first, and a context
+    /// already in the order keeps the place a newer play gave it.
+    fn note_older_contexts(&mut self, history: &[crate::api::models::PlayHistory]) {
+        for play in history {
+            let Some(uri) = play.context.as_ref().map(|context| context.uri.as_str()) else {
+                continue;
+            };
+            if self.recent_contexts.len() >= RECENT_CONTEXTS_KEPT {
+                break;
+            }
+            if Self::is_sidebar_context(uri) && !self.recent_contexts.iter().any(|held| held == uri)
+            {
+                self.recent_contexts.push(uri.to_string());
+                self.session_dirty = true;
+            }
+        }
     }
 
     /// Notes every context in a page of play history, oldest first, so
@@ -5081,7 +5107,12 @@ impl App {
         page: crate::api::models::CursorPage<crate::api::models::PlayHistory>,
         limit: u32,
     ) {
-        self.note_recent_contexts(&page.items);
+        // A page asked for with a cursor is older than the pages before it.
+        if self.recents.after.is_some() {
+            self.note_older_contexts(&page.items);
+        } else {
+            self.note_recent_contexts(&page.items);
+        }
         self.recents.error = None;
         let short_page = (page.items.len() as u32) < limit;
         let cursor = page.cursors.as_ref().and_then(|c| c.before.clone());
@@ -10592,6 +10623,108 @@ mod tests {
         );
         assert!(!app.recents.complete);
         assert_eq!(app.recents.after.as_deref(), Some("cursor-1"));
+    }
+
+    /// The sidebar's Recently played order is newest first. Paging back
+    /// through Recent reaches plays older than every context already in
+    /// that order, so they go after it rather than ahead of it, and a
+    /// context played more recently keeps its place.
+    #[test]
+    fn older_history_pages_do_not_jump_ahead_in_the_sidebar_order() {
+        let ctx = egui::Context::default();
+        let mut app = test_app("recents-older-contexts");
+        let from = |uri: &str, context: &str, at: &str| crate::api::models::PlayHistory {
+            context: Some(crate::api::models::Context {
+                uri: context.to_string(),
+                kind: "playlist".into(),
+            }),
+            ..play(uri, at)
+        };
+        let answer = |app: &mut App, page| {
+            app.handle_api(ApiResponse::RecentlyPlayed {
+                who: RecentsFor::Panel,
+                generation: app.recents_generation,
+                limit: 2,
+                result: Ok(page),
+            });
+        };
+        app.apply(Action::ReloadRecents, &ctx);
+        answer(
+            &mut app,
+            history(
+                vec![
+                    from(
+                        "spotify:track:a",
+                        "spotify:playlist:p1",
+                        "2026-09-01T10:00:00Z",
+                    ),
+                    from(
+                        "spotify:track:b",
+                        "spotify:playlist:p2",
+                        "2026-09-01T09:00:00Z",
+                    ),
+                ],
+                Some("cursor-1"),
+            ),
+        );
+        assert_eq!(
+            app.recent_contexts,
+            ["spotify:playlist:p1", "spotify:playlist:p2"]
+        );
+        app.apply(Action::LoadMoreRecents, &ctx);
+        answer(
+            &mut app,
+            history(
+                vec![
+                    from(
+                        "spotify:track:c",
+                        "spotify:playlist:p3",
+                        "2026-09-01T08:00:00Z",
+                    ),
+                    from(
+                        "spotify:track:d",
+                        "spotify:artist:x",
+                        "2026-09-01T07:30:00Z",
+                    ),
+                    from(
+                        "spotify:track:e",
+                        "spotify:playlist:p2",
+                        "2026-09-01T07:00:00Z",
+                    ),
+                ],
+                Some("cursor-2"),
+            ),
+        );
+        assert_eq!(app.recents.items.len(), 5, "the older page was taken");
+        assert_eq!(
+            app.recent_contexts,
+            [
+                "spotify:playlist:p1",
+                "spotify:playlist:p2",
+                "spotify:playlist:p3"
+            ],
+            "older plays follow the newer ones"
+        );
+
+        // A full order has no room left for plays older than all of it.
+        app.recent_contexts = (0..RECENT_CONTEXTS_KEPT)
+            .map(|index| format!("spotify:playlist:full{index}"))
+            .collect();
+        let full = app.recent_contexts.clone();
+        app.apply(Action::LoadMoreRecents, &ctx);
+        answer(
+            &mut app,
+            history(
+                vec![from(
+                    "spotify:track:f",
+                    "spotify:playlist:p4",
+                    "2026-09-01T06:00:00Z",
+                )],
+                Some("cursor-3"),
+            ),
+        );
+        assert_eq!(app.recents.items.len(), 6, "the oldest page was taken");
+        assert_eq!(app.recent_contexts, full);
     }
 
     /// Closing and reopening restores queue rows and their manual split.
