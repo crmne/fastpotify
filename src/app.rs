@@ -4941,6 +4941,10 @@ impl App {
                     self.load_more(Page::LikedSongs);
                 }
             }
+            // A reset shelf is read again from the top, so a page asked for
+            // before the reset no longer continues it.
+            ApiResponse::SavedAlbums { offset, .. }
+                if self.library.albums.next_offset != Some(offset) => {}
             ApiResponse::SavedAlbums { offset, result } => match result {
                 Ok(page) => {
                     self.request_album_types(page.items.iter().map(|item| &item.album));
@@ -4953,6 +4957,11 @@ impl App {
             },
             ApiResponse::FollowedArtists { after, result } => {
                 let list = &mut self.library.artists;
+                // A reset shelf is read again from the top, so a page asked
+                // for before the reset no longer continues it.
+                if after != list.after {
+                    return;
+                }
                 list.loading = false;
                 list.loaded_once = true;
                 match result {
@@ -4973,6 +4982,8 @@ impl App {
                     Err(error) => list.error = Some(error.to_string()),
                 }
             }
+            ApiResponse::SavedShows { offset, .. }
+                if self.library.shows.next_offset != Some(offset) => {}
             ApiResponse::SavedShows { offset, result } => match result {
                 Ok(page) => {
                     for item in &page.items {
@@ -4982,6 +4993,8 @@ impl App {
                 }
                 Err(error) => self.library.shows.fail(error.to_string()),
             },
+            ApiResponse::SavedEpisodes { offset, .. }
+                if self.library.episodes.next_offset != Some(offset) => {}
             ApiResponse::SavedEpisodes { offset, result } => match result {
                 Ok(page) => {
                     for item in &page.items {
@@ -12536,6 +12549,150 @@ mod tests {
         );
         assert_eq!(app.recent_contexts[0], "spotify:playlist:p4");
         assert_eq!(app.recent_contexts.len(), RECENT_CONTEXTS_KEPT);
+    }
+
+    /// Saving to or removing from the library resets that shelf so it is
+    /// read again from the top. A page asked for before the reset belongs
+    /// to the old list: taking it starts the shelf part way through and
+    /// marks its rows saved again, even one that was just removed.
+    #[test]
+    fn a_page_asked_for_before_a_shelf_reset_is_not_taken() {
+        use crate::api::models::{
+            Artist, CursorPage, Cursors, Page as ApiPage, SavedAlbum, SavedEpisode, SavedShow,
+        };
+        fn page<T>(items: Vec<T>, offset: u32) -> ApiPage<T> {
+            let end = offset + items.len() as u32;
+            ApiPage {
+                items,
+                total: 3,
+                limit: 2,
+                offset,
+                next: (end < 3).then(|| "more".to_string()),
+            }
+        }
+        let ctx = egui::Context::default();
+        let mut app = test_app("library-late-pages");
+        let changed = |app: &mut App, uri: &str, saved: bool| {
+            app.handle_api(ApiResponse::SavedChanged {
+                uris: vec![uri.to_string()],
+                saved,
+                result: Ok(()),
+            });
+        };
+
+        // Followed artists continue from a cursor.
+        let artists = |names: &[&str], after: Option<&str>| CursorPage {
+            items: names
+                .iter()
+                .map(|name| Artist {
+                    uri: format!("spotify:artist:{name}"),
+                    ..Artist::default()
+                })
+                .collect(),
+            cursors: Some(Cursors {
+                after: after.map(str::to_string),
+                before: None,
+            }),
+            ..CursorPage::default()
+        };
+        app.apply(Action::LoadMore(Page::Artists), &ctx);
+        app.handle_api(ApiResponse::FollowedArtists {
+            after: None,
+            result: Ok(artists(&["a", "b"], Some("page-2"))),
+        });
+        app.apply(Action::LoadMore(Page::Artists), &ctx);
+        changed(&mut app, "spotify:artist:new", true);
+        app.apply(Action::LoadMore(Page::Artists), &ctx);
+        app.handle_api(ApiResponse::FollowedArtists {
+            after: Some("page-2".into()),
+            result: Ok(artists(&["c"], None)),
+        });
+        assert!(
+            app.library.artists.items.is_empty() && app.library.artists.loading,
+            "the reset shelf waits for its own first page"
+        );
+        app.handle_api(ApiResponse::FollowedArtists {
+            after: None,
+            result: Ok(artists(&["new", "a"], Some("page-2"))),
+        });
+        let followed: Vec<&str> = app
+            .library
+            .artists
+            .items
+            .iter()
+            .map(|artist| artist.uri.as_str())
+            .collect();
+        assert_eq!(followed, ["spotify:artist:new", "spotify:artist:a"]);
+        assert_eq!(app.library.artists.after.as_deref(), Some("page-2"));
+
+        // Albums, podcasts and episodes continue from an offset.
+        let album = |id: &str| SavedAlbum {
+            album: web_album(&format!("spotify:album:{id}"), "album", Some("album")),
+            ..SavedAlbum::default()
+        };
+        app.apply(Action::LoadMore(Page::Albums), &ctx);
+        app.handle_api(ApiResponse::SavedAlbums {
+            offset: 0,
+            result: Ok(page(vec![album("a"), album("b")], 0)),
+        });
+        app.apply(Action::LoadMore(Page::Albums), &ctx);
+        changed(&mut app, "spotify:album:c", false);
+        app.handle_api(ApiResponse::SavedAlbums {
+            offset: 2,
+            result: Ok(page(vec![album("c")], 2)),
+        });
+        assert!(app.library.albums.items.is_empty());
+        assert!(
+            !app.library.albums.loaded_once,
+            "the shelf still starts from the top"
+        );
+        assert_eq!(
+            app.is_saved("spotify:album:c"),
+            Some(false),
+            "a removed album stays removed"
+        );
+
+        let show = |id: &str| SavedShow {
+            show: crate::api::models::Show {
+                uri: format!("spotify:show:{id}"),
+                ..Default::default()
+            },
+            ..SavedShow::default()
+        };
+        app.apply(Action::LoadMore(Page::Podcasts), &ctx);
+        app.handle_api(ApiResponse::SavedShows {
+            offset: 0,
+            result: Ok(page(vec![show("a"), show("b")], 0)),
+        });
+        app.apply(Action::LoadMore(Page::Podcasts), &ctx);
+        changed(&mut app, "spotify:show:new", true);
+        app.handle_api(ApiResponse::SavedShows {
+            offset: 2,
+            result: Ok(page(vec![show("c")], 2)),
+        });
+        assert!(app.library.shows.items.is_empty() && !app.library.shows.loaded_once);
+
+        let episode = |id: &str| SavedEpisode {
+            episode: crate::api::models::Episode {
+                uri: format!("spotify:episode:{id}"),
+                ..Default::default()
+            },
+            ..SavedEpisode::default()
+        };
+        app.apply(Action::LoadMore(Page::Episodes), &ctx);
+        app.handle_api(ApiResponse::SavedEpisodes {
+            offset: 0,
+            result: Ok(page(vec![episode("a"), episode("b")], 0)),
+        });
+        app.apply(Action::LoadMore(Page::Episodes), &ctx);
+        changed(&mut app, "spotify:episode:new", true);
+        app.handle_api(ApiResponse::SavedEpisodes {
+            offset: 2,
+            result: Ok(page(vec![episode("c")], 2)),
+        });
+        assert!(app.library.episodes.items.is_empty() && !app.library.episodes.loaded_once);
+        app.backend.shutdown();
+        let _ = std::fs::remove_dir_all(app.dirs.config.parent().unwrap());
     }
 
     /// Closing and reopening restores queue rows and their manual split.
