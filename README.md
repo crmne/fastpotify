@@ -122,7 +122,9 @@ their established paths. See [rename compatibility](docs/_reference/renaming.md)
   stopped. Play resumes it, and the other playback controls work before it
   starts.
 - **Album-art colour.** Pages and the player bar take a tint from the cover
-  of what you are looking at or listening to. Turn it off in Settings.
+  of what you are looking at or listening to. The bar fades from one song's
+  colour to the next rather than switching in a single frame. Turn it off in
+  Settings.
 - **Light and dark**, or follow the system.
 - **Winamp mini player.** `Ctrl+M` opens a small player for classic `.wsz`
   skins, drawn at 1x to 4x scale. It includes a spectrum analyser, playlist,
