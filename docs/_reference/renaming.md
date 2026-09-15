@@ -48,9 +48,10 @@ The Homebrew cask is now `crmne/tap/spotifast`. Its rename metadata lets
 Homebrew migrate existing installations during updates, or explicitly with
 `brew migrate --cask fastpotify` after updating the tap. DEB/RPM packages are
 also named `spotifast` and declare replacement of `fastpotify`.
-Nix exposes `spotifast` and, on macOS, `spotifast-app`, alongside the old
-attribute names. Community-maintained distribution packages may still use
-the old name until their maintainers update them.
+Nix exposes `spotifast` as the package for both the command and, on macOS,
+the `Spotifast.app` bundle, alongside the old `fastpotify` attribute.
+Community-maintained distribution packages may still use the old name until
+their maintainers update them.
 
 ## Updates and packaging
 

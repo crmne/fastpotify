@@ -245,12 +245,12 @@ An official public binary cache is not active yet. CI can publish its Linux
 Nix builds once a maintainer configures Cachix; see
 [Nix binary cache setup](docs/_reference/nix-cache.md).
 
-On macOS, the flake also exposes `packages.<system>.spotifast-app`, an
+On macOS, `packages.<system>.spotifast` contains the native binary and an
 ad-hoc signed `Spotifast.app` bundle for the Dock, Launch Services, and
-`spotify:` links. With nix-darwin, add it to `environment.systemPackages`
-and link `"/Applications"` through `environment.pathsToLink`; with Home
-Manager, `home.packages` is enough, as its darwin support links the bundle
-into `~/Applications`.
+`spotify:` links. With nix-darwin, add `spotifast` to
+`environment.systemPackages` and link `"/Applications"` through
+`environment.pathsToLink`; with Home Manager, `home.packages` is enough, as
+its darwin support links the bundle into `~/Applications`.
 
 Since 0.8.0, system fallback fonts align with Latin text, including
 Japanese titles drawn with Hiragino Sans on macOS. Yi characters used in

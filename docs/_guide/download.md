@@ -125,13 +125,13 @@ environment.systemPackages = [
 
 ### nix-darwin
 
-On macOS, use the `spotifast-app` package instead. It is a `Spotifast.app`
-bundle built and signed locally, so it is never quarantined and the
-first-open steps above do not apply:
+On macOS, install the `spotifast` package. It includes the native binary and
+a locally built, ad-hoc signed `Spotifast.app` bundle, so it is never
+quarantined and the first-open steps above do not apply:
 
 ```nix
 environment.systemPackages = [
-  inputs.spotifast.packages."${pkgs.stdenv.hostPlatform.system}".spotifast-app
+  inputs.spotifast.packages."${pkgs.stdenv.hostPlatform.system}".spotifast
 ];
 environment.pathsToLink = [ "/Applications" ];
 ```
@@ -142,6 +142,6 @@ The bundle appears in `/Applications/Nix Apps`. With Home Manager,
 
 ```nix
 home.packages = [
-  inputs.spotifast.packages."${pkgs.stdenv.hostPlatform.system}".spotifast-app
+  inputs.spotifast.packages."${pkgs.stdenv.hostPlatform.system}".spotifast
 ];
 ```

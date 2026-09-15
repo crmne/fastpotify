@@ -32,7 +32,9 @@ so package validation can still use the pinned older binary fixture. AUR and
 portable Linux release archives carry the assets with their source/binary
 payloads. Source and binary AUR recipes also accept older releases that predate
 the integration; the git recipe requires the current files. Nix installs the
-same assets beside its binaries. Flatpak does not install host desktop hooks.
+Linux desktop assets beside its binaries and packages the signed macOS
+`Spotifast.app` bundle in the same derivation. Flatpak does not install host
+desktop hooks.
 
 ```sh
 gem install native-packages --version 0.6.0
