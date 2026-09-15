@@ -95,13 +95,6 @@
                 cargo = toolchain;
                 rustc = toolchain;
               };
-              cmakeWithLibdir = pkgs.writeShellScript "cmake-fastpotify" ''
-                if [[ "$1" == "--build" ]]; then
-                  exec ${pkgs.cmake}/bin/cmake "$@"
-                else
-                  exec ${pkgs.cmake}/bin/cmake "$@" -DCMAKE_INSTALL_LIBDIR=lib
-                fi
-              '';
               runtimeLibs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux (
                 with pkgs;
                 [
@@ -129,6 +122,13 @@
                 src = self;
                 hash = "sha256-oB2v6uNZNlEOqvIScD/nFTmxGy4DH5EC+wVuaWba0GU=";
               };
+              # projectm-sys only searches lib, while CMake may otherwise install to lib64.
+              postPatch = ''
+                substituteInPlace "$cargoDepsCopy"/source-git-*/projectm-sys-*/build.rs \
+                  --replace-fail \
+                  '.define("BUILD_SHARED_LIBS", build_shared_libs)' \
+                  '.define("CMAKE_INSTALL_LIBDIR", "lib").define("BUILD_SHARED_LIBS", build_shared_libs)'
+              '';
 
               nativeBuildInputs =
                 with pkgs;
@@ -157,17 +157,13 @@
                 )
                 ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isDarwin [ pkgs.apple-sdk ];
 
-              # projectm-sys expects CMake to install into lib/, while CMake
-              # defaults to lib64/ on NixOS.
-              env.CMAKE = "${cmakeWithLibdir}";
-
-            # Nix's Rust check hook deliberately points SSL_CERT_FILE at a
-            # missing path. The librespot proxy regression test constructs a
-            # TLS connector before asserting its CONNECT request, so give the
-            # test an explicit, sandboxed trust store.
-            preCheck = ''
-              export SSL_CERT_FILE="${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
-            '';
+              # Nix's Rust check hook deliberately points SSL_CERT_FILE at a
+              # missing path. The librespot proxy regression test constructs a
+              # TLS connector before asserting its CONNECT request, so give the
+              # test an explicit, sandboxed trust store.
+              preCheck = ''
+                export SSL_CERT_FILE="${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
+              '';
 
               # The GUI dlopens its Wayland, X11 and GL libraries at run time.
               postFixup = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
@@ -211,6 +207,7 @@
             in
             pkgs.runCommand "spotifast-app"
               {
+                nativeBuildInputs = [ pkgs.rcodesign ];
                 meta = {
                   description = "A native Spotify client in a macOS app bundle";
                   homepage = "https://spotifast.rocks";
@@ -226,10 +223,7 @@
                 cp ${icon} "$app/Resources/fastpotify.icns"
                 sed -e "s/__VERSION__/${version}/g" -e "s/__BUILD__/${build}/g" \
                   ${./packaging/macos/Info.plist} > "$app/Info.plist"
-                /usr/bin/codesign --force --sign - \
-                  "$out/Applications/Spotifast.app"
-                /usr/bin/codesign --verify --strict \
-                  "$out/Applications/Spotifast.app"
+                rcodesign sign "$out/Applications/Spotifast.app"
               '';
         in
         {
