@@ -1828,6 +1828,30 @@ mod tests {
     }
 
     #[test]
+    fn the_cross_on_a_recent_search_forgets_only_that_query() {
+        use egui::accesskit::{Action as AccessibleAction, Role};
+        let (ctx, mut app) = accessible_app("search-history");
+        app.open(Page::Search);
+        // Recent searches stand in for results only while nothing is searched
+        app.search.query.clear();
+        app.search.committed.clear();
+        accessible_frame(&ctx, &mut app, vec![]);
+        let tree = accessible_frame(&ctx, &mut app, vec![]);
+        let forget = accessible_node(&tree, "Remove ambient", Role::Button);
+        accessible_frame(
+            &ctx,
+            &mut app,
+            vec![accessible_action(forget, AccessibleAction::Click, None)],
+        );
+        assert_eq!(app.settings.search_history, ["Khruangbin", "Rework"]);
+        assert!(
+            app.search.committed.is_empty(),
+            "the cross must forget a query without running it"
+        );
+        app.backend.shutdown();
+    }
+
+    #[test]
     fn settings_search_filters_rows_clearing_and_empty_state() {
         use egui::accesskit::{Action as AccessibleAction, Role};
         let (ctx, mut app) = accessible_app("settings-search");

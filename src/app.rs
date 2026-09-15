@@ -7283,6 +7283,10 @@ impl App {
                 self.open(Page::Search);
                 self.run_search(query.trim().to_string());
             }
+            Action::ForgetSearch(query) => {
+                self.settings.search_history.retain(|entry| entry != &query);
+                self.settings_dirty = true;
+            }
             Action::SetSearchFilter(filter) => self.search.filter = filter,
             Action::FocusSearch => {
                 self.search.focus_requested = true;

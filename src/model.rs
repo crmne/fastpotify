@@ -955,6 +955,7 @@ pub enum Action {
     OpenUrl(String),
     OpenInSpotify(String),
     Search(String),
+    ForgetSearch(String),
     SetSearchFilter(SearchFilter),
     FocusSearch,
     LoadMore(Page),
